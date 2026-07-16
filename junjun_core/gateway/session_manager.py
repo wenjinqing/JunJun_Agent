@@ -1,4 +1,8 @@
-﻿"""会话管理：按 platform:chat_id 维护会话状态。阶段 1 仅记录，Agent 占位 echo。"""
+"""会话管理：按 platform:chat_id 维护会话状态。
+
+分层约束：junjun_core 不 import 上层包。memory/agent 为通用槽位，
+由 junjun_agent 层在首次处理时注入（processor 模式，见 gateway/router.py）。
+"""
 
 from typing import Dict, Optional
 
@@ -13,12 +17,14 @@ class ChatSession:
         self.platform = platform
         self.group_id = group_id
         self.user_id = user_id
-        self.history: list = []  # 阶段 1 占位，阶段 2 接 Agent 上下文
+        # 上层注入槽位（junjun_agent 填充，core 不感知具体类型）
+        self.memory = None            # ShortTermMemory
+        self.agent = None             # JunJunAgent
+        self.silenced_until_call = False  # no_reply_until_call 沉默模式
 
-    def add_message(self, text: str) -> None:
-        self.history.append(text)
-        if len(self.history) > 20:
-            self.history = self.history[-20:]
+    @property
+    def is_group(self) -> bool:
+        return self.group_id is not None
 
 
 class ChatSessionManager:
@@ -32,13 +38,13 @@ class ChatSessionManager:
         group_info = info.group_info
         if group_info:
             chat_id = f"{platform}:{group_info.group_id}:group"
-            session = ChatSession(chat_id, platform, group_id=str(group_info.group_id))
+            if chat_id not in self._sessions:
+                self._sessions[chat_id] = ChatSession(chat_id, platform, group_id=str(group_info.group_id))
         else:
             uid = info.user_info.user_id
             chat_id = f"{platform}:{uid}:private"
-            session = ChatSession(chat_id, platform, user_id=str(uid))
-        if chat_id not in self._sessions:
-            self._sessions[chat_id] = session
+            if chat_id not in self._sessions:
+                self._sessions[chat_id] = ChatSession(chat_id, platform, user_id=str(uid))
         return self._sessions[chat_id]
 
     def all_sessions(self) -> Dict[str, ChatSession]:

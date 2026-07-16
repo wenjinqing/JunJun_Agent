@@ -2,13 +2,16 @@
 
 职责：
 1. 作为 WS server 监听（Adapter 作为 client 连入）。
-2. 收到 MessageBase 后：黑白名单过滤 -> 会话登记 -> 调 Agent（阶段 1 echo 占位）。
-3. 把 Agent 产出的 ReplySet 转回 MessageBase 并广播给 Adapter。
+2. 收到 MessageBase 后：黑白名单过滤 -> 会话登记 -> 交给 processor。
+3. 把 processor 产出的 ReplySet 转回 MessageBase 并广播给 Adapter。
+
+分层：processor 由上层（junjun_agent）注入，core 不 import 上层。
+未注入时用 echo 占位（阶段 1 语义，测试可用）。
 """
 
 import asyncio
-import time
-from typing import Optional
+from dataclasses import dataclass
+from typing import Awaitable, Callable, Optional
 
 from maim_message import MessageServer, MessageBase, Seg
 
@@ -16,9 +19,36 @@ from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger
 from junjun_core.contracts import ReplySet, ReplySegment
 from junjun_core.gateway.blacklist import ChatListConfig
-from junjun_core.gateway.session_manager import get_session_manager
+from junjun_core.gateway.session_manager import ChatSession, get_session_manager
 
 logger = get_logger("gateway")
+
+
+@dataclass
+class InboundMeta:
+    """入站消息元信息（processor 入参）。"""
+    text: str
+    user_id: Optional[str]
+    nickname: str
+    group_id: Optional[str]
+    message_id: str
+    at_bot: bool
+    is_self: bool
+
+
+# processor 签名: async (session, meta) -> Optional[ReplySet]
+Processor = Callable[[ChatSession, InboundMeta], Awaitable[Optional[ReplySet]]]
+
+
+async def _echo_processor(session: ChatSession, meta: InboundMeta) -> Optional[ReplySet]:
+    """阶段 1 占位：原样复读。"""
+    return ReplySet(
+        platform=session.platform,
+        target_user_id=meta.user_id if meta.group_id is None else None,
+        target_group_id=meta.group_id,
+        segments=[ReplySegment(type="text", data=f"[echo] {meta.text}")],
+        should_reply=True,
+    )
 
 
 class Gateway:
@@ -29,6 +59,12 @@ class Gateway:
         self.server: Optional[MessageServer] = None
         self._server_task: Optional[asyncio.Task] = None
         self._chat_list: Optional[ChatListConfig] = None
+        self._processor: Processor = _echo_processor
+
+    def set_processor(self, processor: Processor) -> None:
+        """由上层注入消息处理器（junjun_agent 的决策漏斗）。"""
+        self._processor = processor
+        logger.info(f"消息处理器已注入: {getattr(processor, '__name__', type(processor).__name__)}")
 
     def _get_chat_list(self) -> ChatListConfig:
         if self._chat_list is None:
@@ -66,7 +102,6 @@ class Gateway:
             return
 
         info = msg.message_info
-        seg = msg.message_segment
         group_info = info.group_info
         user_info = info.user_info
         group_id = group_info.group_id if group_info else None
@@ -76,23 +111,32 @@ class Gateway:
             logger.debug(f"消息被名单过滤: user={user_id} group={group_id}")
             return
 
-        text = _extract_text(seg)
+        text = _extract_text(msg.message_segment)
         if not text:
             logger.debug("消息无文本内容，跳过")
             return
 
-        session = get_session_manager().get_or_create(msg)
-        session.add_message(text)
-        logger.info(f"收到消息 [{session.chat_id}] {user_info.user_nickname}: {text[:80]}")
-
-        reply = ReplySet(
-            platform=info.platform,
-            target_user_id=user_id if group_id is None else None,
-            target_group_id=str(group_id) if group_id else None,
-            segments=[ReplySegment(type="text", data=f"[echo] {text}")],
-            should_reply=True,
+        add_cfg = info.additional_config or {}
+        meta = InboundMeta(
+            text=text,
+            user_id=str(user_id) if user_id is not None else None,
+            nickname=(user_info.user_nickname or "") if user_info else "",
+            group_id=str(group_id) if group_id is not None else None,
+            message_id=str(info.message_id or ""),
+            at_bot=bool(add_cfg.get("at_bot")),
+            is_self=bool(self.bot_user_id and str(user_id) == str(self.bot_user_id)),
         )
-        await self.send_reply(reply)
+
+        session = get_session_manager().get_or_create(msg)
+        logger.info(f"收到消息 [{session.chat_id}] {meta.nickname}: {text[:80]}")
+
+        try:
+            reply = await self._processor(session, meta)
+        except Exception as e:
+            logger.error(f"processor 异常，本条消息忽略: {type(e).__name__}: {e}")
+            return
+        if reply is not None:
+            await self.send_reply(reply)
 
     async def send_reply(self, reply: ReplySet) -> None:
         if not reply.should_reply:
