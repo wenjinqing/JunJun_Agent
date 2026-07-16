@@ -21,6 +21,7 @@ class ChatSession:
         self.memory = None            # ShortTermMemory
         self.agent = None             # JunJunAgent
         self.silenced_until_call = False  # no_reply_until_call 沉默模式
+        self.last_active_ts = 0.0     # 最后收到消息时间（主动系统空闲判定）
 
     @property
     def is_group(self) -> bool:
