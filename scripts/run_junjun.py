@@ -40,7 +40,7 @@ async def _run() -> int:
     try:
         cfg = get_global_config()
         logger.info("=" * 60)
-        logger.info("启动君君 AGENT (JunJun_Agent) [阶段 1 接入]")
+        logger.info("启动君君 AGENT (JunJun_Agent) [阶段 2 Agent 最小可用]")
         logger.info(f"昵称: {cfg.bot.nickname}  平台: {cfg.bot.platform}")
         logger.info(f"工作目录: {ROOT}")
         logger.info("=" * 60)
@@ -49,6 +49,14 @@ async def _run() -> int:
         return 1
 
     router = get_router()
+
+    # 注入决策漏斗 processor（失败则保持 echo 占位，便于排障）
+    try:
+        from junjun_agent import junjun_processor
+        router.set_processor(junjun_processor)
+    except Exception as e:
+        logger.error(f"Agent processor 注入失败，回退 echo 模式: {e}")
+
     await router.start()
     logger.info("君君网关运行中，等待 Adapter 消息（Ctrl+C 退出）")
 
