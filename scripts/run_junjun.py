@@ -91,6 +91,14 @@ async def _run() -> int:
     except Exception as e:
         logger.error(f"调度器启动失败（继续运行）: {e}")
 
+    # WebUI（WEBUI_ENABLED=true 时同进程启动）
+    webui_task = None
+    try:
+        from junjun_webui.server import start_webui
+        webui_task = await start_webui()
+    except Exception as e:
+        logger.error(f"WebUI 启动失败（继续运行）: {e}")
+
     await router.start()
     logger.info("君君网关运行中，等待 Adapter 消息（Ctrl+C 退出）")
 
@@ -109,8 +117,10 @@ async def _run() -> int:
 
     await stop_event.wait()
 
-    # 优雅关闭：调度器 -> 会话队列 -> DB 写队列 -> 网关
+    # 优雅关闭：WebUI -> 调度器 -> 会话队列 -> DB 写队列 -> 网关
     try:
+        if webui_task is not None:
+            webui_task.cancel()
         from junjun_agent.loop import scheduler
         await scheduler.stop()
         from junjun_agent.funnel.session_queue import session_queues
