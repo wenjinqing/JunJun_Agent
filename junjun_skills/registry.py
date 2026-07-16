@@ -47,7 +47,15 @@ def load_builtin() -> None:
         return
     from junjun_skills.builtin.get_time import get_time
     from junjun_skills.builtin.do_not_reply import do_not_reply
+    from junjun_skills.builtin.memory_skills import (
+        recall_memory, save_memory, manage_user_profile, query_jargon, learn_jargon,
+    )
 
     register(get_time)
     register(do_not_reply)
+    register(recall_memory)
+    register(save_memory)
+    register(manage_user_profile)
+    register(query_jargon)
+    register(learn_jargon)
     logger.info(f"内置 skill 已加载: {[t.name for t in get_tools()]}")
