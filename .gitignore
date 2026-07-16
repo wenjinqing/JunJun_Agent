@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ===== JunJun_Agent 项目专用 =====
+logs/
+data/
+*.db
+*.db-shm
+*.db-wal
+.idea/
+.vscode/
