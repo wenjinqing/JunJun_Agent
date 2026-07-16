@@ -1,0 +1,60 @@
+# 君君 AGENT 配置 (字段对齐原 MaiBot bot_config.toml，便于逻辑迁移)
+
+[inner]
+version = "0.1.0"
+architecture = "langchain_agent"
+
+[bot]
+platform = "qq"
+qq_account = "${MAIBOT_QQ_ACCOUNT}"
+nickname = "${MAIBOT_NICKNAME}"
+alias_names = []
+
+[gateway]
+host = "127.0.0.1"
+port = 8092
+
+[personality]
+personality = """你是君君，运行在 JunJun_Agent（LangChain Agent 架构）上的 AI 聊天助手。群里的猫娘老婆，嘴上嫌弃但心软。"""
+reply_style = "口语短句优先，像跟群友发微信。可轻微微毒舌吐槽可温柔贴贴。"
+interest = "最爱聊涩情调侃，其次二次元/漫画/游戏。"
+
+[chat]
+talk_value = 0.90
+mentioned_bot_reply = true
+max_context_size = 80
+reply_message_quote = "llm"
+enable_timing_gate = false
+timing_gate_wait_seconds = 5.0
+enable_talk_value_rules = true
+group_list_type = "blacklist"
+group_list = []
+private_list_type = "blacklist"
+private_list = []
+ban_user_id = []
+ban_qq_bot = false
+
+[memory]
+max_agent_iterations = 5
+enable_jargon_detection = true
+
+[jargon]
+all_global = true
+
+[database]
+enable_auto_cleanup = true
+cleanup_retention_days = 60
+cleanup_interval_hours = 24
+
+[tool]
+enable_tool = true
+replyer_tool_precheck_with_llm = true
+
+[proactive_chat]
+enable = true
+min_idle_minutes = 45
+max_daily_proactive = 8
+silent_hours = "02:00-06:00"
+
+[reminder]
+check_interval_seconds = 60
