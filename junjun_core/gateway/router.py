@@ -34,6 +34,8 @@ class InboundMeta:
     message_id: str
     at_bot: bool
     is_self: bool
+    image_urls: list = None      # 消息中的图片/表情包 URL（偷图用）
+    has_emoji: bool = False      # 含 QQ 原生表情
 
 
 # processor 签名: async (session, meta) -> Optional[ReplySet]
@@ -112,8 +114,9 @@ class Gateway:
             return
 
         text = _extract_text(msg.message_segment)
-        if not text:
-            logger.debug("消息无文本内容，跳过")
+        image_urls = _extract_images(msg.message_segment)
+        if not text and not image_urls:
+            logger.debug("消息无文本/图片内容，跳过")
             return
 
         add_cfg = info.additional_config or {}
@@ -125,6 +128,8 @@ class Gateway:
             message_id=str(info.message_id or ""),
             at_bot=bool(add_cfg.get("at_bot")),
             is_self=bool(self.bot_user_id and str(user_id) == str(self.bot_user_id)),
+            image_urls=image_urls,
+            has_emoji=_has_emoji(msg.message_segment),
         )
 
         session = get_session_manager().get_or_create(msg)
@@ -155,6 +160,22 @@ def _extract_text(seg: Seg) -> str:
     elif seg.type == "text" and isinstance(seg.data, str):
         parts.append(seg.data)
     return "".join(parts)
+
+
+def _extract_images(seg: Seg) -> list:
+    urls = []
+    if seg.type == "seglist" and isinstance(seg.data, list):
+        for sub in seg.data:
+            urls.extend(_extract_images(sub))
+    elif seg.type == "image" and isinstance(seg.data, str) and seg.data:
+        urls.append(seg.data)
+    return urls
+
+
+def _has_emoji(seg: Seg) -> bool:
+    if seg.type == "seglist" and isinstance(seg.data, list):
+        return any(_has_emoji(sub) for sub in seg.data)
+    return seg.type == "emoji"
 
 
 _gateway: Optional[Gateway] = None

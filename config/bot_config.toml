@@ -80,9 +80,34 @@ replyer_tool_precheck_with_llm = true
 
 [proactive_chat]
 enable = true
-min_idle_minutes = 45
-max_daily_proactive = 8
-silent_hours = "02:00-06:00"
+check_interval_minutes = 30   # 后台扫描间隔
+min_idle_minutes = 120        # 会话空闲多久才允许主动
+max_daily_proactive = 2       # 每会话每天上限
+silent_hours = "23:00-09:00"  # 静默时段不主动
+enable_in_groups = false      # 群聊主动风险高，默认关
+enable_in_private = true
 
 [reminder]
 check_interval_seconds = 60
+
+[mood]
+enable_mood = true
+emotion_style = "情绪外露但不夸张，开心时话多带颜文字，无语时高冷简短。"
+
+[emoji]
+emoji_chance = 0.35
+max_reg_num = 2000
+do_replace = true
+check_interval = 10       # 注册循环间隔（分钟）
+steal_emoji = true
+
+[repeat]
+enable = true
+threshold = 4             # 连续几条相同消息触发跟读
+min_interval_seconds = 60 # 跟读冷却
+min_message_length = 1
+max_message_length = 50
+
+[expression]
+# learning_list = [{ target = "" }]  # 空=全会话学习；填 "qq:群号:group" 限定
+learning_list = []

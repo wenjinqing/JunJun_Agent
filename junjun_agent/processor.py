@@ -102,12 +102,41 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     """会话队列内串行执行的核心处理。发送直接走 gateway（分条延迟）。"""
     cfg = _l1_config(session)
     frequency_control.note_message(session.chat_id)
+    session.last_active_ts = time.time()  # 主动系统空闲判定
+
+    # ---- 表情包偷图（fire-and-forget，失败静默）----
+    if meta.image_urls and session.is_group and not meta.is_self:
+        try:
+            from junjun_express.emoji import emoji_manager
+            await emoji_manager.steal(meta.image_urls)
+        except Exception:
+            pass
+
+    # ---- 复读参与（0 token，先于漏斗；跟读不挡正常决策）----
+    if session.is_group:
+        from junjun_agent.loop.repeat import repeat_detector
+        echo = repeat_detector.note(session.chat_id, meta.user_id or "", meta.text,
+                                    is_self=meta.is_self)
+        if echo:
+            from junjun_core.gateway.router import get_gateway
+            await get_gateway().send_reply(ReplySet(
+                platform=session.platform, target_group_id=session.group_id,
+                segments=[ReplySegment(type="text", data=echo)], should_reply=True,
+            ))
+            session.memory.add_bot(echo)
+            return  # 跟读本身就是本条消息的回应，不再进漏斗
 
     # ---- 中期记忆：批次记录，满批触发摘要 ----
     from junjun_memory.summarizer import get_summarizer
     summarizer = get_summarizer()
     if summarizer.note(session.chat_id, meta.nickname or meta.user_id or "?", meta.text):
         await summarizer.summarize(session.chat_id)
+
+    # ---- 表达学习：积累群友消息，满批学习 ----
+    if session.is_group and not meta.is_self:
+        from junjun_express.expression import expression_learner
+        if expression_learner.note(session.chat_id, meta.nickname, meta.text):
+            await expression_learner.learn(session.chat_id)
 
     # ---- L1 规则门（0 token）----
     l1 = rule_gate(
@@ -148,12 +177,21 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     current_chat_id.set(session.chat_id)
     current_platform.set(session.platform)
 
-    # ---- 记忆/关系/情绪块（检索失败降级空串，不阻塞回复）----
+    # ---- 记忆/关系/情绪/表达块（检索失败降级空串，不阻塞回复）----
     memory_block = await _build_memory_block(session, meta)
     relation_block = _build_relation_block(session, meta)
 
     from junjun_express.mood import mood_manager
     mood_block = mood_manager.build_mood_block(session.chat_id)
+
+    expression_block = ""
+    try:
+        from junjun_express.expression import build_expression_block
+        expression_block = build_expression_block(session.chat_id, meta.text)
+    except Exception:
+        pass
+    if expression_block:
+        memory_block = f"{memory_block}\n{expression_block}" if memory_block else expression_block
 
     # ---- L3 主 Agent ----
     text = await session.agent.process(
