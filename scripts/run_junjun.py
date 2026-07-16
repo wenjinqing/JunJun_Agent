@@ -1,0 +1,85 @@
+"""君君 AGENT 统一入口。
+
+职责：
+1. 固定工作目录到仓库根。
+2. 加载 .env 环境变量。
+3. 初始化日志与配置。
+4. 启动消息网关。
+5. 优雅关闭。
+"""
+
+import asyncio
+import os
+import signal
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+os.chdir(ROOT)
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
+def _setup_env() -> None:
+    from dotenv import load_dotenv
+
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        load_dotenv(str(env_path), override=True)
+    else:
+        print(f"[warn] 未找到 .env，可参考 .env.example 创建：{env_path}")
+
+
+async def _run() -> int:
+    from junjun_core import get_logger, initialize_logging, get_global_config, get_router
+
+    initialize_logging()
+    logger = get_logger("main")
+
+    try:
+        cfg = get_global_config()
+        logger.info("=" * 60)
+        logger.info("启动君君 AGENT (JunJun_Agent) [阶段 1 接入]")
+        logger.info(f"昵称: {cfg.bot.nickname}  平台: {cfg.bot.platform}")
+        logger.info(f"工作目录: {ROOT}")
+        logger.info("=" * 60)
+    except Exception as e:
+        logger.error(f"配置加载失败: {e}")
+        return 1
+
+    router = get_router()
+    await router.start()
+    logger.info("君君网关运行中，等待 Adapter 消息（Ctrl+C 退出）")
+
+    stop_event = asyncio.Event()
+
+    def _on_signal(*_):
+        logger.info("收到退出信号，开始优雅关闭...")
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _on_signal)
+        except NotImplementedError:
+            signal.signal(sig, lambda *_: stop_event.set())
+
+    await stop_event.wait()
+
+    await router.stop()
+    logger.info("君君已关闭")
+    return 0
+
+
+def main() -> None:
+    _setup_env()
+    try:
+        exit_code = asyncio.run(_run())
+    except KeyboardInterrupt:
+        exit_code = 0
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
