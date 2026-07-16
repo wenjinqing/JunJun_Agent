@@ -1,14 +1,16 @@
-"""persona: system prompt 组装（阶段 2 最简版）。
+"""persona: system prompt 组装（阶段 3 全量）。
 
-阶段 3 扩展：情绪/记忆摘要/关系/keyword_reaction 块。
+分块拼装：人设 + reply_style + plan_style + interest + 当前时间 + 场景块
++ keyword_reaction 命中规则 + 情绪占位（阶段5）+ 记忆摘要占位（阶段4）。
+strip_emoji：原项目实测 system prompt 含 emoji 干扰 function calling schema。
 """
 
 import re
 from datetime import datetime
+from typing import List, Optional
 
 from junjun_core.config import get_global_config
 
-# 去 emoji：原项目实测 system prompt 含 emoji 会干扰 function calling schema
 _EMOJI_RE = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U0001F02F\U0001F900-\U0001F9FF]+",
     flags=re.UNICODE,
@@ -19,7 +21,29 @@ def strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub("", text)
 
 
-def build_system_prompt(*, is_group: bool, nickname: str = "") -> str:
+def match_keyword_rules(text: str) -> List[str]:
+    """keyword_reaction 命中规则 -> reaction 提示列表（对齐原 [keyword_reaction]）。"""
+    rules = get_global_config().raw.get("keyword_reaction", {}).get("keyword_rules", []) or []
+    hits = []
+    low = text.lower()
+    for rule in rules:
+        kws = rule.get("keywords", [])
+        if any(str(k).lower() in low for k in kws):
+            reaction = rule.get("reaction", "")
+            if reaction:
+                hits.append(reaction)
+    return hits
+
+
+def build_system_prompt(
+    *,
+    is_group: bool,
+    nickname: str = "",
+    latest_text: str = "",
+    mood_block: str = "",
+    memory_block: str = "",
+    relation_block: str = "",
+) -> str:
     cfg = get_global_config()
     p = cfg.raw.get("personality", {})
     nickname = nickname or cfg.bot.nickname
@@ -34,10 +58,22 @@ def build_system_prompt(*, is_group: bool, nickname: str = "") -> str:
     parts = [
         p.get("personality", f"你是{nickname}。"),
         f"回复风格：{p.get('reply_style', '')}",
+        f"表达倾向：{p.get('plan_style', '')}" if p.get("plan_style") else "",
         f"兴趣：{p.get('interest', '')}",
         f"当前时间：{now}",
         scene,
+        mood_block,
+        memory_block,
+        relation_block,
+    ]
+
+    # keyword_reaction 命中注入
+    if latest_text:
+        for reaction in match_keyword_rules(latest_text):
+            parts.append(f"特别注意：{reaction}")
+
+    parts += [
         "工具使用：需要事实信息（时间等）先调工具；决定不回复就调 do_not_reply 而不是输出空话。",
-        "回复要求：直接输出聊天内容本身，不要带「昵称:」前缀，不要解释你的决策。",
+        "回复要求：直接输出聊天内容本身，不要带「昵称:」前缀，不要解释你的决策，不要用括号描述动作。",
     ]
     return strip_emoji("\n".join(x for x in parts if x))

@@ -27,12 +27,40 @@ reply_message_quote = "llm"
 enable_timing_gate = false
 timing_gate_wait_seconds = 5.0
 enable_talk_value_rules = true
+# 动态发言频率规则：target="" 全局 / "qq:群号:group"；支持跨夜 "23:00-02:00"
+talk_value_rules = [
+    { target = "", time = "00:00-08:59", value = 0.75 },
+    { target = "", time = "09:00-22:59", value = 0.92 },
+]
 group_list_type = "blacklist"
 group_list = []
 private_list_type = "blacklist"
 private_list = []
 ban_user_id = []
 ban_qq_bot = false
+
+[keyword_reaction]
+keyword_rules = [
+    { keywords = ["人机", "bot", "机器", "入机", "robot", "机器人", "ai", "AI"], reaction = "有人质疑你是AI或机器人时，用猫娘的语气自然俏皮地承认，每次回应要有变化，不要用固定句式" },
+    { keywords = ["测试关键词回复", "test"], reaction = "回答测试成功" },
+]
+
+[response_post_process]
+enable_response_post_process = true
+
+[response_splitter]
+enable = true
+max_sentence_num = 5          # 最多拆几条气泡
+max_chars_per_message = 120   # 单条硬上限
+enable_kaomoji_protection = false
+enable_overflow_return_all = true
+
+[chinese_typo]
+enable = true
+error_rate = 0.01        # 单字替换概率
+min_freq = 9
+tone_error_rate = 0.1    # 声调错误概率
+word_replace_rate = 0.006
 
 [memory]
 max_agent_iterations = 5
