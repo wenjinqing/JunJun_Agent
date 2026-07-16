@@ -66,6 +66,23 @@ async def _run() -> int:
     except Exception as e:
         logger.error(f"Agent processor 注入失败，回退 echo 模式: {e}")
 
+    # skill 插件（vrchat/tts 等静态扫描）+ MCP 客户端工具
+    try:
+        from junjun_skills.registry import load_builtin
+        from junjun_skills.plugin_loader import load_plugins
+        load_builtin()
+        load_plugins()
+    except Exception as e:
+        logger.error(f"插件加载失败（内置 skill 不受影响）: {e}")
+    try:
+        from junjun_mcp_client.client import mcp_manager
+        n = await mcp_manager.start()
+        if n:
+            mcp_manager.register_all()
+            logger.info(f"MCP 工具已注入 registry: {n} 个")
+    except Exception as e:
+        logger.error(f"MCP 客户端启动失败（降级无 MCP）: {e}")
+
     # 定时任务：记忆遗忘 + 摘要兜底
     try:
         from junjun_agent.loop import scheduler, register_default_tasks

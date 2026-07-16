@@ -64,6 +64,8 @@ class SendHandler:
                 payload.append({"type": "text", "data": {"text": text}})
         elif seg.type == "image":
             payload.append({"type": "image", "data": {"file": seg.data}})
+        elif seg.type in ("voice", "voiceurl"):
+            payload.append({"type": "record", "data": {"file": seg.data}})
         elif seg.type == "emoji":
             payload.append({"type": "face", "data": {"id": str(seg.data)}})
         elif seg.type == "reply":
