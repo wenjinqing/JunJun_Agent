@@ -1,0 +1,2 @@
+# JunJun_Agent
+基于君君QQ机器人的架构升级，由原本的satrbot架构升级为现代Agent架构
