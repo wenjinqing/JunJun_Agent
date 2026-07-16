@@ -125,6 +125,10 @@ def register_default_tasks() -> None:
         from junjun_core.database.cleanup import run_cleanup
         await run_cleanup()
 
+    async def expression_reflect():
+        from junjun_express.reflector import expression_reflector
+        await expression_reflector.check_and_ask()
+
     from junjun_core.config import get_global_config
     raw = get_global_config().raw
     interval = int(raw.get("reminder", {}).get("check_interval_seconds", 60))
@@ -139,3 +143,4 @@ def register_default_tasks() -> None:
     scheduler.add(ScheduledTask("emoji_register", emoji_register, interval=emoji_min * 60))
     scheduler.add(ScheduledTask("statistics", statistics, interval=4 * 3600))
     scheduler.add(ScheduledTask("db_cleanup", db_cleanup, interval=cleanup_h * 3600))
+    scheduler.add(ScheduledTask("expression_reflect", expression_reflect, interval=5 * 60))

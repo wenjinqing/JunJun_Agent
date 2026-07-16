@@ -104,6 +104,23 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     frequency_control.note_message(session.chat_id)
     session.last_active_ts = time.time()  # 主动系统空闲判定
 
+    # ---- 表达反思：管理员回复「删除 N」拦截（0 token）----
+    if not meta.is_self:
+        try:
+            from junjun_express.reflector import expression_reflector
+            receipt = expression_reflector.handle_operator_reply(session.chat_id, meta.text)
+            if receipt:
+                from junjun_core.gateway.router import get_gateway
+                await get_gateway().send_reply(ReplySet(
+                    platform=session.platform,
+                    target_group_id=session.group_id,
+                    target_user_id=meta.user_id if not session.is_group else None,
+                    segments=[ReplySegment(type="text", data=receipt)], should_reply=True,
+                ))
+                return
+        except Exception:
+            pass
+
     # ---- 表情包偷图（fire-and-forget，失败静默）----
     if meta.image_urls and session.is_group and not meta.is_self:
         try:

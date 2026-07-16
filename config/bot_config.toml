@@ -111,3 +111,9 @@ max_message_length = 50
 [expression]
 # learning_list = [{ target = "" }]  # 空=全会话学习；填 "qq:群号:group" 限定
 learning_list = []
+reflect = false                # 表达反思：定期把新学表达发管理员求证
+reflect_operator_id = ""       # 管理员会话，格式 "qq:123456:private"
+
+[lpmm_knowledge]
+enable = true
+qa_ppr_damping = 0.8           # PersonalizedPageRank 阻尼系数
