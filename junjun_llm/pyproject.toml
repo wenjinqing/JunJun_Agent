@@ -1,0 +1,17 @@
+[project]
+name = "junjun-llm"
+version = "0.1.0"
+description = "LLM ???"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain-openai",
+    "langfuse",
+    "openai"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["junjun_llm"]

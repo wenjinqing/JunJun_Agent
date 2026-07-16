@@ -1,0 +1,53 @@
+[project]
+name = "junjun-agent"
+version = "0.1.0"
+description = "君君 AGENT 架构 - LangChain + Langfuse + Function Calling + MCP"
+requires-python = ">=3.11"
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+    "tomli-w>=1.0.0",
+    "tomlkit>=0.12.0",
+    "pydantic>=2.0.0",
+    "structlog>=23.0.0",
+    "rich>=13.0.0",
+    "websockets>=12.0",
+    "maim-message",
+    "peewee>=3.16.0",
+    "langchain>=1.0.0",
+    "langchain-openai>=1.0.0",
+    "langchain-core>=1.0.0",
+    "langgraph>=1.0.0",
+    "langfuse>=3.0.0",
+    "openai>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.uv.workspace]
+members = [
+    "junjun_core",
+    "junjun_adapter_napcat",
+    "junjun_agent",
+    "junjun_llm",
+    "junjun_memory",
+    "junjun_skills",
+    "junjun_mcp_client",
+    "junjun_express",
+    "junjun_webui",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "B"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+docstring-code-format = true
