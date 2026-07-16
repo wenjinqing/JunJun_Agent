@@ -1,0 +1,10 @@
+# MCP server 连接配置
+# 每个 [servers.<name>] 一个 server；stdio 传输
+# ${REPO_ROOT} 会替换为仓库根路径
+
+[servers.relationship]
+enable = true
+command = "${REPO_ROOT}/.venv/Scripts/python.exe"
+# -u 必须：Windows 下 stdout 块缓冲会让 JSON-RPC 响应卡在缓冲区（工具执行了但客户端等超时）
+args = ["-u", "-m", "junjun_mcp_server.relationship_mcp_server"]
+cwd = "${REPO_ROOT}"
