@@ -53,6 +53,7 @@ def load_builtin() -> None:
     from junjun_skills.builtin.reminder_skills import (
         set_reminder, list_reminders, cancel_reminder_task, manage_mood,
     )
+    from junjun_skills.builtin.express_skills import send_emoji
 
     register(get_time)
     register(do_not_reply)
@@ -65,4 +66,5 @@ def load_builtin() -> None:
     register(list_reminders)
     register(cancel_reminder_task)
     register(manage_mood)
+    register(send_emoji)
     logger.info(f"内置 skill 已加载: {[t.name for t in get_tools()]}")
