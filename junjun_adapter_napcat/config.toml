@@ -1,0 +1,21 @@
+[inner]
+version = "0.1.0"
+
+[napcat_server]
+host = "127.0.0.1"
+port = 8095
+token = ""
+heartbeat_interval = 30
+
+[maibot_server]
+host = "127.0.0.1"
+port = 8092
+platform_name = "qq"
+
+[chat]
+group_list_type = "blacklist"
+group_list = []
+private_list_type = "blacklist"
+private_list = []
+ban_user_id = []
+ban_qq_bot = false
