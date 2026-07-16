@@ -50,6 +50,15 @@ async def _run() -> int:
 
     router = get_router()
 
+    # 数据库建表 + 写队列
+    try:
+        from junjun_core.database import init_database, db_writer
+        init_database()
+        db_writer.start()
+        logger.info("数据库已就绪 (data/junjun.db, WAL)")
+    except Exception as e:
+        logger.error(f"数据库初始化失败（继续运行，不落库）: {e}")
+
     # 注入决策漏斗 processor（失败则保持 echo 占位，便于排障）
     try:
         from junjun_agent import junjun_processor
@@ -75,6 +84,14 @@ async def _run() -> int:
 
     await stop_event.wait()
 
+    # 优雅关闭：会话队列 -> DB 写队列 -> 网关
+    try:
+        from junjun_agent.funnel.session_queue import session_queues
+        await session_queues.stop_all()
+        from junjun_core.database import db_writer
+        await db_writer.stop()
+    except Exception:
+        pass
     await router.stop()
     logger.info("君君已关闭")
     return 0
