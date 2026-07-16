@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>君君 WebUI</title>
+<style>
+  :root { --bg:#1a1b26; --panel:#24283b; --fg:#c0caf5; --dim:#565f89; --acc:#7aa2f7; --ok:#9ece6a; --warn:#e0af68; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--fg); font:14px/1.6 "Segoe UI",system-ui,sans-serif; padding:16px; }
+  h1 { font-size:18px; margin-bottom:12px; } h1 span { color:var(--acc); }
+  nav { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  nav button { background:var(--panel); color:var(--fg); border:1px solid var(--dim); border-radius:6px; padding:6px 14px; cursor:pointer; }
+  nav button.on { background:var(--acc); color:var(--bg); border-color:var(--acc); }
+  .panel { background:var(--panel); border-radius:8px; padding:14px; display:none; }
+  .panel.on { display:block; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:5px 8px; border-bottom:1px solid #2f334d; }
+  th { color:var(--dim); }
+  #logbox { height:60vh; overflow-y:auto; font:12px/1.5 Consolas,monospace; white-space:pre-wrap; background:#16161e; border-radius:6px; padding:8px; }
+  input[type=text],input[type=number],textarea { background:#16161e; color:var(--fg); border:1px solid var(--dim); border-radius:4px; padding:4px 8px; width:100%; }
+  textarea { min-height:60px; }
+  .cfgrow { display:grid; grid-template-columns:240px 1fr 70px; gap:8px; align-items:center; margin-bottom:6px; }
+  .cfgrow button, .del { background:var(--acc); color:var(--bg); border:0; border-radius:4px; padding:4px 10px; cursor:pointer; }
+  .del { background:#f7768e; }
+  .msg { color:var(--ok); margin-top:8px; min-height:20px; }
+</style>
+</head>
+<body>
+<h1>君君 <span>WebUI</span> <small id="conn" style="color:var(--dim)"></small></h1>
+<nav>
+  <button data-p="stats" class="on">统计</button>
+  <button data-p="config">配置</button>
+  <button data-p="logs">日志</button>
+  <button data-p="sessions">会话</button>
+  <button data-p="jargon">黑话</button>
+  <button data-p="expr">表达</button>
+  <button data-p="persons">画像</button>
+  <button data-p="reminders">提醒</button>
+</nav>
+
+<div class="panel on" id="p-stats"><table id="t-stats"></table><br><table id="t-usage"></table></div>
+<div class="panel" id="p-config"><div id="cfg"></div><div class="msg" id="cfgmsg"></div></div>
+<div class="panel" id="p-logs"><div id="logbox"></div></div>
+<div class="panel" id="p-sessions"><table id="t-sessions"></table></div>
+<div class="panel" id="p-jargon"><table id="t-jargon"></table></div>
+<div class="panel" id="p-expr"><table id="t-expr"></table></div>
+<div class="panel" id="p-persons"><table id="t-persons"></table></div>
+<div class="panel" id="p-reminders"><table id="t-reminders"></table></div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+const H = TOKEN ? {Authorization: 'Bearer ' + TOKEN} : {};
+const api = (p, opt) => fetch('/api/' + p, Object.assign({headers: H}, opt)).then(r => {
+  if (!r.ok) throw new Error(r.status); return r.json();
+});
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button,.panel').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  document.getElementById('p-' + b.dataset.p).classList.add('on');
+  load(b.dataset.p);
+});
+
+const loaders = {
+  async stats() {
+    const s = await api('stats');
+    document.getElementById('t-stats').innerHTML =
+      `<tr><th>24h 收到</th><th>24h 回复</th></tr><tr><td>${s.received}</td><td>${s.replied}</td></tr>`;
+    document.getElementById('t-usage').innerHTML = '<tr><th>任务</th><th>调用</th><th>输入token</th><th>输出token</th></tr>' +
+      s.usage.map(u => `<tr><td>${esc(u.type)}</td><td>${u.calls}</td><td>${u.prompt_tokens}</td><td>${u.completion_tokens}</td></tr>`).join('');
+  },
+  async config() {
+    const cfg = await api('config');
+    const box = document.getElementById('cfg'); box.innerHTML = '';
+    for (const [sec, kv] of Object.entries(cfg)) for (const [k, v] of Object.entries(kv)) {
+      const row = document.createElement('div'); row.className = 'cfgrow';
+      const isBool = typeof v === 'boolean', isNum = typeof v === 'number';
+      const long = typeof v === 'string' && v.length > 40;
+      row.innerHTML = `<label>${sec}.${k}</label>` +
+        (isBool ? `<input type="checkbox" ${v ? 'checked' : ''}>` :
+         long ? `<textarea>${esc(v)}</textarea>` :
+         `<input type="${isNum ? 'number' : 'text'}" step="any" value="${esc(v)}">`) +
+        `<button>保存</button>`;
+      row.querySelector('button').onclick = async () => {
+        const el = row.children[1];
+        const val = isBool ? el.checked : isNum ? parseFloat(el.value) : el.value;
+        await api('config', {method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, H),
+                             body: JSON.stringify({[sec]: {[k]: val}})});
+        document.getElementById('cfgmsg').textContent = `${sec}.${k} 已生效（内存热改，持久化请手动改 bot_config.toml）`;
+      };
+      box.appendChild(row);
+    }
+  },
+  async logs() {
+    const box = document.getElementById('logbox');
+    const d = await api('logs'); box.textContent = d.lines.join('\n'); box.scrollTop = box.scrollHeight;
+    if (window._ws) return;
+    const ws = new WebSocket(`ws://${location.host}/api/logs/ws?token=${TOKEN}`);
+    ws.onmessage = e => { box.textContent += '\n' + e.data; box.scrollTop = box.scrollHeight; };
+    ws.onopen = () => { document.getElementById('conn').textContent = '· 日志流已连接'; setInterval(() => ws.send('ping'), 25000); };
+    ws.onclose = () => { document.getElementById('conn').textContent = '· 日志流断开'; window._ws = null; };
+    window._ws = ws;
+  },
+  async sessions() {
+    const rows = await api('sessions');
+    document.getElementById('t-sessions').innerHTML = '<tr><th>会话</th><th>类型</th><th>上下文</th><th>沉默中</th><th>最后活跃</th></tr>' +
+      rows.map(s => `<tr><td>${esc(s.chat_id)}</td><td>${s.is_group ? '群' : '私聊'}</td><td>${s.context_len}</td>
+        <td>${s.silenced ? '是' : ''}</td><td>${s.last_active ? new Date(s.last_active * 1000).toLocaleTimeString() : '-'}</td></tr>`).join('');
+  },
+  async jargon() { await listWithDelete('jargon', 't-jargon', ['term', 'explanation', 'count'], ['词条', '解释', '次数']); },
+  async expr() { await listWithDelete('expressions', 't-expr', ['chat_id', 'situation', 'style', 'count'], ['会话', '语境', '表达', '次数']); },
+  async persons() {
+    const rows = await api('persons');
+    document.getElementById('t-persons').innerHTML = '<tr><th>QQ</th><th>称呼</th><th>画像点</th></tr>' +
+      rows.map(p => `<tr><td>${esc(p.user_id)}</td><td>${esc(p.name)}</td><td>${p.points.map(esc).join('<br>')}</td></tr>`).join('');
+  },
+  async reminders() {
+    const rows = await api('reminders');
+    document.getElementById('t-reminders').innerHTML = '<tr><th>编号</th><th>会话</th><th>内容</th><th>时间</th><th>周期</th></tr>' +
+      rows.map(r => `<tr><td>${esc(r.task_id)}</td><td>${esc(r.chat_id)}</td><td>${esc(r.content)}</td>
+        <td>${new Date(r.remind_time * 1000).toLocaleString()}</td><td>${esc(r.repeat) || '一次'}</td></tr>`).join('');
+  },
+};
+
+async function listWithDelete(ep, tableId, cols, titles) {
+  const rows = await api(ep);
+  document.getElementById(tableId).innerHTML =
+    `<tr>${titles.map(t => `<th>${t}</th>`).join('')}<th></th></tr>` +
+    rows.map(r => `<tr>${cols.map(c => `<td>${esc(r[c])}</td>`).join('')}
+      <td><button class="del" onclick="delRow('${ep}',${r.id},'${tableId}')">删</button></td></tr>`).join('');
+}
+window.delRow = async (ep, id, tid) => {
+  await api(`${ep}/${id}`, {method: 'DELETE'});
+  load(document.querySelector('nav button.on').dataset.p);
+};
+const load = p => (loaders[p === 'expr' ? 'expr' : p] || loaders.stats)();
+load('stats');
+</script>
+</body>
+</html>
