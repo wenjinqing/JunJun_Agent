@@ -105,5 +105,13 @@ def register_default_tasks() -> None:
             if batch.lines and (now - batch.started_at) > BATCH_MAX_AGE:
                 await s.summarize(chat_id)
 
+    async def reminders():
+        from junjun_agent.loop.reminder import check_due_reminders
+        await check_due_reminders()
+
+    from junjun_core.config import get_global_config
+    interval = int(get_global_config().raw.get("reminder", {}).get("check_interval_seconds", 60))
+
     scheduler.add(ScheduledTask("memory_forget", memory_forget, interval=6 * 3600))
     scheduler.add(ScheduledTask("flush_summaries", flush_pending_summaries, interval=600))
+    scheduler.add(ScheduledTask("reminders", reminders, interval=interval))

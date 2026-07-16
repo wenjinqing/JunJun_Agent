@@ -50,6 +50,9 @@ def load_builtin() -> None:
     from junjun_skills.builtin.memory_skills import (
         recall_memory, save_memory, manage_user_profile, query_jargon, learn_jargon,
     )
+    from junjun_skills.builtin.reminder_skills import (
+        set_reminder, list_reminders, cancel_reminder_task, manage_mood,
+    )
 
     register(get_time)
     register(do_not_reply)
@@ -58,4 +61,8 @@ def load_builtin() -> None:
     register(manage_user_profile)
     register(query_jargon)
     register(learn_jargon)
+    register(set_reminder)
+    register(list_reminders)
+    register(cancel_reminder_task)
+    register(manage_mood)
     logger.info(f"内置 skill 已加载: {[t.name for t in get_tools()]}")

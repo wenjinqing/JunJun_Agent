@@ -56,6 +56,12 @@ def _no_freq_eval(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_mood_eval(monkeypatch):
+    from junjun_express.mood import mood_manager
+    monkeypatch.setattr(mood_manager, "should_evaluate", lambda chat_id: False)
+
+
+@pytest.fixture(autouse=True)
 def _fast_postprocess(monkeypatch):
     """测试中关掉错别字与延迟（确定性）。"""
     from junjun_agent.postprocess import OutboundMessage

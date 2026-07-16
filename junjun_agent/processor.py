@@ -148,16 +148,22 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     current_chat_id.set(session.chat_id)
     current_platform.set(session.platform)
 
-    # ---- 记忆/关系块（检索失败降级空串，不阻塞回复）----
+    # ---- 记忆/关系/情绪块（检索失败降级空串，不阻塞回复）----
     memory_block = await _build_memory_block(session, meta)
     relation_block = _build_relation_block(session, meta)
+
+    from junjun_express.mood import mood_manager
+    mood_block = mood_manager.build_mood_block(session.chat_id)
 
     # ---- L3 主 Agent ----
     text = await session.agent.process(
         session.memory.render(), callbacks=callbacks, latest_text=meta.text,
         addressed=(l1 is L1Result.TO_AGENT),
         memory_block=memory_block, relation_block=relation_block,
+        mood_block=mood_block,
     )
+
+    # 情绪重评（跟随 L3，冷却内跳过；不阻塞发送——先发再评）
     if not text:
         return
 
@@ -183,6 +189,12 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
             should_reply=True,
             reply_to_message_id=quote_id if i == 0 else None,  # 只首条带引用
         ))
+
+    # 情绪重评（发送后进行，不阻塞回复；冷却内跳过）
+    if mood_manager.should_evaluate(session.chat_id):
+        await mood_manager.evaluate(
+            session.chat_id, session.memory.render(limit=12), callbacks=callbacks,
+        )
 
     await _maybe_adjust_frequency(session)
 
