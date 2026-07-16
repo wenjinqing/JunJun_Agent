@@ -1,4 +1,7 @@
-"""真实 LLM 冒烟（手动跑，不进 CI）：验证 gate + agent + skill 全链路。
+"""真实 LLM 冒烟（手动跑，不进 CI）：验证 gate + agent + skill + 后处理全链路。
+
+阶段 3 起决策在会话队列内执行、发送走 gateway.send_reply——
+这里注入 fake gateway 捕获出站消息，直接调 _handle 保持同步语义。
 
 用法：.venv/Scripts/python.exe scripts/smoke_agent.py
 """
@@ -20,30 +23,42 @@ async def main():
 
     from junjun_core.gateway.session_manager import ChatSession
     from junjun_core.gateway.router import InboundMeta
-    from junjun_agent.processor import junjun_processor
+    import junjun_core.gateway.router as router_mod
+    from junjun_agent.processor import _handle
+
+    class FakeGateway:
+        async def send_reply(self, reply):
+            for seg in reply.segments:
+                quote = f" [引用:{reply.reply_to_message_id}]" if reply.reply_to_message_id else ""
+                print(f"  >>> 发送: {seg.data}{quote}", flush=True)
+
+    router_mod._gateway = FakeGateway()
 
     session = ChatSession("qq:999:group", "qq", group_id="999")
 
-    print("\n=== 用例 1: @君君 问时间（应走 L1 旁路 -> agent 调 get_time）===", flush=True)
-    reply = await junjun_processor(session, InboundMeta(
-        text="君君，现在几点了", user_id="111", nickname="甲",
-        group_id="999", message_id="1", at_bot=True, is_self=False,
-    ))
-    print(f">>> 回复: {reply.segments[0].data if reply else '(沉默)'}", flush=True)
+    async def send(text, *, at_bot=False, user_id="111", nickname="甲", msg_id="1"):
+        meta = InboundMeta(
+            text=text, user_id=user_id, nickname=nickname,
+            group_id="999", message_id=msg_id, at_bot=at_bot, is_self=False,
+        )
+        from junjun_agent.processor import _ensure_session_ready
+        _ensure_session_ready(session)
+        session.memory.add_user(text, nickname, user_id=user_id, message_id=msg_id, at_bot=at_bot)
+        await _handle(session, meta)
+
+    print("\n=== 用例 1: @君君 问时间（L1 旁路 -> get_time 工具）===", flush=True)
+    await send("君君，现在几点了", at_bot=True, msg_id="1")
 
     print("\n=== 用例 2: 无关闲聊（应被 L2 gate 或 agent 判沉默）===", flush=True)
-    reply = await junjun_processor(session, InboundMeta(
-        text="昨天那家火锅真不错", user_id="222", nickname="乙",
-        group_id="999", message_id="2", at_bot=False, is_self=False,
-    ))
-    print(f">>> 回复: {reply.segments[0].data if reply else '(沉默)'}", flush=True)
+    await send("昨天那家火锅真不错", user_id="222", nickname="乙", msg_id="2")
 
-    print("\n=== 用例 3: @君君 闲聊（应正常接话）===", flush=True)
-    reply = await junjun_processor(session, InboundMeta(
-        text="君君你喜欢吃火锅吗", user_id="111", nickname="甲",
-        group_id="999", message_id="3", at_bot=True, is_self=False,
-    ))
-    print(f">>> 回复: {reply.segments[0].data if reply else '(沉默)'}", flush=True)
+    print("\n=== 用例 3: @君君 长回复（验证分条+延迟+错别字）===", flush=True)
+    await send("君君，给我讲讲你最喜欢的动漫，多说几句", at_bot=True, msg_id="3")
+
+    print("\n=== 用例 4: 关键词反应（人机质疑）===", flush=True)
+    await send("君君你是不是人机啊", at_bot=True, user_id="222", nickname="乙", msg_id="4")
+
+    print("\n[done]", flush=True)
 
 
 asyncio.run(main())

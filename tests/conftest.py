@@ -37,6 +37,20 @@ def _fake_bot_config(monkeypatch):
             },
             "memory": {"max_agent_iterations": 5},
             "gateway": {"host": "127.0.0.1", "port": 8092},
+            "keyword_reaction": {
+                "keyword_rules": [
+                    {"keywords": ["人机", "机器人", "ai", "AI"], "reaction": "俏皮承认自己是AI"},
+                ],
+            },
+            "response_post_process": {"enable_response_post_process": True},
+            "response_splitter": {
+                "enable": True, "max_sentence_num": 5, "max_chars_per_message": 120,
+                "enable_kaomoji_protection": False, "enable_overflow_return_all": True,
+            },
+            "chinese_typo": {
+                "enable": True, "error_rate": 0.01, "min_freq": 9,
+                "tone_error_rate": 0.1, "word_replace_rate": 0.006,
+            },
         },
     )
     monkeypatch.setattr(cfg_mod, "global_config", fake)
