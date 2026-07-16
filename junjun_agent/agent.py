@@ -1,13 +1,16 @@
 """Agent 核心：LangChain 1.x create_agent（LangGraph runtime）。
 
 每会话独立 agent 实例 + 独立消息历史，防跨会话串味。
-决策语义：reply -> 文本输出；no_reply -> do_not_reply 工具置沉默状态。
+system prompt 每轮动态构建（时间/keyword_reaction/情绪/记忆块都是活的），
+通过 SystemMessage 前置注入而非 create_agent(system_prompt=...) 冻结。
+决策语义：reply -> 文本输出；no_reply -> do_not_reply 工具置沉默。
 """
 
+import time
 from typing import Optional
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger
@@ -28,8 +31,24 @@ def _called_silence_tool(messages: list) -> bool:
                     return True
     return False
 
-# max_agent_iterations=5 -> LangGraph recursion_limit（2*N+1）
-_RECURSION_LIMIT = 11
+
+def _record_usage(messages: list, chat_id: str, request_type: str = "agent") -> None:
+    """从 AIMessage.usage_metadata 提取 token 用量落库（失败静默）。"""
+    try:
+        from junjun_core.database import LLMUsage, db_writer
+        for m in messages:
+            if isinstance(m, AIMessage) and getattr(m, "usage_metadata", None):
+                u = m.usage_metadata
+                model_name = (getattr(m, "response_metadata", {}) or {}).get("model_name", "")
+                db_writer.submit(
+                    LLMUsage.create,
+                    time=time.time(), model_name=model_name, request_type=request_type,
+                    prompt_tokens=int(u.get("input_tokens", 0)),
+                    completion_tokens=int(u.get("output_tokens", 0)),
+                    chat_id=chat_id,
+                )
+    except Exception as e:
+        logger.debug(f"token 用量记录失败（忽略）: {e}")
 
 
 class JunJunAgent:
@@ -41,19 +60,37 @@ class JunJunAgent:
         if model is None:
             from junjun_llm import get_chat_model
             model = get_chat_model("agent")
-        self._agent = create_agent(
-            model=model,
-            tools=get_tools(session),
-            system_prompt=build_system_prompt(is_group=session.group_id is not None),
-        )
+        # system prompt 留空，每轮由 process() 动态注入 SystemMessage
+        self._agent = create_agent(model=model, tools=get_tools(session))
 
-    async def process(self, context_text: str, callbacks: Optional[list] = None) -> Optional[str]:
-        """跑一轮决策。返回回复文本；None 表示沉默。"""
+    async def process(
+        self,
+        context_text: str,
+        callbacks: Optional[list] = None,
+        latest_text: str = "",
+        addressed: bool = False,
+        mood_block: str = "",
+        memory_block: str = "",
+        relation_block: str = "",
+    ) -> Optional[str]:
+        """跑一轮决策。返回回复文本；None 表示沉默。
+
+        addressed: 被 @/直呼（mentioned_bot_reply 必回语义，禁用 do_not_reply）。
+        """
         cfg = get_global_config()
         max_iter = int(cfg.raw.get("memory", {}).get("max_agent_iterations", 5))
+        system = build_system_prompt(
+            is_group=self.session.is_group,
+            latest_text=latest_text,
+            mood_block=mood_block,
+            memory_block=memory_block,
+            relation_block=relation_block,
+        )
+        if addressed:
+            system += "\n最后一条消息明确 @ 你或直呼你的名字，你必须正面回应，禁止调用 do_not_reply。"
         try:
             result = await self._agent.ainvoke(
-                {"messages": [HumanMessage(content=context_text)]},
+                {"messages": [SystemMessage(content=system), HumanMessage(content=context_text)]},
                 config={
                     "callbacks": callbacks or [],
                     "recursion_limit": 2 * max_iter + 1,
@@ -66,6 +103,8 @@ class JunJunAgent:
             return None
 
         messages = result.get("messages", [])
+        _record_usage(messages, self.session.chat_id)
+
         if _called_silence_tool(messages):
             logger.debug(f"[{self.session.chat_id}] agent 选择沉默")
             return None
