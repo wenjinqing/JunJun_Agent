@@ -1,0 +1,30 @@
+# 君君任务模型配置（对齐原 MaiBot model_task_config 语义）
+# 每个任务槽 models 按序 fallback：首选 key 缺失/不可用时用下一个。
+# 阶段 2 先落 3 槽；后续阶段补 vlm / embedding / lpmm_* / voice。
+
+[task.gate]
+# L2 语义门：小模型，判断 reply / no_reply / no_reply_until_call
+temperature = 0.1
+max_tokens = 128
+models = [
+    { provider = "deepseek", model = "deepseek-chat" },
+    { provider = "siliconflow", model = "Qwen/Qwen2.5-7B-Instruct" },
+]
+
+[task.agent]
+# 主 Agent：必须支持 function calling
+temperature = 0.8
+max_tokens = 2048
+models = [
+    { provider = "deepseek", model = "deepseek-chat" },
+    { provider = "siliconflow", model = "Qwen/Qwen2.5-72B-Instruct" },
+]
+
+[task.utils]
+# 杂项小任务（频率评估/摘要等，阶段 3+ 使用）
+temperature = 0.3
+max_tokens = 512
+models = [
+    { provider = "siliconflow", model = "Qwen/Qwen2.5-7B-Instruct" },
+    { provider = "deepseek", model = "deepseek-chat" },
+]
