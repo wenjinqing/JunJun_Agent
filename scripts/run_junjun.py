@@ -66,6 +66,14 @@ async def _run() -> int:
     except Exception as e:
         logger.error(f"Agent processor 注入失败，回退 echo 模式: {e}")
 
+    # 定时任务：记忆遗忘 + 摘要兜底
+    try:
+        from junjun_agent.loop import scheduler, register_default_tasks
+        register_default_tasks()
+        scheduler.start()
+    except Exception as e:
+        logger.error(f"调度器启动失败（继续运行）: {e}")
+
     await router.start()
     logger.info("君君网关运行中，等待 Adapter 消息（Ctrl+C 退出）")
 
@@ -84,8 +92,10 @@ async def _run() -> int:
 
     await stop_event.wait()
 
-    # 优雅关闭：会话队列 -> DB 写队列 -> 网关
+    # 优雅关闭：调度器 -> 会话队列 -> DB 写队列 -> 网关
     try:
+        from junjun_agent.loop import scheduler
+        await scheduler.stop()
         from junjun_agent.funnel.session_queue import session_queues
         await session_queues.stop_all()
         from junjun_core.database import db_writer

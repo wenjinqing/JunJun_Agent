@@ -103,6 +103,12 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     cfg = _l1_config(session)
     frequency_control.note_message(session.chat_id)
 
+    # ---- 中期记忆：批次记录，满批触发摘要 ----
+    from junjun_memory.summarizer import get_summarizer
+    summarizer = get_summarizer()
+    if summarizer.note(session.chat_id, meta.nickname or meta.user_id or "?", meta.text):
+        await summarizer.summarize(session.chat_id)
+
     # ---- L1 规则门（0 token）----
     l1 = rule_gate(
         text=meta.text,
@@ -137,10 +143,20 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
             logger.info(f"[{session.chat_id}] 进入沉默模式（直到被呼唤）")
             return
 
+    # ---- skill 上下文注入（memory skill 执行时读）----
+    from junjun_skills.builtin.memory_skills import current_chat_id, current_platform
+    current_chat_id.set(session.chat_id)
+    current_platform.set(session.platform)
+
+    # ---- 记忆/关系块（检索失败降级空串，不阻塞回复）----
+    memory_block = await _build_memory_block(session, meta)
+    relation_block = _build_relation_block(session, meta)
+
     # ---- L3 主 Agent ----
     text = await session.agent.process(
         session.memory.render(), callbacks=callbacks, latest_text=meta.text,
         addressed=(l1 is L1Result.TO_AGENT),
+        memory_block=memory_block, relation_block=relation_block,
     )
     if not text:
         return
@@ -169,6 +185,43 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         ))
 
     await _maybe_adjust_frequency(session)
+
+
+async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
+    """被动记忆注入：按最新消息检索相关长期记忆 + 黑话释义。失败降级空串。"""
+    parts = []
+    try:
+        import asyncio as _aio
+        from junjun_memory.long_term import get_long_term_memory
+        items = await _aio.wait_for(
+            get_long_term_memory().search(meta.text, top_k=3, chat_id=session.chat_id),
+            timeout=1.5,
+        )
+        if items:
+            parts.append("相关记忆：\n" + "\n".join(f"- {it.text}" for it in items))
+    except Exception:
+        pass
+    try:
+        from junjun_express.jargon import build_jargon_block
+        jb = build_jargon_block(meta.text, session.chat_id)
+        if jb:
+            parts.append(jb)
+    except Exception:
+        pass
+    return "\n".join(parts)
+
+
+def _build_relation_block(session: ChatSession, meta: InboundMeta) -> str:
+    """发言者画像注入。失败降级空串。"""
+    if not meta.user_id:
+        return ""
+    try:
+        from junjun_memory.user_profile import get_profile_store
+        return get_profile_store().build_relation_block(
+            session.platform, meta.user_id, meta.nickname,
+        )
+    except Exception:
+        return ""
 
 
 async def _maybe_adjust_frequency(session: ChatSession) -> None:
