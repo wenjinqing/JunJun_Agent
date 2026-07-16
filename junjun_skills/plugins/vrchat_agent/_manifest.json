@@ -1,0 +1,7 @@
+{
+  "name": "vrchat_agent",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.vrchat_agent.tools",
+  "tools_attr": "VRCHAT_TOOLS",
+  "available_for": []
+}
