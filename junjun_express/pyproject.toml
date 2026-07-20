@@ -1,7 +1,7 @@
 [project]
 name = "junjun-express"
 version = "0.1.0"
-description = "??/??/??"
+description = "情绪/表情/黑话"
 requires-python = ">=3.11"
 dependencies = [
     "numpy",

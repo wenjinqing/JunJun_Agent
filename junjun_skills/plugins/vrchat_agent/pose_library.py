@@ -14,7 +14,6 @@ from .anya_client import (
     DevicePose,
     FrameState,
     standing_frame_state,
-    tpose_frame_state,
 )
 
 

@@ -1,7 +1,7 @@
 [project]
 name = "junjun-mcp-client"
 version = "0.1.0"
-description = "MCP ???"
+description = "MCP 客户端"
 requires-python = ">=3.11"
 dependencies = [
     "mcp",

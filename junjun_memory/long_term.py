@@ -9,7 +9,7 @@
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
@@ -138,7 +138,7 @@ class LongTermMemory:
         k = min(top_k * 4, self._index.ntotal)
         scores, ids = self._index.search(v, k)
         out = []
-        for score, pos in zip(scores[0], ids[0]):
+        for score, pos in zip(scores[0], ids[0], strict=False):
             if pos < 0 or score < 0.3:
                 continue
             item = self._items[self._vec_map[int(pos)]]

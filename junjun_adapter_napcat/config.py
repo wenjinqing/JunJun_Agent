@@ -1,6 +1,5 @@
 """君君 NapCat Adapter 配置。"""
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 

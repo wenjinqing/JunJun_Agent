@@ -4,7 +4,6 @@
 上层（长期记忆/知识库）自动降级关键词检索，不阻塞主循环。
 """
 
-import asyncio
 import os
 from typing import List, Optional
 

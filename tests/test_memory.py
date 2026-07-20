@@ -1,12 +1,11 @@
 """阶段 4 记忆系统单测：长期记忆 faiss 存取 / 摘要批次 / 画像 merge / 黑话。"""
 
 import asyncio
-import json
 import time
 
 import pytest
 
-from junjun_memory.long_term import LongTermMemory, MemoryItem
+from junjun_memory.long_term import LongTermMemory
 from junjun_memory.summarizer import ChatSummarizer, BATCH_SIZE
 from junjun_memory.embedding import EMBED_DIM
 
@@ -164,7 +163,7 @@ class TestSummarizer:
     @pytest.mark.asyncio
     async def test_worthless_chat_returns_empty(self, tmp_path):
         s = ChatSummarizer(data_dir=tmp_path)
-        for i in range(10):
+        for _i in range(10):
             s.note("c1", "甲", "哈哈哈")
 
         class FakeModel:

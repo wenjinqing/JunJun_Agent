@@ -8,9 +8,9 @@
 """
 
 import time as time_mod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger

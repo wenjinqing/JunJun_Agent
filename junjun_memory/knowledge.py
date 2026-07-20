@@ -235,7 +235,6 @@ class KnowledgeBase:
             return []
 
     def _keyword_search(self, question: str, query_entities: List[str], top_k: int) -> List[str]:
-        terms = query_entities or [question]
         scored: List[Tuple[int, Paragraph]] = []
         for p in self._paragraphs.values():
             score = sum(2 for e in query_entities if e in p.entities or e in p.text)

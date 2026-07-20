@@ -145,7 +145,7 @@ class TestReflector:
     @pytest.mark.asyncio
     async def test_operator_delete_reply(self, _cfg, monkeypatch):
         from junjun_core.database import Expression
-        row = Expression.create(chat_id="qq:1:group", situation="s", style="bad",
+        Expression.create(chat_id="qq:1:group", situation="s", style="bad",
                                 count=1, last_active_time=time.time())
 
         class FakeGW:

@@ -7,7 +7,7 @@ strip_emoji：原项目实测 system prompt 含 emoji 干扰 function calling sc
 
 import re
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from junjun_core.config import get_global_config
 

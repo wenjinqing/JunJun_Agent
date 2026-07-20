@@ -9,7 +9,7 @@
 import json
 import re
 import time
-from typing import List, Optional
+from typing import List
 
 from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger

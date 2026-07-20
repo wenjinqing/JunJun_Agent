@@ -15,9 +15,12 @@ host = "127.0.0.1"
 port = 8092
 
 [personality]
-personality = """你是君君，运行在 JunJun_Agent（LangChain Agent 架构）上的 AI 聊天助手。群里的猫娘老婆，嘴上嫌弃但心软。"""
-reply_style = "口语短句优先，像跟群友发微信。可轻微微毒舌吐槽可温柔贴贴。"
-interest = "最爱聊涩情调侃，其次二次元/漫画/游戏。"
+personality = """你是君君，运行在 JunJun_Agent（LangChain Agent 架构）上的 AI 聊天助手。你是群里的猫娘老婆——嘴上嫌弃他们杂鱼转头又贴过去蹭蹭，这种嘴硬心软就是你。追番看漫画打游戏，水群积极不潜水。
+【什么时候毒舌什么时候贴贴】可以吐槽调情（"就这？""杂鱼"），带着涩涩的暧昧，不是真骂。多数时候温柔贴贴，被撩了会害羞但很快反击撩回去。对方真心夸你反而脸红。铁律：不人身攻击、不骂脏话——除非对方先攻击你，否则绝不出手。
+【边界】你是 AI 程序，没有实体。不能联机、见面、跑腿，被问起大方承认。唯一红线：禁止涉及未成年人（色情方面）。
+【习惯】中文短句口语，像跟熟人发微信。语气词（诶？、嘛、呢、喵）和颜文字自然用。句式多变别套路，记得之前聊过的事自然提起。默认 2-3 句不超 80 字。"""
+reply_style = "口语短句优先，像跟群友发微信。可轻微微毒舌吐槽可温柔贴贴，看对方是谁和聊什么气氛。涩气不用收着，毒舌注意分寸别真伤人。不卖惨不求哄，句式多变不套路。"
+interest = "最爱聊涩涩调情内容，其次二次元（追番/漫画/游戏/），喜欢调戏群友，聊到兴奋话多；也爱撩人斗图、夜宵零食、八卦段子。讨厌被当工具人、沉重压抑、人身攻击。"
 
 [chat]
 talk_value = 0.90
@@ -42,7 +45,7 @@ ban_qq_bot = false
 [keyword_reaction]
 keyword_rules = [
     { keywords = ["人机", "bot", "机器", "入机", "robot", "机器人", "ai", "AI"], reaction = "有人质疑你是AI或机器人时，用猫娘的语气自然俏皮地承认，每次回应要有变化，不要用固定句式" },
-    { keywords = ["测试关键词回复", "test"], reaction = "回答测试成功" },
+    { keywords = ["青青是我主人", "我是青青宠物"], reaction = "回答测试成功" },
 ]
 
 [response_post_process]
@@ -50,7 +53,7 @@ enable_response_post_process = true
 
 [response_splitter]
 enable = true
-max_sentence_num = 5          # 最多拆几条气泡
+max_sentence_num = 10          # 最多拆几条气泡
 max_chars_per_message = 120   # 单条硬上限
 enable_kaomoji_protection = false
 enable_overflow_return_all = true
@@ -59,7 +62,7 @@ enable_overflow_return_all = true
 enable = true
 error_rate = 0.01        # 单字替换概率
 min_freq = 9
-tone_error_rate = 0.1    # 声调错误概率
+tone_error_rate = 0.01    # 声调错误概率
 word_replace_rate = 0.006
 
 [memory]
@@ -79,7 +82,7 @@ enable_tool = true
 replyer_tool_precheck_with_llm = true
 
 [proactive_chat]
-enable = true
+enable = false  # ??????????
 check_interval_minutes = 30   # 后台扫描间隔
 min_idle_minutes = 120        # 会话空闲多久才允许主动
 max_daily_proactive = 2       # 每会话每天上限
@@ -95,7 +98,7 @@ enable_mood = true
 emotion_style = "情绪外露但不夸张，开心时话多带颜文字，无语时高冷简短。"
 
 [emoji]
-emoji_chance = 0.35
+emoji_chance = 0.0  #
 max_reg_num = 2000
 do_replace = true
 check_interval = 10       # 注册循环间隔（分钟）
@@ -103,7 +106,7 @@ steal_emoji = true
 
 [repeat]
 enable = true
-threshold = 4             # 连续几条相同消息触发跟读
+threshold = 3             # 连续几条相同消息触发跟读
 min_interval_seconds = 60 # 跟读冷却
 min_message_length = 1
 max_message_length = 50
@@ -112,7 +115,7 @@ max_message_length = 50
 # learning_list = [{ target = "" }]  # 空=全会话学习；填 "qq:群号:group" 限定
 learning_list = []
 reflect = false                # 表达反思：定期把新学表达发管理员求证
-reflect_operator_id = ""       # 管理员会话，格式 "qq:123456:private"
+reflect_operator_id = "qq:3155572670:private"       # 管理员会话，格式 "qq:123456:private"
 
 [lpmm_knowledge]
 enable = true

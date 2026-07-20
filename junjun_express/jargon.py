@@ -5,7 +5,6 @@
 - all_global=true 时黑话跨会话共享（chat_id 存空）
 """
 
-import json
 from typing import Dict, List, Optional
 
 from junjun_core.config import get_global_config

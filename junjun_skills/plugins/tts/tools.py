@@ -1,6 +1,5 @@
 """TTS skill 插件：豆包 TTS 文本转语音（原 mod/ja_tts_plugin 迁移）。"""
 
-import base64
 import os
 import tempfile
 from pathlib import Path

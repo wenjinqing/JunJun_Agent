@@ -1,13 +1,10 @@
 """发消息处理：网关回复 MessageBase -> NapCat OneBot API。"""
 
-import json
-import uuid
 from typing import List
 
 from maim_message import MessageBase, Seg
 
 from ..logger import logger
-from ..response_pool import get_response
 from .nc_sending import nc_message_sender
 
 
@@ -21,7 +18,6 @@ class SendHandler:
         seg = msg.message_segment
         info = msg.message_info
         group_info = info.group_info
-        platform = info.platform
 
         processed = await self._process_seg(seg)
         if not processed:

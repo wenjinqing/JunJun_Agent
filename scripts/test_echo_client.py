@@ -1,3 +1,4 @@
+# ⚠️ 仅限连接隔离端口 8192 的测试网关，禁止改回生产 8092
 import asyncio
 from maim_message import (
     Router, RouteConfig, TargetConfig,
@@ -6,7 +7,7 @@ from maim_message import (
 
 async def main():
     route = RouteConfig(route_config={
-        "junjun": TargetConfig(url="ws://127.0.0.1:8092/ws", token=None)
+        "junjun": TargetConfig(url="ws://127.0.0.1:8192/ws", token=None)
     })
     router = Router(route)
     received = []

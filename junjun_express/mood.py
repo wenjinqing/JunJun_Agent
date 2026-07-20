@@ -7,7 +7,7 @@
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict
 
 from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger

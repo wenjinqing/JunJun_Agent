@@ -1,7 +1,7 @@
 [project]
 name = "junjun-skills"
 version = "0.1.0"
-description = "Agent Skill ???"
+description = "Agent Skill 注册表"
 requires-python = ">=3.11"
 dependencies = [
     "langchain-core",

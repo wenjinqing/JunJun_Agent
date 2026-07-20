@@ -17,11 +17,11 @@ def _fake_bot_config(monkeypatch):
 
     fake = cfg_mod.GlobalConfig(
         bot=cfg_mod.BotConfig(
-            platform="qq", qq_account="2477702109",
+            platform="qq", qq_account="10000001",
             nickname="君君", alias_names=["猫娘"],
         ),
         raw={
-            "bot": {"qq_account": "2477702109", "nickname": "君君"},
+            "bot": {"qq_account": "10000001", "nickname": "君君"},
             "chat": {
                 "talk_value": 0.9,
                 "mentioned_bot_reply": True,
@@ -36,7 +36,7 @@ def _fake_bot_config(monkeypatch):
                 "interest": "测试",
             },
             "memory": {"max_agent_iterations": 5},
-            "gateway": {"host": "127.0.0.1", "port": 8092},
+            "gateway": {"host": "127.0.0.1", "port": 8192},
             "keyword_reaction": {
                 "keyword_rules": [
                     {"keywords": ["人机", "机器人", "ai", "AI"], "reaction": "俏皮承认自己是AI"},

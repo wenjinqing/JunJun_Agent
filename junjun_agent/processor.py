@@ -10,7 +10,7 @@
 
 import asyncio
 import time
-from typing import List, Optional
+from typing import Optional
 
 from junjun_core.config import get_global_config
 from junjun_core.contracts import ReplySet, ReplySegment

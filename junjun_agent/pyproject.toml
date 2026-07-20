@@ -1,7 +1,7 @@
 [project]
 name = "junjun-agent"
 version = "0.1.0"
-description = "Agent ???LangChain?"
+description = "Agent 核心：LangChain 编排"
 requires-python = ">=3.11"
 dependencies = [
     "langchain",

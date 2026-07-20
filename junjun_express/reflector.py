@@ -21,7 +21,8 @@ def _cfg() -> dict:
 
 class ExpressionReflector:
     def __init__(self):
-        self.last_ask_time: float = 0.0
+        # 冷启动保护：初始设为当前时间，避免进程一启动就立刻给管理员发求证
+        self.last_ask_time: float = time.time()
         self._pending: Dict[int, int] = {}  # 提问序号 -> Expression.id
 
     def _interval(self) -> float:
@@ -76,10 +77,11 @@ class ExpressionReflector:
         if not operator or chat_id != operator or not self._pending:
             return None
         import re
-        m = re.search(r"删除\s*(\d+)", text)
+        # 支持半角/全角数字，以及「删」「删掉」「删除」等前缀
+        m = re.search(r"删(?:除|掉)?\s*([0-9０-９]+)", text)
         if not m:
             return None
-        idx = int(m.group(1))
+        idx = int(m.group(1).translate(str.maketrans("０１２３４５６７８９", "0123456789")))
         expr_id = self._pending.pop(idx, None)
         if expr_id is None:
             return f"编号 {idx} 不在待确认列表里。"

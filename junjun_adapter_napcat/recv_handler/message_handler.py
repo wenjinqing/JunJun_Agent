@@ -1,13 +1,11 @@
 """收消息处理：NapCat OneBot 事件 -> maim_message MessageBase -> 发往君君网关。"""
 
 import time
-from typing import Optional
 
 from maim_message import (
     UserInfo, GroupInfo, Seg, BaseMessageInfo, MessageBase, FormatInfo,
 )
 
-from ..logger import logger
 from ..config import get_config
 from ..message_sending import message_send_instance
 

@@ -8,7 +8,6 @@
 import importlib
 import json
 from pathlib import Path
-from typing import List
 
 from junjun_core.observability import get_logger
 

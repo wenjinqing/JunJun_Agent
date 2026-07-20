@@ -43,6 +43,7 @@ class DBWriter:
         self._queue.put_nowait((fn, args, kwargs))
 
     async def _loop(self) -> None:
+        import functools
         loop = asyncio.get_running_loop()
         while True:
             item = await self._queue.get()
@@ -50,7 +51,7 @@ class DBWriter:
                 break
             fn, args, kwargs = item
             try:
-                await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+                await loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
             except Exception as e:
                 logger.warning(f"DB 写入失败（忽略不阻塞）: {type(e).__name__}: {e}")
             finally:

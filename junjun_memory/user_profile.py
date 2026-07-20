@@ -8,7 +8,6 @@
 
 import hashlib
 import json
-import time
 from typing import Dict, List, Optional
 
 from junjun_core.observability import get_logger
@@ -53,8 +52,7 @@ class UserProfileStore:
     def add_point(self, platform: str, user_id: str, category: str,
                   content: str, weight: float = 0.8, nickname: str = "") -> None:
         """字段级 merge：同分类同内容更新权重，否则追加；超上限淘汰最低权重。"""
-        from junjun_core.database import PersonInfo, db
-        pid = make_person_id(platform, user_id)
+        from junjun_core.database import db
         with db.atomic():
             person = self.get_or_create(platform, user_id, nickname)
             try:
