@@ -40,7 +40,7 @@ def _cfg() -> dict:
 
 
 def _in_silent_hours(now: Optional[datetime] = None) -> bool:
-    from junjun_agent.funnel.frequency import _in_range, _parse_hhmm
+    from junjun_agent.funnel.frequency import _in_range
     spec = str(_cfg().get("silent_hours", "23:00-09:00"))
     now = now or datetime.now()
     return _in_range(now.hour * 60 + now.minute, spec)

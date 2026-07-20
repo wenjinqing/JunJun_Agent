@@ -1,6 +1,5 @@
 """用户画像 + 黑话单测（内存 SQLite）。"""
 
-import json
 
 import pytest
 from peewee import SqliteDatabase

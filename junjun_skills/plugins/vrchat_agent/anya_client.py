@@ -138,7 +138,7 @@ class FrameState:
             self.devices = neutral_frame_state().devices
 
     def to_packet(self) -> bytes:
-        devices_obj = {did: dev.to_dict() for did, dev in zip(DEVICE_IDS, self.devices)}
+        devices_obj = {did: dev.to_dict() for did, dev in zip(DEVICE_IDS, self.devices, strict=False)}
         inputs_obj = {
             "left_controller": self.controllers[0].to_dict(),
             "right_controller": self.controllers[1].to_dict(),

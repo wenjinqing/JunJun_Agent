@@ -2,7 +2,6 @@
 
 import json
 import uuid
-from typing import Optional
 
 from ..logger import logger
 from ..response_pool import get_response

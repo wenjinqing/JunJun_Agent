@@ -5,7 +5,6 @@
 """
 import asyncio
 import json
-import os
 import uuid
 from typing import Optional
 
@@ -108,7 +107,7 @@ async def doubao_tts_synthesize(
                         err_text = msg.payload.decode("utf-8", "ignore") if msg.payload else str(msg)
                         raise RuntimeError(f"豆包 TTS 会话失败: {err_text}")
         except asyncio.TimeoutError:
-            raise RuntimeError("豆包 TTS 接收超时")
+            raise RuntimeError("豆包 TTS 接收超时") from None
 
         await send_task
 

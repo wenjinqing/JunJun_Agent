@@ -56,7 +56,8 @@ class TestPluginLoader:
         }), encoding="utf-8")
         monkeypatch.setattr(pl, "PLUGINS_DIR", tmp_path)
 
-        import sys, types
+        import sys
+        import types
         from langchain_core.tools import tool
 
         @tool
@@ -82,7 +83,8 @@ class TestPluginLoader:
         }), encoding="utf-8")
         monkeypatch.setattr(pl, "PLUGINS_DIR", tmp_path)
 
-        import sys, types
+        import sys
+        import types
         mod = types.ModuleType("tests._broken_plugin")
         mod.TOOLS = []
         mod.probe_available = lambda: False
@@ -102,7 +104,8 @@ class TestPluginLoader:
         }), encoding="utf-8")
         monkeypatch.setattr(pl, "PLUGINS_DIR", tmp_path)
 
-        import sys, types
+        import sys
+        import types
         from langchain_core.tools import tool
 
         @tool

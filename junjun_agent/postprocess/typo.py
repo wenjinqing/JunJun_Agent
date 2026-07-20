@@ -14,7 +14,7 @@ from functools import lru_cache
 from typing import Dict, List, Optional
 
 import jieba
-from pypinyin import Style, lazy_pinyin, pinyin
+from pypinyin import Style, pinyin
 
 # 不动的片段：URL、英文数字串、@xxx、[picid:xxx] 类标记
 _PROTECT_RE = re.compile(r"(https?://\S+|\[[a-z]+:[^\]]+\]|@\S+|[A-Za-z0-9_.:/\\-]{2,})")

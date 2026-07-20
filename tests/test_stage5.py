@@ -68,7 +68,7 @@ class TestRepeat:
     def test_cooldown_blocks_second_repeat(self):
         d = self._detector()
         now = time.time()
-        for i, u in enumerate(["u1", "u2", "u3", "u4"]):
+        for _i, u in enumerate(["u1", "u2", "u3", "u4"]):
             r = d.note("g1", u, "第一波", now=now)
         assert r == "第一波"
         for u in ["u1", "u2", "u3", "u4"]:

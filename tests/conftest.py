@@ -36,7 +36,7 @@ def _fake_bot_config(monkeypatch):
                 "interest": "测试",
             },
             "memory": {"max_agent_iterations": 5},
-            "gateway": {"host": "127.0.0.1", "port": 8092},
+            "gateway": {"host": "127.0.0.1", "port": 8192},
             "keyword_reaction": {
                 "keyword_rules": [
                     {"keywords": ["人机", "机器人", "ai", "AI"], "reaction": "俏皮承认自己是AI"},

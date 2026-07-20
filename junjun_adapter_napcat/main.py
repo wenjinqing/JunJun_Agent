@@ -24,9 +24,8 @@ from junjun_adapter_napcat.config import get_config
 from junjun_adapter_napcat.recv_handler.message_handler import message_handler
 from junjun_adapter_napcat.recv_handler.meta_event_handler import meta_event_handler
 from junjun_adapter_napcat.send_handler.nc_sending import nc_message_sender
-from junjun_adapter_napcat.message_sending import message_send_instance
 from junjun_adapter_napcat.response_pool import put_response, check_timeout_response
-from junjun_adapter_napcat.com_layer import mmc_start_com, mmc_stop_com
+from junjun_adapter_napcat.com_layer import mmc_start_com
 
 message_queue = asyncio.Queue()
 

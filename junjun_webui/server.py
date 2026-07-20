@@ -31,6 +31,13 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 _LOG_BUFFER: deque = deque(maxlen=500)
 _WS_CLIENTS: set = set()
 _MAX_WS_CLIENTS = 10
+# 缓存主事件循环，供工作线程 emit 时回主 loop 发广播
+_MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    global _MAIN_LOOP
+    _MAIN_LOOP = loop
 
 
 class _BufferHandler(logging.Handler):
@@ -40,9 +47,16 @@ class _BufferHandler(logging.Handler):
         except Exception:
             return
         _LOG_BUFFER.append(line)
+        if not _WS_CLIENTS:
+            return
+        loop = _MAIN_LOOP
+        if loop is None or loop.is_closed():
+            return
         for ws in list(_WS_CLIENTS):
             try:
-                asyncio.get_event_loop().create_task(ws.send_text(line))
+                # 工作线程（peewee executor 等）无法用 get_event_loop；
+                # 用 run_coroutine_threadsafe 把 send_text 调度回主 loop
+                asyncio.run_coroutine_threadsafe(ws.send_text(line), loop)
             except Exception:
                 _WS_CLIENTS.discard(ws)
 
@@ -123,9 +137,16 @@ def get_logs(limit: int = 200):
 @app.websocket("/api/logs/ws")
 async def logs_ws(ws: WebSocket):
     token = os.environ.get("WEBUI_TOKEN", "")
-    if token and ws.query_params.get("token") != token:
-        await ws.close(code=4401)
-        return
+    if token:
+        if ws.query_params.get("token") != token:
+            await ws.close(code=4401)
+            return
+    else:
+        # 未设 token 时与 HTTP 路由对称：仅允许本机访问
+        client = ws.client.host if ws.client else ""
+        if client not in ("127.0.0.1", "::1", "localhost"):
+            await ws.close(code=4403)
+            return
     if len(_WS_CLIENTS) >= _MAX_WS_CLIENTS:
         await ws.close(code=4429)
         return
@@ -249,6 +270,7 @@ async def start_webui() -> Optional[asyncio.Task]:
     if os.environ.get("WEBUI_ENABLED", "false").lower() != "true":
         logger.info("WebUI 未启用（WEBUI_ENABLED != true）")
         return None
+    set_main_loop(asyncio.get_running_loop())
     import uvicorn
     host = os.environ.get("WEBUI_HOST", "127.0.0.1")
     port = int(os.environ.get("WEBUI_PORT", "8002"))

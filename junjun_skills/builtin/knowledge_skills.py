@@ -2,7 +2,6 @@
 
 from langchain_core.tools import tool
 
-from junjun_skills.builtin.memory_skills import current_chat_id
 
 
 @tool

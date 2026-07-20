@@ -1,7 +1,7 @@
 [project]
 name = "junjun-core"
 version = "0.1.0"
-description = "?? + ?? + ??? + ???"
+description = "君君核心：配置 + 网关 + 数据库 + 可观测"
 requires-python = ">=3.11"
 dependencies = [
     "python-dotenv",

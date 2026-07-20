@@ -88,12 +88,21 @@ def add_user_tag(user_id: str, platform: str, tag: str, category: str = "特征"
 
 @mcp.tool()
 def get_user_profile(user_id: str, platform: str) -> str:
-    """查询用户画像（印象/标签/关系事件）。"""
-    points = _store().get_points(platform, user_id, top_k=15)
-    if not points:
+    """查询用户画像（称呼/印象/标签/关系事件）。"""
+    from junjun_core.database import PersonInfo
+    from junjun_memory.user_profile import make_person_id
+    person = PersonInfo.get_or_none(PersonInfo.person_id == make_person_id(platform, user_id))
+    if person is None:
         return "该用户暂无画像记录。"
-    return "\n".join(f"[{p['category']}] {p['content']} (w={p['weight']:.2f})" for p in points)
-
+    points = _store().get_points(platform, user_id, top_k=15)
+    if not points and not person.person_name:
+        return "该用户暂无画像记录。"
+    lines_out = []
+    if person.person_name:
+        lines_out.append(f"[称呼] {person.person_name}")
+    for p in points:
+        lines_out.append(f"[{p['category']}] {p['content']} (w={p['weight']:.2f})")
+    return "\\n".join(lines_out)
 
 @mcp.tool()
 def set_user_name(user_id: str, platform: str, name: str) -> str:

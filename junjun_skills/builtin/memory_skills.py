@@ -4,7 +4,6 @@
 """
 
 from contextvars import ContextVar
-from typing import Optional
 
 from langchain_core.tools import tool
 

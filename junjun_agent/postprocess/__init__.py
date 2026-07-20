@@ -6,7 +6,7 @@
 
 import random
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from junjun_core.config import get_global_config
