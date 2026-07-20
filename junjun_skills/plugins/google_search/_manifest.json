@@ -1,0 +1,7 @@
+{
+  "name": "google_search",
+  "version": "1.2.0",
+  "module": "junjun_skills.plugins.google_search.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

@@ -225,3 +225,4 @@ data/
 *.db-wal
 .idea/
 .vscode/
+config/bot_config.toml
