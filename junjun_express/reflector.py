@@ -72,10 +72,19 @@ class ExpressionReflector:
         return True
 
     def handle_operator_reply(self, chat_id: str, text: str) -> Optional[str]:
-        """管理员回复处理：命中「删除 N」删表达。返回回执文本（非管理员消息返回 None）。"""
+        """管理员回复处理：命中「删除 N」删表达。返回回执文本（非管理员消息返回 None）。
+
+        管理员认定：chat_id 命中 reflect_operator_id，或发送者是 .env ADMIN_QQ
+        的私聊会话（统一管理员身份，按真实 QQ 硬校验，聊天内容不可伪造）。
+        """
         operator = str(_cfg().get("reflect_operator_id", ""))
-        if not operator or chat_id != operator or not self._pending:
+        if not self._pending:
             return None
+        if chat_id != operator:
+            parts = chat_id.split(":")
+            from junjun_core.security import is_admin
+            if not (len(parts) == 3 and parts[2] == "private" and is_admin(parts[1])):
+                return None
         import re
         # 支持半角/全角数字，以及「删」「删掉」「删除」等前缀
         m = re.search(r"删(?:除|掉)?\s*([0-9０-９]+)", text)

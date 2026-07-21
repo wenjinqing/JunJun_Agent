@@ -74,8 +74,25 @@ class Gateway:
             self._chat_list = ChatListConfig.from_raw(raw)
         return self._chat_list
 
+    # 只允许无鉴权监听本机回环；对外监听必须配置 GATEWAY_TOKEN
+    _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
     async def start(self) -> None:
-        self.server = MessageServer(host=self.host, port=self.port, enable_token=False)
+        import os
+        token = os.environ.get("GATEWAY_TOKEN", "").strip()
+        if token:
+            self.server = MessageServer(host=self.host, port=self.port, enable_token=True)
+            self.server.add_valid_token(token)
+            logger.info("网关鉴权：已启用 token 认证（GATEWAY_TOKEN）")
+        else:
+            if self.host not in self._LOCAL_HOSTS:
+                raise RuntimeError(
+                    f"网关监听 {self.host} 但未配置 GATEWAY_TOKEN——"
+                    "任何能连到该地址的人都能伪造消息控制 bot，拒绝启动。"
+                    "请在 .env 配置 GATEWAY_TOKEN，或把 [gateway] host 改回 127.0.0.1。"
+                )
+            self.server = MessageServer(host=self.host, port=self.port, enable_token=False)
+            logger.warning("网关鉴权：未配置 GATEWAY_TOKEN，仅本机回环连接可用（建议配置）")
         self.server.register_message_handler(self.handle_inbound)
         logger.info(f"网关启动中 ws://{self.host}:{self.port}/ws （等待 Adapter 连接）")
         # start_server() 内部 await Event().wait() 永不返回，必须放后台任务

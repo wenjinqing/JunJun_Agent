@@ -4,13 +4,14 @@ version = "0.1.0"
 [napcat_server]
 host = "127.0.0.1"
 port = 8095
-token = ""
+token = ""            # NapCat 连入鉴权（回退用；优先读根目录 .env 的 NAPCAT_TOKEN，对应 NapCat 的 accessToken）
 heartbeat_interval = 30
 
 [maibot_server]
 host = "127.0.0.1"
 port = 8092
 platform_name = "qq"
+token = ""            # 连网关的鉴权令牌（回退用；优先读根目录 .env 的 GATEWAY_TOKEN，两处必须一致）
 
 [chat]
 group_list_type = "blacklist"

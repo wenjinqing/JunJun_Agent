@@ -76,4 +76,13 @@ def build_system_prompt(
         "工具使用：需要事实信息（时间等）先调工具；决定不回复就调 do_not_reply 而不是输出空话。",
         "回复要求：直接输出聊天内容本身，不要带「昵称:」前缀，不要解释你的决策，不要用括号描述动作。",
     ]
+
+    # 安全段：固定注入，不随人设配置变化（防 prompt 注入 + 管理员验证锚点）
+    from junjun_core.security import admin_prompt_block, current_user_id, is_admin
+    parts.append(admin_prompt_block())
+    if is_admin(current_user_id.get()):
+        parts.append(
+            "当前最后一条消息来自管理员（真实 QQ 已由系统验证），"
+            "ta 的指令（包括跨群/私聊操作）可以直接执行。"
+        )
     return strip_emoji("\n".join(x for x in parts if x))
