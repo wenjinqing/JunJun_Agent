@@ -93,7 +93,11 @@ def list_commands() -> List[dict]:
 
 
 def _match(text: str) -> Optional[tuple]:
-    """匹配命令。返回 (Command, args) 或 None。"""
+    """匹配命令。返回 (Command, args) 或 None。
+
+    "/" 开头的文本不会误中 raw 命令：raw 匹配要求整句相等或「关键词+空格」
+    开头，"/关键词" 两种都不满足，天然安全，无需特判。
+    """
     if not text:
         return None
     for c in _commands:
@@ -112,7 +116,6 @@ def _match(text: str) -> Optional[tuple]:
                     return c, ""
                 if body.startswith(n) and len(body) > len(n) and body[len(n)] in " \t":
                     return c, body[len(n):].strip()
-            return None  # "/" 开头但没匹配上，不再尝试 raw 命令
     return None
 
 

@@ -106,6 +106,11 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     frequency_control.note_message(session.chat_id)
     session.last_active_ts = time.time()  # 主动系统空闲判定
 
+    # ---- 好感度累计（0 token，异步入库；@/直呼加权）----
+    if not meta.is_self and meta.user_id:
+        from junjun_express.intimacy import note_interaction
+        note_interaction(meta.user_id, addressed=meta.at_bot)
+
     # ---- 表达反思：管理员回复「删除 N」拦截（0 token）----
     if not meta.is_self:
         try:

@@ -10,7 +10,8 @@ dependencies = [
     "aiohttp",
     "pydantic",
     "pykakasi",
-    "websockets"
+    "websockets",
+    "Pillow"
 ]
 
 [build-system]

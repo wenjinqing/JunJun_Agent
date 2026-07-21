@@ -1,0 +1,7 @@
+{
+  "name": "cross_scene",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.cross_scene.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

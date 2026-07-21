@@ -1,0 +1,7 @@
+{
+  "name": "jrys",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.jrys.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}
