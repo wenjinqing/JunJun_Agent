@@ -1,6 +1,5 @@
 """W1 插件测试：wife / news / lolicon_setu / image_viewer。"""
 
-import json
 from types import SimpleNamespace
 
 import pytest
