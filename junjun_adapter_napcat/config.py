@@ -1,5 +1,6 @@
 """君君 NapCat Adapter 配置。"""
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +20,7 @@ class MaibotServerConfig:
     host: str = "127.0.0.1"
     port: int = 8092
     platform_name: str = "qq"
+    token: str = ""
 
 
 @dataclass
@@ -50,13 +52,17 @@ class AdapterConfig:
             napcat_server=NapcatServerConfig(
                 host=ns.get("host", "127.0.0.1"),
                 port=int(ns.get("port", 8095)),
-                token=ns.get("token", ""),
+                # 优先读 .env 的 NAPCAT_TOKEN（对应 NapCat 的 accessToken，令牌不入库）
+                token=os.environ.get("NAPCAT_TOKEN", "") or ns.get("token", ""),
                 heartbeat_interval=int(ns.get("heartbeat_interval", 30)),
             ),
             maibot_server=MaibotServerConfig(
                 host=ms.get("host", "127.0.0.1"),
                 port=int(ms.get("port", 8092)),
                 platform_name=ms.get("platform_name", "qq"),
+                # 优先读 .env 的 GATEWAY_TOKEN（与核心共用一处，令牌不入库）；
+                # toml 的 token 字段仅作无 .env 环境的回退
+                token=os.environ.get("GATEWAY_TOKEN", "") or ms.get("token", ""),
             ),
             chat=ChatConfig(
                 group_list_type=ch.get("group_list_type", "blacklist"),

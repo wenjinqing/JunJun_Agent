@@ -166,6 +166,16 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         silenced_until_call=session.silenced_until_call,
         cfg=cfg,
     )
+    # ---- 管理员直通：指令必达 L3（可远程指挥），绕过 L1 概率/L2 语义门，
+    #      沉默模式也可唤醒；仅 is_self（bot 自己的消息）不可绕过 ----
+    from junjun_core.security import current_user_id, is_admin
+    current_user_id.set(meta.user_id or "")  # 真实发送者 QQ，工具层/prompt 鉴权锚点
+    if is_admin(meta.user_id) and not meta.is_self:
+        l1 = L1Result.TO_AGENT
+        if session.silenced_until_call:
+            session.silenced_until_call = False
+            logger.info(f"[{session.chat_id}] 沉默模式解除（管理员指令）")
+
     if l1 is L1Result.DROP:
         logger.debug(f"[{session.chat_id}] L1 拦截 (talk_value={cfg.talk_value:.2f})")
         await _maybe_adjust_frequency(session)

@@ -25,7 +25,10 @@ message_send_instance = MessageSending()
 async def build_router() -> Router:
     cfg = get_config().maibot_server
     route = RouteConfig(route_config={
-        cfg.platform_name: TargetConfig(url=f"ws://{cfg.host}:{cfg.port}/ws", token=None)
+        cfg.platform_name: TargetConfig(
+            url=f"ws://{cfg.host}:{cfg.port}/ws",
+            token=cfg.token or None,  # 与核心 .env 的 GATEWAY_TOKEN 一致；网关未启用鉴权时留空
+        )
     })
     r = Router(route)
     return r

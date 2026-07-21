@@ -1,18 +1,26 @@
 """动作类内置 skill（阶段 5）：send_message / send_poke / get_weather / query_chat_history。
 
 发送统一走 gateway.send_reply（与 send_emoji 同一出口），不直接碰接入层。
+
+安全：跨会话操作在工具层硬校验管理员身份（junjun_core.security），
+不依赖 prompt 自觉——即使注入骗过模型，越权调用照样被拒并上报管理员。
 """
 
 import time
 
 from langchain_core.tools import tool
 
+from junjun_core.security import current_user_id, is_admin, report_violation
 from junjun_skills.builtin.memory_skills import current_chat_id
 
 
 def _split_chat_id(chat_id: str) -> tuple:
     parts = chat_id.split(":")
     return parts[0], parts[1], parts[2] if len(parts) > 2 else "private"
+
+
+def _target_chat_id(target_id: str, is_group: bool) -> str:
+    return f"qq:{target_id}:{'group' if is_group else 'private'}"
 
 
 @tool
@@ -24,6 +32,13 @@ async def send_message(target_id: str, is_group: bool, text: str) -> str:
         is_group: true=群聊 false=私聊
         text: 要发送的文字
     """
+    cur_chat = current_chat_id.get()
+    if _target_chat_id(target_id, is_group) != cur_chat and not is_admin(current_user_id.get()):
+        report_violation(
+            "跨会话发消息", current_user_id.get(), "", cur_chat,
+            f"目标 {'群' if is_group else '私聊'} {target_id}，内容: {text[:60]}",
+        )
+        return "发送被拒绝：向其他群/私聊发消息只有管理员能指挥我做（已通知管理员）。"
     from junjun_core.contracts import ReplySet, ReplySegment
     from junjun_core.gateway.router import get_gateway
     await get_gateway().send_reply(ReplySet(

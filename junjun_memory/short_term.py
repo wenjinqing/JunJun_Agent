@@ -40,7 +40,12 @@ class ShortTermMemory:
             self.entries = self.entries[-self.max_size:]
 
     def render(self, limit: Optional[int] = None) -> str:
-        """渲染为对话文本（供 prompt）。群聊格式 `昵称: 内容`。"""
+        """渲染为对话文本（供 prompt）。群聊格式 `昵称: 内容`。
+
+        管理员消息带「(管理员)」系统标记——按真实 user_id 判定，聊天内容无法伪造，
+        是 LLM 识别管理员指令的锚点（配合 persona 安全段）。
+        """
+        from junjun_core.security import is_admin
         entries = self.entries[-limit:] if limit else self.entries
         lines = []
         for e in entries:
@@ -48,6 +53,8 @@ class ShortTermMemory:
                 lines.append(f"你: {e.text}")
             else:
                 prefix = f"{e.nickname or e.user_id}"
+                if is_admin(e.user_id):
+                    prefix += "(管理员)"
                 mark = " [@你]" if e.at_bot else ""
                 lines.append(f"{prefix}{mark}: {e.text}")
         return "\n".join(lines)
