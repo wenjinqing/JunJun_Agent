@@ -1,0 +1,7 @@
+{
+  "name": "douyin",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.douyin.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}
