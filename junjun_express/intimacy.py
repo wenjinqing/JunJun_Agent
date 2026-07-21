@@ -36,7 +36,7 @@ def note_interaction(user_id: str, *, addressed: bool = False) -> None:
     if not user_id:
         return
     try:
-        from junjun_core.database import Intimacy, db_writer
+        from junjun_core.database import db_writer
         today = datetime.date.today().isoformat()
         gain = GAIN_ADDRESSED if addressed else GAIN_NORMAL
         db_writer.submit(_accumulate, user_id, gain, today)
