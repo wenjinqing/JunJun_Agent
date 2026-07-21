@@ -13,35 +13,60 @@ _registry: Dict[str, BaseTool] = {}
 _availability: Dict[str, Optional[Callable]] = {}
 # WebUI 插件管理：被禁用的 skill 不进 tools（默认全启用）
 _disabled: set = set()
+# 插件级管理：skill 名 -> 插件名；被禁用的插件其工具/命令/拦截器全部失效
+_skill_plugin: Dict[str, str] = {}
+_plugin_disabled: set = set()
 
 
-def register(skill: BaseTool, available_for: Optional[Callable] = None) -> None:
+def register(skill: BaseTool, available_for: Optional[Callable] = None,
+             plugin: str = "builtin") -> None:
     """注册 skill。重名直接报错（拒绝静默覆盖）。
 
     available_for: (session) -> bool，None 表示全会话可用。
+    plugin: 所属插件名（WebUI 插件级禁用用）。
     """
     if skill.name in _registry:
         raise ValueError(f"skill 重名: {skill.name}")
     _registry[skill.name] = skill
     _availability[skill.name] = available_for
-    logger.debug(f"注册 skill: {skill.name}")
+    _skill_plugin[skill.name] = plugin
+    logger.debug(f"注册 skill: {skill.name} [{plugin}]")
 
 
 def set_enabled(name: str, enabled: bool) -> bool:
-    """启用/禁用 skill（WebUI 插件管理）。skill 不存在返回 False。"""
-    if name not in _registry:
+    """启用/禁用 skill 或插件（WebUI 插件管理）。不存在返回 False。"""
+    if name in _registry:
+        if enabled:
+            _disabled.discard(name)
+        else:
+            _disabled.add(name)
+        logger.info(f"skill {name} 已{'启用' if enabled else '禁用'}")
+        return True
+    return set_plugin_enabled(name, enabled)
+
+
+def set_plugin_enabled(name: str, enabled: bool) -> bool:
+    """启用/禁用整个插件（工具 + 命令 + 拦截器）。插件不存在返回 False。"""
+    if name not in _skill_plugin.values():
         return False
     if enabled:
-        _disabled.discard(name)
+        _plugin_disabled.discard(name)
     else:
-        _disabled.add(name)
-    logger.info(f"skill {name} 已{'启用' if enabled else '禁用'}")
+        _plugin_disabled.add(name)
+    logger.info(f"插件 {name} 已{'启用' if enabled else '禁用'}")
     return True
+
+
+def is_plugin_enabled(name: str) -> bool:
+    """插件是否启用（命令/拦截器总线查询用）。"""
+    return name not in _plugin_disabled
 
 
 def list_skills() -> List[dict]:
     """插件管理用：全部 skill 及启用状态。"""
-    return [{"name": n, "description": (s.description or "")[:80], "enabled": n not in _disabled}
+    return [{"name": n, "description": (s.description or "")[:80],
+             "plugin": _skill_plugin.get(n, "builtin"),
+             "enabled": n not in _disabled and is_plugin_enabled(_skill_plugin.get(n, "builtin"))}
             for n, s in _registry.items()]
 
 
@@ -49,7 +74,7 @@ def get_tools(session=None) -> List[BaseTool]:
     """按会话取可用工具集。session=None 返回全量（不含已禁用）。"""
     tools = []
     for name, skill in _registry.items():
-        if name in _disabled:
+        if name in _disabled or not is_plugin_enabled(_skill_plugin.get(name, "builtin")):
             continue
         gate = _availability.get(name)
         if session is None or gate is None or gate(session):
@@ -62,6 +87,8 @@ def clear() -> None:
     _registry.clear()
     _availability.clear()
     _disabled.clear()
+    _skill_plugin.clear()
+    _plugin_disabled.clear()
 
 
 def load_builtin() -> None:

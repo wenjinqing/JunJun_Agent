@@ -24,7 +24,21 @@ ACCEPT_FORMAT = [
 
 @dataclass
 class ReplySegment:
-    """Agent 回复的单个片段（简化版，由 send_handler 转 Seg）。"""
+    """Agent 回复的单个片段（简化版，由 send_handler 转 Seg/OneBot）。
+
+    支持的 type（data 一律 str，复杂负载用 JSON 字符串）：
+      text   纯文本
+      image  图片（http URL 或 base64://...）
+      voice  语音（URL 或本地路径，OneBot record 段）
+      video  视频（URL 或本地路径，OneBot video 段）
+      at     @某人（data=QQ号）
+      poke   戳一戳（data=QQ号；独立 action，不占消息段）
+      music  音乐卡片（JSON: url/audio/title/content/image）
+      forward 合并转发（JSON: OneBot node 列表；独立 action）
+      emoji  QQ 原生表情（data=face id）
+      reply  引用（data=message_id，一般由 ReplySet.reply_to_message_id 自动加）
+    注意：发「文件」不走消息段——用 junjun_core.napcat_client.upload_group/private_file。
+    """
     type: str
     data: str
 

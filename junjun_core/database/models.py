@@ -141,7 +141,21 @@ class OnlineTime(BaseModel):
     end_timestamp = FloatField(index=True)
 
 
-ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks, OnlineTime]
+class Intimacy(BaseModel):
+    """好感度（插件迁移：intimacy_query）。按用户累计互动分，0~100。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    user_id = CharField(index=True)
+    platform = CharField(default="qq")
+    score = FloatField(default=0.0)           # 好感度 0~100
+    interaction_count = IntegerField(default=0)
+    last_interaction = FloatField(default=0.0)
+    daily_gain = FloatField(default=0.0)      # 当日已涨（防刷，每天重置）
+    daily_date = CharField(default="")        # daily_gain 对应日期 YYYY-MM-DD
+
+
+ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
+              OnlineTime, Intimacy]
 
 
 def init_database() -> None:

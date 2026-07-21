@@ -39,7 +39,7 @@ def load_plugins() -> int:
             gate = (lambda wl: (lambda session: not wl or session.chat_id in wl))(whitelist)
 
             for t in tools:
-                register(t, available_for=gate if whitelist else None)
+                register(t, available_for=gate if whitelist else None, plugin=name)
                 count += 1
             logger.info(f"插件 [{name}] v{manifest.get('version', '?')} 已加载 "
                         f"{len(tools)} 个工具" + (f"（白名单 {len(whitelist)} 会话）" if whitelist else ""))

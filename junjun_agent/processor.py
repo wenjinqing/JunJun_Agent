@@ -123,6 +123,16 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         except Exception:
             pass
 
+    # ---- 命令总线（0 token，旧插件 /cmd 命令的新形态）----
+    from junjun_agent.commands import dispatch as dispatch_command
+    if await dispatch_command(session, meta):
+        return
+
+    # ---- 消息拦截器（0 token，链接自动解析类：B站/抖音/网盘）----
+    from junjun_agent.interceptors import dispatch as dispatch_interceptor
+    if await dispatch_interceptor(session, meta):
+        return
+
     # ---- 表情包偷图（fire-and-forget，失败静默）----
     if meta.image_urls and session.is_group and not meta.is_self:
         try:
