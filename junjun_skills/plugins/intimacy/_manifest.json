@@ -1,0 +1,7 @@
+{
+  "name": "intimacy",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.intimacy.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

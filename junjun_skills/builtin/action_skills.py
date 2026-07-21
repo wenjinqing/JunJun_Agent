@@ -51,26 +51,61 @@ async def send_message(target_id: str, is_group: bool, text: str) -> str:
     return f"消息已发送到{'群' if is_group else '私聊'} {target_id}。"
 
 
+_poke_last: dict = {}  # (chat_id, target) -> ts，5 分钟内重复戳同一人拒绝（对齐旧 acpoke）
+_POKE_REPEAT_WINDOW = 300.0
+
+
+async def _resolve_poke_target(name_or_id: str, chat_id: str) -> str:
+    """QQ 号直接返回；昵称/群名片经 NapCat 群成员列表模糊解析。找不到返回空串。"""
+    name_or_id = name_or_id.strip().lstrip("@")
+    if name_or_id.isdigit():
+        return name_or_id
+    platform, target_id, kind = _split_chat_id(chat_id)
+    if kind != "group":
+        return ""
+    from junjun_core import napcat_client
+    members = await napcat_client.get_group_members(target_id) or []
+    name_or_id = name_or_id.lower()
+    for m in members:
+        names = (str(m.get("card") or ""), str(m.get("nickname") or ""))
+        if any(name_or_id == n.lower() for n in names if n):
+            return str(m.get("user_id"))
+    for m in members:  # 精确不中退到包含匹配
+        names = (str(m.get("card") or ""), str(m.get("nickname") or ""))
+        if any(name_or_id in n.lower() for n in names if n):
+            return str(m.get("user_id"))
+    return ""
+
+
 @tool
 async def send_poke(user_id: str) -> str:
     """戳一戳某人。被要求戳人、或想俏皮地提醒对方时注意你时使用。
 
     Args:
-        user_id: 要戳的 QQ 号
+        user_id: 要戳的 QQ 号，也可以是群昵称/群名片（群聊里自动解析）
     """
     from junjun_core.config import get_global_config
     if not get_global_config().raw.get("chat", {}).get("enable_poke", True):
         return "戳一戳功能已被配置关闭（enable_poke=false）。"
-    platform, target_id, kind = _split_chat_id(current_chat_id.get())
+    chat_id = current_chat_id.get()
+    target = await _resolve_poke_target(user_id, chat_id)
+    if not target:
+        return f"群里没找到「{user_id}」这个人，换 QQ 号试试。"
+    now = time.time()
+    key = (chat_id, target)
+    if now - _poke_last.get(key, 0) < _POKE_REPEAT_WINDOW:
+        return f"刚戳过 {user_id} 了，歇会儿再戳。"
+    platform, target_id, kind = _split_chat_id(chat_id)
     from junjun_core.contracts import ReplySet, ReplySegment
     from junjun_core.gateway.router import get_gateway
     await get_gateway().send_reply(ReplySet(
         platform=platform,
         target_group_id=target_id if kind == "group" else None,
         target_user_id=target_id if kind != "group" else None,
-        segments=[ReplySegment(type="poke", data=user_id)],
+        segments=[ReplySegment(type="poke", data=target)],
         should_reply=True,
     ))
+    _poke_last[key] = now
     return f"已戳了戳 {user_id}。"
 
 

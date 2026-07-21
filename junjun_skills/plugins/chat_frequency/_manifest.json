@@ -1,0 +1,7 @@
+{
+  "name": "chat_frequency",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.chat_frequency.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}
