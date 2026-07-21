@@ -19,6 +19,21 @@ class SendHandler:
         info = msg.message_info
         group_info = info.group_info
 
+        # 合并转发不是普通消息段，走独立 OneBot action（send_group/private_forward_msg）
+        seg, forwards = self._extract_forwards(seg)
+        for nodes in forwards:
+            if group_info:
+                f_action, f_params = "send_group_forward_msg", {
+                    "group_id": int(group_info.group_id), "messages": nodes}
+            else:
+                f_action, f_params = "send_private_forward_msg", {
+                    "user_id": int(info.user_info.user_id), "messages": nodes}
+            f_resp = await nc_message_sender.send_message_to_napcat(f_action, f_params)
+            if f_resp.get("status") == "ok":
+                logger.info(f"合并转发已发 [{f_action} {len(nodes)} 节点]")
+            else:
+                logger.warning(f"合并转发发送失败: {f_resp}")
+
         # poke 不是消息段，走独立 OneBot action（send_group_poke/send_private_poke）
         seg, pokes = self._extract_pokes(seg)
         for target in pokes:
@@ -35,7 +50,7 @@ class SendHandler:
 
         processed = await self._process_seg(seg)
         if not processed:
-            if not pokes:
+            if not pokes and not forwards:
                 logger.warning("无有效发送内容")
             return
 
@@ -81,7 +96,39 @@ class SendHandler:
             payload = self._process_one(seg, payload)
         return payload
 
+    @staticmethod
+    def _extract_forwards(seg: Seg) -> tuple:
+        """把 forward 段摘出来。data 为 JSON: [{"type":"node","data":{...}}, ...]。
+        返回 (剩余 seg, [nodes_list, ...])。"""
+        import json
+
+        def _nodes(s):
+            try:
+                nodes = json.loads(s.data)
+                return nodes if isinstance(nodes, list) else None
+            except Exception:
+                logger.warning(f"forward 段 JSON 解析失败: {str(s.data)[:80]}")
+                return None
+
+        if seg.type == "seglist" and isinstance(seg.data, list):
+            rest, forwards = [], []
+            for s in seg.data:
+                if s.type == "forward":
+                    nodes = _nodes(s)
+                    if nodes:
+                        forwards.append(nodes)
+                else:
+                    rest.append(s)
+            if not rest:
+                return Seg(type="text", data=""), forwards
+            return (Seg(type="seglist", data=rest) if len(rest) > 1 else rest[0]), forwards
+        if seg.type == "forward":
+            nodes = _nodes(seg)
+            return Seg(type="text", data=""), ([nodes] if nodes else [])
+        return seg, []
+
     def _process_one(self, seg: Seg, payload: List[dict]) -> List[dict]:
+        import json
         if seg.type == "text":
             text = seg.data
             if text:
@@ -90,6 +137,19 @@ class SendHandler:
             payload.append({"type": "image", "data": {"file": seg.data}})
         elif seg.type in ("voice", "voiceurl"):
             payload.append({"type": "record", "data": {"file": seg.data}})
+        elif seg.type in ("video", "videourl"):
+            payload.append({"type": "video", "data": {"file": seg.data}})
+        elif seg.type == "at":
+            payload.append({"type": "at", "data": {"qq": str(seg.data)}})
+        elif seg.type == "music":
+            # JSON: {"type": "custom", "url": 卡片链接, "audio": 音频直链,
+            #        "title": 曲名, "content": 歌手/说明, "image": 封面URL}
+            try:
+                data = json.loads(seg.data)
+                data.setdefault("type", "custom")
+                payload.append({"type": "music", "data": data})
+            except Exception:
+                logger.warning(f"music 段 JSON 解析失败: {str(seg.data)[:80]}")
         elif seg.type == "emoji":
             payload.append({"type": "face", "data": {"id": str(seg.data)}})
         elif seg.type == "reply":
