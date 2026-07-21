@@ -50,3 +50,48 @@ async def test_gate_reply_path():
 async def test_gate_api_failure_defaults_no_reply():
     model = _FakeModel(raise_exc=True)
     assert await llm_gate("A: hi", "君君", model=model) is GateDecision.NO_REPLY
+
+
+@pytest.mark.asyncio
+async def test_gate_api_failure_private_defaults_reply():
+    """私聊 API 故障兜底 reply（对齐原 Brain 语义，不吞用户消息）。"""
+    model = _FakeModel(raise_exc=True)
+    assert await llm_gate("A: hi", "君君", model=model, is_group=False) is GateDecision.REPLY
+
+
+class _CaptureModel:
+    """捕获 prompt 的 fake 模型。"""
+
+    def __init__(self):
+        self.messages = None
+
+    async def ainvoke(self, messages, config=None):
+        self.messages = messages
+
+        class R:
+            content = '{"decision": "reply"}'
+        return R()
+
+
+@pytest.mark.asyncio
+async def test_gate_prompt_contains_command_rule():
+    """指令类消息（设提醒等）即使没叫名字也应 reply——2026-07-21 误判修复。"""
+    model = _CaptureModel()
+    await llm_gate("A: 设置12点下班", "君君", model=model)
+    system = model.messages[0].content
+    assert "设提醒" in system and "即使没叫你名字" in system
+
+
+@pytest.mark.asyncio
+async def test_gate_scene_private_biases_reply():
+    model = _CaptureModel()
+    await llm_gate("A: hi", "君君", model=model, is_group=False)
+    assert "私聊" in model.messages[0].content
+    assert "拿不准时 -> reply" in model.messages[0].content
+
+
+@pytest.mark.asyncio
+async def test_gate_scene_group_default():
+    model = _CaptureModel()
+    await llm_gate("A: hi", "君君", model=model, is_group=True)
+    assert "群聊" in model.messages[0].content

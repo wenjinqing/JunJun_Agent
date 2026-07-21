@@ -181,6 +181,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     if l1 is L1Result.TO_GATE:
         decision = await llm_gate(
             session.memory.render(limit=10), cfg.nickname, callbacks=callbacks,
+            is_group=session.is_group,
         )
         if decision is GateDecision.NO_REPLY:
             logger.debug(f"[{session.chat_id}] L2 判定不回复")

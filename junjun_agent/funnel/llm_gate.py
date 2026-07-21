@@ -23,14 +23,21 @@ class GateDecision(Enum):
     NO_REPLY_UNTIL_CALL = "no_reply_until_call"
 
 
-_GATE_SYSTEM = """你是 QQ 群聊机器人"{nickname}"的发言决策器。根据最近对话判断是否应该回复最后一条消息。
+_GATE_SYSTEM = """你是 QQ 聊天机器人"{nickname}"的发言决策器。根据最近对话判断是否应该回复最后一条消息。
+
+场景：{scene}
 
 规则：
 - 消息明确针对你、提问、或话题你能自然切入 -> reply
+- 像在对你说话的请求/指令（设提醒、查天气、搜索、问问题、讲个笑话），即使没叫你名字 -> reply
 - 闲聊与你无关、你刚说过话不宜刷屏、插话会尴尬 -> no_reply
 - 群里明确表示让你闭嘴/别说话 -> no_reply_until_call
+{scene_rule}
 
 只输出 JSON：{{"decision": "reply|no_reply|no_reply_until_call", "reason": "简短原因"}}"""
+
+_SCENE_GROUP = ("群聊", "- 群友之间的对话没带上你，别硬插话 -> no_reply")
+_SCENE_PRIVATE = ("私聊", "- 私聊里对方基本都是在跟你说话，拿不准时 -> reply")
 
 _JSON_RE = re.compile(r"\{[^{}]*\}", re.S)
 
@@ -54,13 +61,19 @@ async def llm_gate(
     *,
     model=None,
     callbacks: Optional[list] = None,
+    is_group: bool = True,
 ) -> GateDecision:
-    """小模型判断是否回复。model 可注入（测试用 fake）。"""
+    """小模型判断是否回复。model 可注入（测试用 fake）。
+
+    is_group: 群聊/私聊场景进入 prompt（私聊拿不准默认 reply，对齐原 Brain 语义）。
+    """
     if model is None:
         from junjun_llm import get_chat_model
         model = get_chat_model("gate")
+    scene, scene_rule = _SCENE_GROUP if is_group else _SCENE_PRIVATE
     messages = [
-        SystemMessage(content=_GATE_SYSTEM.format(nickname=nickname)),
+        SystemMessage(content=_GATE_SYSTEM.format(
+            nickname=nickname, scene=scene, scene_rule=scene_rule)),
         HumanMessage(content=f"最近对话：\n{context_text}\n\n是否回复最后一条？"),
     ]
     try:
@@ -69,5 +82,8 @@ async def llm_gate(
         logger.debug(f"L2 gate -> {decision.value}")
         return decision
     except Exception as e:
-        logger.warning(f"L2 gate 调用失败，默认 no_reply: {e}")
-        return GateDecision.NO_REPLY
+        # 群聊防刷默认 no_reply；私聊对齐原 Brain 语义（基本都回），
+        # API 故障不该吞掉用户消息（主 agent 仍可 do_not_reply 兜底）
+        fallback = GateDecision.NO_REPLY if is_group else GateDecision.REPLY
+        logger.warning(f"L2 gate 调用失败，私聊/群聊兜底 {fallback.value}: {e}")
+        return fallback
