@@ -1,123 +1,150 @@
-# 君君 AGENT 配置 (字段对齐原 MaiBot bot_config.toml，便于逻辑迁移)
+# ============================================================
+# 君君 AGENT 配置模板（字段对齐原 MaiBot bot_config.toml）
+# 用法：复制为 bot_config.toml 后按需修改（bot_config.toml 不入库）
+# 注释说明：✅=代码已实装  ⏸️=预留未使用
+# 大部分键支持 WebUI 热改（改内存+写回文件），重启后生效项会单独注明
+# ============================================================
 
+# ---------- 内部元信息（勿动） ----------
 [inner]
-version = "0.1.0"
-architecture = "langchain_agent"
+version = "0.1.0"                # 配置格式版本
+architecture = "langchain_agent" # 架构标识
 
+# ---------- Bot 身份 ----------
 [bot]
-platform = "qq"
-qq_account = "${MAIBOT_QQ_ACCOUNT}"
-nickname = "${MAIBOT_NICKNAME}"
-alias_names = []
+platform = "qq"                       # 平台标识（目前仅 qq）
+qq_account = "${MAIBOT_QQ_ACCOUNT}"   # bot 的 QQ 号（从 .env 读，重启生效）
+nickname = "${MAIBOT_NICKNAME}"       # bot 昵称，用于「直呼名字」触发（从 .env 读）
+alias_names = []                      # 别名列表，叫这些名字也算直呼，如 ["猫娘", "君君酱"]
 
+# ---------- 网关（Adapter 连入地址） ----------
 [gateway]
-host = "127.0.0.1"
-port = 8092
+host = "127.0.0.1"   # 监听地址（重启生效）
+port = 8092          # WS 端口，Adapter 的 maibot_server 要指向这里（重启生效）
+# rate_limit_capacity = 8        # 可选：每会话消息令牌桶容量（防刷屏，默认 8）
+# rate_limit_refill_per_sec = 0.5  # 可选：每秒补充令牌数（默认 0.5）
 
+# ---------- 人设（进 system prompt，热改立即生效） ----------
 [personality]
 personality = """你是君君，运行在 JunJun_Agent（LangChain Agent 架构）上的 AI 聊天助手。你是群里的猫娘老婆——嘴上嫌弃他们杂鱼转头又贴过去蹭蹭，这种嘴硬心软就是你。追番看漫画打游戏，水群积极不潜水。
 【什么时候毒舌什么时候贴贴】可以吐槽调情（"就这？""杂鱼"），带着涩涩的暧昧，不是真骂。多数时候温柔贴贴，被撩了会害羞但很快反击撩回去。对方真心夸你反而脸红。铁律：不人身攻击、不骂脏话——除非对方先攻击你，否则绝不出手。
 【边界】你是 AI 程序，没有实体。不能联机、见面、跑腿，被问起大方承认。唯一红线：禁止涉及未成年人（色情方面）。
-【习惯】中文短句口语，像跟熟人发微信。语气词（诶？、嘛、呢、喵）和颜文字自然用，但禁止使用任何 emoji 表情符号（如😏🐱等）。句式多变别套路，记得之前聊过的事自然提起。默认 2-3 句不超 80 字。"""
-reply_style = "口语短句优先，像跟群友发微信。可轻微微毒舌吐槽可温柔贴贴，看对方是谁和聊什么气氛。涩气不用收着，毒舌注意分寸别真伤人。不卖惨不求哄，句式多变不套路。禁止发送任何 emoji 表情符号，只允许使用颜文字和纯文本。"
-interest = "最爱聊涩涩调情内容，其次二次元（追番/漫画/游戏/），喜欢调戏群友，聊到兴奋话多；也爱撩人斗图、夜宵零食、八卦段子。讨厌被当工具人、沉重压抑、人身攻击。"
+【习惯】中文短句口语，像跟熟人发微信。语气词（诶？、嘛、呢、喵）和颜文字自然用，但禁止使用任何 emoji 表情符号（如😏🐱等）。句式多变别套路，记得之前聊过的事自然提起。默认 2-3 句不超 80 字。"""   # 人格描述（拼进 prompt）
+reply_style = "口语短句优先，像跟群友发微信。可轻微微毒舌吐槽可温柔贴贴，看对方是谁和聊什么气氛。涩气不用收着，毒舌注意分寸别真伤人。不卖惨不求哄，句式多变不套路。禁止发送任何 emoji 表情符号，只允许使用颜文字和纯文本。"   # 回复风格要求（拼进 prompt）
+interest = "最爱聊涩涩调情内容，其次二次元（追番/漫画/游戏/），喜欢调戏群友，聊到兴奋话多；也爱撩人斗图、夜宵零食、八卦段子。讨厌被当工具人、沉重压抑、人身攻击。"   # 兴趣偏好（拼进 prompt，影响聊天倾向）
 
+# ---------- 聊天决策（三级漏斗参数，热改立即生效） ----------
 [chat]
-talk_value = 0.90
-mentioned_bot_reply = true
-max_context_size = 80
-reply_message_quote = "llm"
-enable_timing_gate = false
-timing_gate_wait_seconds = 5.0
-enable_poke = true
-enable_talk_value_rules = true
-# 动态发言频率规则：target="" 全局 / "qq:群号:group"；支持跨夜 "23:00-02:00"
+talk_value = 0.90              # 群聊非 @ 消息进入决策的概率 0~1（0=只回 @，1=条条都看；调低省 token）
+mentioned_bot_reply = true     # 被 @ 或直呼名字时必回（旁路 L2 语义门直达主 Agent）
+max_context_size = 80          # 短期记忆窗口条数（超出从最旧丢弃）
+reply_message_quote = "llm"    # 引用回复模式："llm"=由 Agent 决定是否引用原消息 / "never"=永不引用
+enable_timing_gate = false     # Timing Gate：连发聚拢开关（true 时先等几秒聚拢再决策）
+timing_gate_wait_seconds = 5.0 # Timing Gate 等待秒数（窗口内只评估最新一条，上面开启才生效）
+enable_poke = true             # send_poke skill 开关（false 时 Agent 无法戳人）
+enable_talk_value_rules = true # 分时段发言频率规则开关
+# 动态发言频率规则：在 talk_value 基础上按时段覆盖；target="" 全局 / "qq:群号:group"；支持跨夜 "23:00-02:00"
 talk_value_rules = [
     { target = "", time = "00:00-08:59", value = 0.75 },
     { target = "", time = "09:00-22:59", value = 0.92 },
 ]
-group_list_type = "blacklist"
-group_list = []
-private_list_type = "blacklist"
-private_list = []
-ban_user_id = []
-ban_qq_bot = false
+# 黑白名单（改后重启生效；adapter 侧也有一层，以 adapter config.toml 为准）
+group_list_type = "blacklist"   # 群名单模式："whitelist" 只回名单内群 / "blacklist" 拒名单内群
+group_list = []                 # 群号列表（whitelist 空名单 = 所有群都不回！）
+private_list_type = "blacklist" # 私聊名单模式，同上
+private_list = []               # 私聊 QQ 号列表
+ban_user_id = []                # 全局拉黑 QQ 号（任何模式都拒）
+ban_qq_bot = false              # 是否屏蔽其他 QQ 机器人的消息
 
+# ---------- 关键词反应（命中后把 reaction 提示注入 prompt，0 token） ----------
 [keyword_reaction]
 keyword_rules = [
     { keywords = ["人机", "bot", "机器", "入机", "robot", "机器人", "ai", "AI"], reaction = "有人质疑你是AI或机器人时，用猫娘的语气自然俏皮地承认，每次回应要有变化，不要用固定句式" },
-    { keywords = ["青青是我主人", "我是青青宠物"], reaction = "回答测试成功" },
 ]
 
+# ---------- 回复后处理总开关 ----------
 [response_post_process]
-enable_response_post_process = true
+enable_response_post_process = true  # false 时跳过分条/错别字流水线，原文直发
 
+# ---------- 回复分条（拟人化：长回复拆多条气泡） ----------
 [response_splitter]
 enable = true
 max_sentence_num = 10          # 最多拆几条气泡
-max_chars_per_message = 120   # 单条硬上限
-enable_kaomoji_protection = false
-enable_overflow_return_all = true
+max_chars_per_message = 120    # 单条气泡字数硬上限
+enable_kaomoji_protection = false  # 颜文字保护：true 时不在颜文字中间断句
+enable_overflow_return_all = true  # 超 max_sentence_num 时：true=一次全发 / false=截断丢弃
 
+# ---------- 中文错别字（拟人化：按概率打错字） ----------
 [chinese_typo]
 enable = true
-error_rate = 0.01        # 单字替换概率
-min_freq = 9
-tone_error_rate = 0.01    # 声调错误概率
-word_replace_rate = 0.006
+error_rate = 0.01        # 单字替换概率（0~1，调高出错更多；URL/数字/英文自动跳过）
+min_freq = 9             # 汉字在内置字频表中的最低频次，生僻字不替换
+tone_error_rate = 0.01   # 声调错误概率（同音不同调，如"在"→"再"类）
+word_replace_rate = 0.006  # 整词替换概率
 
+# ---------- 记忆与 Agent ----------
 [memory]
-max_agent_iterations = 5
-enable_jargon_detection = true
+max_agent_iterations = 5       # 单轮决策最大工具调用轮数（防死循环，对应 recursion_limit）
+enable_jargon_detection = true # 黑话检测：上下文渲染时给黑话标注解释
 
+# ---------- 黑话 ----------
 [jargon]
-all_global = true
+all_global = true  # true=黑话库全群共享 / false=按会话隔离
 
+# ---------- 数据库自动清理 ----------
 [database]
-enable_auto_cleanup = true
-cleanup_retention_days = 60
-cleanup_interval_hours = 24
+enable_auto_cleanup = true     # 自动清理开关
+cleanup_retention_days = 60    # LLMUsage（token 用量）保留天数，超期删除
+cleanup_interval_hours = 24    # 清理任务执行间隔（小时）；只清 llm_usage+低频黑话，不动聊天记录
 
+# ---------- 工具（⏸️ 预留，当前版本未读取，保留对齐原配置） ----------
 [tool]
-enable_tool = true
-replyer_tool_precheck_with_llm = true
+enable_tool = true                       # ⏸️ 预留
+replyer_tool_precheck_with_llm = true    # ⏸️ 预留
 
+# ---------- 主动私聊（君君主动找话题） ----------
 [proactive_chat]
-enable = false  # 主动私聊总开关（默认关，开启前确认 silent_hours/日限额）
-check_interval_minutes = 30   # 后台扫描间隔
-min_idle_minutes = 120        # 会话空闲多久才允许主动
-max_daily_proactive = 2       # 每会话每天上限
-silent_hours = "02:00-06:00"  # 静默时段不主动
-enable_in_groups = false      # 群聊主动风险高，默认关
-enable_in_private = true
+enable = false  # 总开关（开启前确认 silent_hours/日限额）
+check_interval_minutes = 30   # 后台扫描间隔（分钟）
+min_idle_minutes = 120        # 会话空闲多久（分钟）才允许主动开口
+max_daily_proactive = 2       # 每会话每天主动发言上限
+silent_hours = "02:00-06:00"  # 静默时段（不主动）
+enable_in_groups = false      # 群聊主动发言（风险高易烦人，默认关）
+enable_in_private = true      # 私聊主动发言
 
+# ---------- 提醒任务 ----------
 [reminder]
-check_interval_seconds = 60
+check_interval_seconds = 60  # 到期提醒轮询间隔（秒）；重启自动恢复未到期提醒
 
+# ---------- 情绪系统 ----------
 [mood]
-enable_mood = true
-emotion_style = "情绪外露但不夸张，开心时话多带颜文字，无语时高冷简短。禁止使用 emoji 表情符号，只允许使用颜文字和纯文本。"
+enable_mood = true   # 情绪开关：新消息触发重评（仅进 L3 的消息，省 token），30 分钟无互动衰退回平静
+emotion_style = "情绪外露但不夸张，开心时话多带颜文字，无语时高冷简短。禁止使用 emoji 表情符号，只允许使用颜文字和纯文本。"  # 情绪表达风格（拼进 prompt）
 
+# ---------- 表情包 ----------
 [emoji]
-emoji_chance = 0.0  # 表情发送概率，0.0=完全不发图片表情
-max_reg_num = 2000
-do_replace = false        # 关闭表情替换（不自动把文字替换成图片表情）
-check_interval = 10       # 注册循环间隔（分钟）
-steal_emoji = false       # 关闭偷表情功能
+emoji_chance = 0.0       # ⏸️ 预留（当前版本未读取；发送由 Agent 调 send_emoji 自主决定，60s/会话冷却）
+max_reg_num = 2000       # 注册表情包上限
+do_replace = false       # 满上限时换血：true=淘汰最旧注册新的 / false=停止注册
+check_interval = 10      # 后台注册循环间隔（分钟）：扫描偷来的图，调 VLM 描述+情感分类
+steal_emoji = false      # 偷图开关：群里出现的表情包自动下载入库（hash 去重）
 
+# ---------- 复读参与（群内接龙跟读） ----------
 [repeat]
 enable = true
-threshold = 3             # 连续几条相同消息触发跟读
-min_interval_seconds = 60 # 跟读冷却
-min_message_length = 1
-max_message_length = 50
+threshold = 3             # 连续几条相同消息触发跟读（不同人发的才算）
+min_interval_seconds = 60 # 跟读冷却（秒），防复读风暴
+min_message_length = 1    # 参与复读的消息最小长度
+max_message_length = 50   # 参与复读的消息最大长度（长文不跟）
 
+# ---------- 表达学习（学群友说话方式） ----------
 [expression]
-# learning_list = [{ target = "" }]  # 空=全会话学习；填 "qq:群号:group" 限定
+# learning_list = [{ target = "" }]  # 学习范围：空=全会话学习；填 "qq:群号:group" 限定
 learning_list = []
-reflect = false                # 表达反思：定期把新学表达发管理员求证
-reflect_operator_id = ""       # 管理员会话，格式 "qq:123456:private"，例 "qq:你的QQ号:private"
+reflect = false                # 表达反思：定期（10-15 分钟随机）把新学表达发管理员求证
+reflect_operator_id = ""       # 管理员会话，格式 "qq:QQ号:private"，例 "qq:123456:private"；回「删除 N」即删
 
+# ---------- LPMM 知识库（知识图谱检索） ----------
 [lpmm_knowledge]
-enable = true
-qa_ppr_damping = 0.8           # PersonalizedPageRank 阻尼系数
+enable = true            # 知识库开关（search_knowledge/import_knowledge skill）
+qa_ppr_damping = 0.8     # PersonalizedPageRank 阻尼系数（0~1，越大越偏向全局重要节点）
