@@ -1,7 +1,7 @@
 {
   "name": "tts",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "module": "junjun_skills.plugins.tts.tools",
-  "tools_attr": "TTS_TOOLS",
+  "tools_attr": "TOOLS",
   "available_for": []
 }

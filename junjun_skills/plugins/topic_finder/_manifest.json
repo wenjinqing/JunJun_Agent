@@ -1,0 +1,7 @@
+{
+  "name": "topic_finder",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.topic_finder.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}
