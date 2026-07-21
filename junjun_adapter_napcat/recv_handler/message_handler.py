@@ -72,7 +72,7 @@ class MessageHandler:
         else:
             return
 
-        seg_list, at_bot = self._parse_message_segments(
+        seg_list, at_bot = await self._parse_message_segments(
             raw_message.get("message", []),
             self_id=str(raw_message.get("self_id", "")),
         )
@@ -97,10 +97,11 @@ class MessageHandler:
         )
         await message_send_instance.message_send(msg_base)
 
-    def _parse_message_segments(self, real_message: list, self_id: str = "") -> tuple:
-        """解析 OneBot array 消息段为 Seg 列表（阶段 1 只处理 text/at/image）。
+    async def _parse_message_segments(self, real_message: list, self_id: str = "") -> tuple:
+        """解析 OneBot array 消息段为 Seg 列表。
 
         返回 (segs, at_bot)：at_bot 表示消息中 @ 了 bot 自己。
+        合并转发（forward）经 get_forward_msg 展开为文本（递归深度限 2，截断 500 字）。
         """
         segs = []
         at_bot = False
@@ -121,7 +122,50 @@ class MessageHandler:
                 segs.append(Seg(type="emoji", data=str(d.get("id", ""))))
             elif t == "reply":
                 segs.append(Seg(type="reply", data=str(d.get("id", ""))))
+            elif t == "forward":
+                segs.append(Seg(type="text", data=await self._expand_forward(d)))
         return segs, at_bot
+
+    async def _expand_forward(self, data: dict, depth: int = 1) -> str:
+        """展开合并转发消息为可读文本。失败降级占位，不阻塞主链路。"""
+        if depth > 2:
+            return "[嵌套合并转发]"
+        forward_id = data.get("id")
+        if not forward_id:
+            return "[合并转发消息]"
+        try:
+            from ..send_handler.nc_sending import nc_message_sender
+            resp = await nc_message_sender.send_message_to_napcat("get_forward_msg", {"id": str(forward_id)})
+            nodes = (resp.get("data") or {}).get("message") or (resp.get("data") or {}).get("messages") or []
+            if not nodes:
+                return "[合并转发消息]"
+            parts = []
+            total = 0
+            for node in nodes:
+                nickname = (node.get("sender") or {}).get("nickname", "??")
+                texts = []
+                for seg in node.get("message", []) or []:
+                    st, sd = seg.get("type"), seg.get("data", {})
+                    if st == "text":
+                        texts.append(sd.get("text", ""))
+                    elif st == "image":
+                        texts.append("[图片]")
+                    elif st == "forward":
+                        texts.append(await self._expand_forward(sd, depth + 1))
+                line = f"{nickname}: {''.join(texts).strip()}"
+                budget = 500 - total  # 防炸上下文（对齐踩坑清单：展开文本截断 500 字）
+                if len(line) > budget:
+                    if budget > 0:
+                        parts.append(line[:budget])
+                    parts.append("……（转发内容过长已截断）")
+                    break
+                parts.append(line)
+                total += len(line)
+            return "[合并转发]\n" + "\n".join(parts)
+        except Exception as e:
+            from ..logger import logger
+            logger.warning(f"合并转发展开失败（降级占位）: {e}")
+            return "[合并转发消息]"
 
 
 message_handler = MessageHandler()

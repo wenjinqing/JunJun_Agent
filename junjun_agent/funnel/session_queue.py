@@ -2,6 +2,9 @@
 
 对齐阶段 3 计划：LLM 处理慢时新消息不排队多次触发决策——
 堆积消息全部入记忆，只对最新一条触发一次决策；超时消息丢弃打 WARN。
+
+Timing Gate（enable_timing_gate=true 时，默认关）：消息取出后先等
+timing_gate_wait_seconds 聚拢连发，窗口内只评估一次，超时强制继续。
 """
 
 import asyncio
@@ -13,6 +16,14 @@ from junjun_core.observability import get_logger
 logger = get_logger("funnel.queue")
 
 _STALE_SECONDS = 60.0
+
+
+def _timing_gate_wait() -> float:
+    from junjun_core.config import get_global_config
+    chat = get_global_config().raw.get("chat", {})
+    if not chat.get("enable_timing_gate", False):
+        return 0.0
+    return float(chat.get("timing_gate_wait_seconds", 5.0))
 
 
 class SessionQueue:
@@ -42,6 +53,19 @@ class SessionQueue:
                 logger.warning(f"[{self.chat_id}] 丢弃过期消息（排队 >{_STALE_SECONDS}s）: {meta.text[:40]}")
                 self._queue.task_done()
                 continue
+            wait = _timing_gate_wait()
+            if wait > 0:
+                # Timing Gate：等连发聚拢，窗口内只评估最新一条；超时强制继续
+                await asyncio.sleep(wait)
+                drained = 0
+                while not self._queue.empty():
+                    _, meta, ts2 = self._queue.get_nowait()
+                    self._queue.task_done()
+                    drained += 1
+                    if time.time() - ts2 > _STALE_SECONDS:
+                        logger.warning(f"[{self.chat_id}] 丢弃过期消息（聚拢窗口内）: {meta.text[:40]}")
+                if drained:
+                    logger.debug(f"[{self.chat_id}] timing gate 聚拢 {drained} 条，只评估最新一条")
             try:
                 await self._handler(session, meta)
             except Exception as e:

@@ -36,6 +36,20 @@ async def start_gateway():
     load_dotenv(ROOT / ".env")
     from junjun_core import initialize_logging
     initialize_logging("WARNING")
+    # 配置隔离：注入测试用 GlobalConfig（黑名单模式/空名单），
+    # 不受真实 bot_config.toml（可能是白名单）影响——2026-07-21 踩坑
+    import junjun_core.config.config as cfg_mod
+    cfg_mod.global_config = cfg_mod.GlobalConfig(
+        bot=cfg_mod.BotConfig(platform="qq", qq_account="10000001", nickname="君君"),
+        raw={
+            "bot": {"qq_account": "10000001", "nickname": "君君"},
+            "chat": {
+                "group_list_type": "blacklist", "group_list": [],
+                "private_list_type": "blacklist", "private_list": [],
+                "ban_user_id": [], "ban_qq_bot": False,
+            },
+        },
+    )
     from junjun_core.gateway.router import Gateway
     import junjun_core.gateway.router as router_mod
     router = Gateway(host="127.0.0.1", port=TEST_GATEWAY_PORT, bot_user_id="")

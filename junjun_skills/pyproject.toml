@@ -5,6 +5,9 @@ description = "Agent Skill 注册表"
 requires-python = ">=3.11"
 dependencies = [
     "langchain-core",
+    "httpx",
+    "beautifulsoup4",
+    "aiohttp",
     "pydantic"
 ]
 

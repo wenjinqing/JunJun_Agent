@@ -121,6 +121,10 @@ def register_default_tasks() -> None:
         from junjun_agent.loop.statistics import output_statistics
         await output_statistics()
 
+    async def online_time():
+        from junjun_agent.loop.statistics import record_online_time
+        await record_online_time()
+
     async def db_cleanup():
         from junjun_core.database.cleanup import run_cleanup
         await run_cleanup()
@@ -142,5 +146,6 @@ def register_default_tasks() -> None:
     scheduler.add(ScheduledTask("proactive_chat", proactive_scan, interval=proactive_min * 60))
     scheduler.add(ScheduledTask("emoji_register", emoji_register, interval=emoji_min * 60))
     scheduler.add(ScheduledTask("statistics", statistics, interval=4 * 3600))
+    scheduler.add(ScheduledTask("online_time", online_time, interval=60))
     scheduler.add(ScheduledTask("db_cleanup", db_cleanup, interval=cleanup_h * 3600))
     scheduler.add(ScheduledTask("expression_reflect", expression_reflect, interval=5 * 60))

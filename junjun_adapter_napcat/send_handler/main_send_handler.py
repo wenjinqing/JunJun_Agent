@@ -19,9 +19,24 @@ class SendHandler:
         info = msg.message_info
         group_info = info.group_info
 
+        # poke 不是消息段，走独立 OneBot action（send_group_poke/send_private_poke）
+        seg, pokes = self._extract_pokes(seg)
+        for target in pokes:
+            if group_info:
+                p_action, p_params = "send_group_poke", {
+                    "group_id": int(group_info.group_id), "user_id": int(target)}
+            else:
+                p_action, p_params = "send_private_poke", {"user_id": int(target)}
+            p_resp = await nc_message_sender.send_message_to_napcat(p_action, p_params)
+            if p_resp.get("status") == "ok":
+                logger.info(f"戳一戳已发 [{p_action} target={target}]")
+            else:
+                logger.warning(f"戳一戳发送失败: {p_resp}")
+
         processed = await self._process_seg(seg)
         if not processed:
-            logger.warning("无有效发送内容")
+            if not pokes:
+                logger.warning("无有效发送内容")
             return
 
         if group_info:
@@ -42,6 +57,19 @@ class SendHandler:
             logger.info(f"已发送到 NapCat [{action}]")
         else:
             logger.warning(f"NapCat 发送失败: {resp}")
+
+    @staticmethod
+    def _extract_pokes(seg: Seg) -> tuple:
+        """把 poke 段从消息段中摘出来。返回 (剩余 seg, poke 目标 id 列表)。"""
+        if seg.type == "seglist" and isinstance(seg.data, list):
+            rest = [s for s in seg.data if s.type != "poke"]
+            pokes = [str(s.data) for s in seg.data if s.type == "poke"]
+            if not rest:
+                return Seg(type="text", data=""), pokes
+            return (Seg(type="seglist", data=rest) if len(rest) > 1 else rest[0]), pokes
+        if seg.type == "poke":
+            return Seg(type="text", data=""), [str(seg.data)]
+        return seg, []
 
     async def _process_seg(self, seg: Seg) -> List[dict]:
         """Seg -> OneBot message 数组。"""

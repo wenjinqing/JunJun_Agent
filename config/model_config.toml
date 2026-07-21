@@ -1,9 +1,21 @@
-# \u541b\u541b\u4efb\u52a1\u6a21\u578b\u914d\u7f6e\uff08\u7b80\u5316\u7248\uff1a\u4ece .env \u8bfb base_url/api_key\uff09
-# \u6bcf\u4e2a\u4efb\u52a1\u69fd\u914d\u7f6e\uff1abase_url_env + model_env + api_key_env + temperature + max_tokens
-# \u540e\u7eed\u6362\u6a21\u578b\uff0c\u53ea\u9700\u4fee\u6539 .env \u4e2d\u7684 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
+# 君君任务模型配置
+# 每个任务槽从 env 读 base_url / model / api_key（env 名按槽可配）。
+# 默认所有槽共用 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY 一组 env；
+# 想让不同任务用不同模型（如 gate 用小模型、agent 用大模型），
+# 把对应槽的 *_env 指向另一组 env 即可（如 GATE_LLM_*，见 .env.example）。
+#
+# 每槽支持 [[task.X.models]] 多条目实现顺序 fallback（主模型故障自动切下一个）：
+#   [[task.agent.models]]
+#   base_url_env = "LLM_BASE_URL"      # 主：deepseek
+#   model_env    = "LLM_MODEL"
+#   api_key_env  = "LLM_API_KEY"
+#   [[task.agent.models]]
+#   base_url_env = "SF_LLM_BASE_URL"   # 备：siliconflow
+#   model_env    = "SF_LLM_MODEL"
+#   api_key_env  = "SF_LLM_API_KEY"
 
 [task.gate]
-# L2 \u8bed\u4e49\u95e8\uff1a\u5c0f\u6a21\u578b\uff0c\u5224\u65ad reply / no_reply / no_reply_until_call
+# L2 语义门：小模型，判定 reply / no_reply / no_reply_until_call
 temperature = 0.1
 max_tokens = 128
 base_url_env = "LLM_BASE_URL"
@@ -11,7 +23,7 @@ model_env = "LLM_MODEL"
 api_key_env = "LLM_API_KEY"
 
 [task.agent]
-# \u4e3b Agent\uff1a\u5fc5\u987b\u652f\u6301 function calling
+# 主 Agent：必须支持 function calling
 temperature = 0.8
 max_tokens = 2048
 base_url_env = "LLM_BASE_URL"
@@ -19,9 +31,25 @@ model_env = "LLM_MODEL"
 api_key_env = "LLM_API_KEY"
 
 [task.utils]
-# \u6742\u9879\u5c0f\u4efb\u52a1\uff08\u9891\u7387\u8bc4\u4f30/\u6458\u8981\u7b49\uff09
+# 杂项小任务（频率评估/摘要/提醒文案等）
 temperature = 0.3
 max_tokens = 512
 base_url_env = "LLM_BASE_URL"
 model_env = "LLM_MODEL"
 api_key_env = "LLM_API_KEY"
+
+[task.utils_small]
+# 更轻量的杂项（情绪重评等高频低难度任务）
+temperature = 0.3
+max_tokens = 256
+base_url_env = "LLM_BASE_URL"
+model_env = "LLM_MODEL"
+api_key_env = "LLM_API_KEY"
+
+[task.vlm]
+# 多模态识图（图片描述/表情包注册）。未配置对应 env 时识图链路自动降级为 [图片] 占位
+temperature = 0.3
+max_tokens = 512
+base_url_env = "VLM_BASE_URL"
+model_env = "VLM_MODEL"
+api_key_env = "VLM_API_KEY"

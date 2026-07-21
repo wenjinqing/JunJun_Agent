@@ -4,21 +4,20 @@
 
 ## 架构
 
-```
-NapCat (ws://8095)
-   │ OneBot 11
-   ▼
-junjun_adapter_napcat ──── maim_message WS ────▶ Gateway (ws://8092)
-                                                    │ 黑白名单/会话/契约
-                                                    ▼
-                                          三级决策漏斗（省 token）
-                                          L1 规则门: 自消息/@ 旁路/talk_value 概率   (0 token)
-                                          L2 语义门: 小模型 reply|no_reply|until_call (小 token)
-                                          L3 主 Agent: create_agent + 15+ skill      (主模型)
-                                                    │
-                                          回复后处理: 分条/错别字/引用/打字延迟
-                                                    ▼
-                                                 QQ 群/私聊
+```mermaid
+flowchart TD
+    NC[NapCat ws://8095] -->|OneBot 11| AD[junjun_adapter_napcat]
+    AD -->|maim_message WS| GW[Gateway ws://8092<br/>黑白名单/会话/速率/契约]
+    GW --> FUNNEL{三级决策漏斗<br/>省 token}
+    FUNNEL -->|0 token| L1[L1 规则门<br/>自消息/@旁路/talk_value 概率]
+    FUNNEL -->|小 token| L2[L2 语义门<br/>小模型 reply/no_reply/until_call]
+    FUNNEL -->|主模型| L3[L3 主 Agent<br/>create_agent + 18 skill]
+    L3 --> PP[回复后处理<br/>分条/错别字/引用/打字延迟]
+    PP --> QQ[QQ 群/私聊]
+    L3 -.-> MEM[junjun_memory<br/>窗口/摘要/faiss/画像/LPMM]
+    L3 -.-> EXP[junjun_express<br/>情绪/表情包/黑话/表达]
+    L3 -.-> MCP[junjun_mcp_client<br/>多 server 工具]
+    L3 -.-> OBS[Langfuse v3 观测]
 ```
 
 | 包 | 职责 |
@@ -26,9 +25,9 @@ junjun_adapter_napcat ──── maim_message WS ────▶ Gateway (ws:/
 | `junjun_core` | 网关、配置、数据契约、DB（peewee+WAL）、可观测 |
 | `junjun_adapter_napcat` | OneBot 11 ↔ maim_message 协议转换 |
 | `junjun_agent` | 决策漏斗、persona、回复后处理、定时任务（提醒/主动/统计/清理） |
-| `junjun_llm` | 任务槽模型（gate/agent/utils，provider fallback）+ Langfuse v3 |
-| `junjun_memory` | 三层记忆：窗口 → 话题摘要 → faiss 长期库；用户画像 |
-| `junjun_skills` | skill 注册表 + 内置 12 个 + 插件（vrchat/TTS）+ MCP 工具注入 |
+| `junjun_llm` | 任务槽模型（gate/agent/utils/utils_small/vlm，model_list fallback）+ Langfuse v3 |
+| `junjun_memory` | 三层记忆：窗口 → 话题摘要 → faiss 长期库；用户画像；VLM 入站识图 |
+| `junjun_skills` | skill 注册表 + 内置 18 个 + 插件（vrchat/TTS/google_search）+ MCP 工具注入 |
 | `junjun_express` | 情绪、表情包（偷图/注册/发送）、黑话、表达学习 |
 | `junjun_mcp_client` / `junjun_mcp_server` | MCP 双向：调外部 server + relationship 服务端 |
 | `junjun_webui` | FastAPI：配置热改/日志实时流/统计/数据管理 |
@@ -43,9 +42,9 @@ uv venv && uv pip install -e .
 
 # 2. 配置
 copy .env.example .env
-#    必填: MAIBOT_QQ_ACCOUNT（bot 的 QQ 号）、DEEPSEEK_API_KEY
+#    必填: MAIBOT_QQ_ACCOUNT（bot 的 QQ 号）、LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（任务模型）
 #    建议: SILICONFLOW_API_KEY（embedding 向量记忆，缺省降级关键词检索）
-#    可选: LANGFUSE_*（可观测）、DOUBAO_TTS_API_KEY（语音）、WEBUI_TOKEN
+#    可选: VLM_*（多模态识图）、LANGFUSE_*（可观测）、DOUBAO_TTS_API_KEY（语音）、WEBUI_TOKEN
 
 # 3. NapCat：确认 onebot11 配置里 websocketClients 指向 ws://127.0.0.1:8095
 #    （messagePostFormat=array, reportSelfMessage=false）
@@ -67,7 +66,7 @@ copy .env.example .env
 ## 测试
 
 ```bash
-.venv\Scripts\python.exe -m pytest tests\ -q          # 167 单测（无网络依赖）
+uv run pytest -q                                      # 全量单测（无网络依赖）
 .venv\Scripts\python.exe scripts\test_e2e_fake_napcat.py   # 全链路 E2E（fake NapCat）
 .venv\Scripts\python.exe scripts\smoke_agent.py       # 真实 LLM 冒烟（需 API key）
 .venv\Scripts\python.exe scripts\smoke_memory.py      # 记忆链路冒烟

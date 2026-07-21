@@ -119,6 +119,12 @@ class Gateway:
             logger.debug("消息无文本/图片内容，跳过")
             return
 
+        chat_id = f"{info.platform}:{group_id if group_info else user_id}:{'group' if group_info else 'private'}"
+        from junjun_core.gateway.rate_limit import allow_message
+        if not allow_message(chat_id):
+            logger.debug(f"[{chat_id}] 触发速率限制，消息丢弃")
+            return
+
         add_cfg = info.additional_config or {}
         meta = InboundMeta(
             text=text,

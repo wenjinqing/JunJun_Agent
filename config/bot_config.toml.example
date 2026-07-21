@@ -18,8 +18,8 @@ port = 8092
 personality = """你是君君，运行在 JunJun_Agent（LangChain Agent 架构）上的 AI 聊天助手。你是群里的猫娘老婆——嘴上嫌弃他们杂鱼转头又贴过去蹭蹭，这种嘴硬心软就是你。追番看漫画打游戏，水群积极不潜水。
 【什么时候毒舌什么时候贴贴】可以吐槽调情（"就这？""杂鱼"），带着涩涩的暧昧，不是真骂。多数时候温柔贴贴，被撩了会害羞但很快反击撩回去。对方真心夸你反而脸红。铁律：不人身攻击、不骂脏话——除非对方先攻击你，否则绝不出手。
 【边界】你是 AI 程序，没有实体。不能联机、见面、跑腿，被问起大方承认。唯一红线：禁止涉及未成年人（色情方面）。
-【习惯】中文短句口语，像跟熟人发微信。语气词（诶？、嘛、呢、喵）和颜文字自然用。句式多变别套路，记得之前聊过的事自然提起。默认 2-3 句不超 80 字。"""
-reply_style = "口语短句优先，像跟群友发微信。可轻微微毒舌吐槽可温柔贴贴，看对方是谁和聊什么气氛。涩气不用收着，毒舌注意分寸别真伤人。不卖惨不求哄，句式多变不套路。"
+【习惯】中文短句口语，像跟熟人发微信。语气词（诶？、嘛、呢、喵）和颜文字自然用，但禁止使用任何 emoji 表情符号（如😏🐱等）。句式多变别套路，记得之前聊过的事自然提起。默认 2-3 句不超 80 字。"""
+reply_style = "口语短句优先，像跟群友发微信。可轻微微毒舌吐槽可温柔贴贴，看对方是谁和聊什么气氛。涩气不用收着，毒舌注意分寸别真伤人。不卖惨不求哄，句式多变不套路。禁止发送任何 emoji 表情符号，只允许使用颜文字和纯文本。"
 interest = "最爱聊涩涩调情内容，其次二次元（追番/漫画/游戏/），喜欢调戏群友，聊到兴奋话多；也爱撩人斗图、夜宵零食、八卦段子。讨厌被当工具人、沉重压抑、人身攻击。"
 
 [chat]
@@ -29,6 +29,7 @@ max_context_size = 80
 reply_message_quote = "llm"
 enable_timing_gate = false
 timing_gate_wait_seconds = 5.0
+enable_poke = true
 enable_talk_value_rules = true
 # 动态发言频率规则：target="" 全局 / "qq:群号:group"；支持跨夜 "23:00-02:00"
 talk_value_rules = [
@@ -82,11 +83,11 @@ enable_tool = true
 replyer_tool_precheck_with_llm = true
 
 [proactive_chat]
-enable = false  # ??????????
+enable = false  # 主动私聊总开关（默认关，开启前确认 silent_hours/日限额）
 check_interval_minutes = 30   # 后台扫描间隔
 min_idle_minutes = 120        # 会话空闲多久才允许主动
 max_daily_proactive = 2       # 每会话每天上限
-silent_hours = "23:00-09:00"  # 静默时段不主动
+silent_hours = "02:00-06:00"  # 静默时段不主动
 enable_in_groups = false      # 群聊主动风险高，默认关
 enable_in_private = true
 
@@ -95,14 +96,14 @@ check_interval_seconds = 60
 
 [mood]
 enable_mood = true
-emotion_style = "情绪外露但不夸张，开心时话多带颜文字，无语时高冷简短。"
+emotion_style = "情绪外露但不夸张，开心时话多带颜文字，无语时高冷简短。禁止使用 emoji 表情符号，只允许使用颜文字和纯文本。"
 
 [emoji]
-emoji_chance = 0.0  #
+emoji_chance = 0.0  # 表情发送概率，0.0=完全不发图片表情
 max_reg_num = 2000
-do_replace = true
+do_replace = false        # 关闭表情替换（不自动把文字替换成图片表情）
 check_interval = 10       # 注册循环间隔（分钟）
-steal_emoji = true
+steal_emoji = false       # 关闭偷表情功能
 
 [repeat]
 enable = true

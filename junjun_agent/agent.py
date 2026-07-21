@@ -72,10 +72,13 @@ class JunJunAgent:
         mood_block: str = "",
         memory_block: str = "",
         relation_block: str = "",
+        trace_id: str = "",
     ) -> Optional[str]:
         """跑一轮决策。返回回复文本；None 表示沉默。
 
         addressed: 被 @/直呼（mentioned_bot_reply 必回语义，禁用 do_not_reply）。
+        trace_id: 本轮决策 ID（processor 生成），写结构化日志并进 Langfuse metadata，
+                  供 WebUI 日志页与 Langfuse trace 互查。
         """
         cfg = get_global_config()
         max_iter = int(cfg.raw.get("memory", {}).get("max_agent_iterations", 5))
@@ -94,12 +97,18 @@ class JunJunAgent:
                 config={
                     "callbacks": callbacks or [],
                     "recursion_limit": 2 * max_iter + 1,
-                    "metadata": {"chat_id": self.session.chat_id},
+                    "metadata": {
+                        "chat_id": self.session.chat_id,
+                        "trace_id": trace_id,
+                        # Langfuse v3 CallbackHandler 识别的元数据：trace 按会话归组
+                        "langfuse_session_id": self.session.chat_id,
+                        "langfuse_tags": ["junjun", "agent"],
+                    },
                 },
             )
         except Exception as e:
             # 含 GraphRecursionError：超限兜底沉默，不炸会话
-            logger.warning(f"agent 执行异常，本轮沉默: {type(e).__name__}: {e}")
+            logger.warning(f"agent 执行异常，本轮沉默 [trace={trace_id}]: {type(e).__name__}: {e}")
             return None
 
         messages = result.get("messages", [])

@@ -5,6 +5,8 @@ description = "Agent 核心：LangChain 编排"
 requires-python = ">=3.11"
 dependencies = [
     "langchain",
+    "jieba",
+    "pypinyin",
     "junjun-core",
     "junjun-llm",
     "junjun-memory",
