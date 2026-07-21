@@ -107,6 +107,42 @@ class TestParseRemindTime:
     def test_gibberish_returns_none(self):
         assert parse_remind_time("等我有空再说", now=self.NOW) is None
 
+    # ---- 回归：2026-07-21 线上 bug（日组吞十位 → 11点变1点、10点45变0点）----
+    def test_two_digit_hour(self):
+        ts = parse_remind_time("明天11点", now=self.NOW)
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 17, 11, 0)
+
+    def test_two_digit_hour_today(self):
+        ts = parse_remind_time("16点", now=self.NOW)  # 今天 16 点未过
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 16, 16, 0)
+
+    def test_hour_with_minutes(self):
+        ts = parse_remind_time("明天10点45分", now=self.NOW)
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 17, 10, 45)
+
+    def test_morning_modifier(self):
+        ts = parse_remind_time("上午11点", now=datetime(2026, 7, 21, 2, 50))
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 21, 11, 0)
+
+    def test_afternoon_modifier(self):
+        ts = parse_remind_time("下午3点", now=self.NOW)
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 16, 15, 0)
+
+    def test_evening_modifier(self):
+        ts = parse_remind_time("晚上8点", now=self.NOW)
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 16, 20, 0)
+
+    def test_noon_modifier(self):
+        ts = parse_remind_time("中午12点半", now=datetime(2026, 7, 16, 11, 0))
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 16, 12, 30)
+
+    def test_dot_format(self):
+        ts = parse_remind_time("明天10.05", now=self.NOW)
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 17, 10, 5)
+
+    def test_invalid_hour_returns_none(self):
+        assert parse_remind_time("25点", now=self.NOW) is None
+
 
 class TestReminderLifecycle:
     def test_create_list_cancel(self):

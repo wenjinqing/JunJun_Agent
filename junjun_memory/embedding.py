@@ -5,6 +5,7 @@
 """
 
 import os
+import socket
 from typing import List, Optional
 
 from junjun_core.observability import get_logger
@@ -28,7 +29,23 @@ class EmbeddingClient:
     def _get_client(self):
         if self._client is None:
             from openai import AsyncOpenAI
-            self._client = AsyncOpenAI(api_key=self._api_key, base_url=_BASE_URL, timeout=15)
+            import httpx
+            self._client = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=_BASE_URL,
+                timeout=15,
+                http_client=httpx.AsyncClient(
+                    timeout=httpx.Timeout(15, connect=5),
+                    transport=httpx.AsyncHTTPTransport(
+                        limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+                        socket_options=[
+                            (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+                            (socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 60),
+                            (socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 120),
+                        ],
+                    ),
+                ),
+            )
         return self._client
 
     async def embed(self, texts: List[str]) -> Optional[List[List[float]]]:

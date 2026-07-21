@@ -23,6 +23,7 @@ from junjun_adapter_napcat.logger import logger
 from junjun_adapter_napcat.config import get_config
 from junjun_adapter_napcat.recv_handler.message_handler import message_handler
 from junjun_adapter_napcat.recv_handler.meta_event_handler import meta_event_handler
+from junjun_adapter_napcat.recv_handler.notice_handler import notice_handler
 from junjun_adapter_napcat.send_handler.nc_sending import nc_message_sender
 from junjun_adapter_napcat.response_pool import put_response, check_timeout_response
 from junjun_adapter_napcat.com_layer import mmc_start_com
@@ -54,6 +55,8 @@ async def message_process():
             await message_handler.handle_raw_message(message)
         elif post_type == "meta_event":
             await meta_event_handler.handle_meta_event(message)
+        elif post_type == "notice":
+            await notice_handler.handle_notice(message)
         message_queue.task_done()
         await asyncio.sleep(0.05)
 

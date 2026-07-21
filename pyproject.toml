@@ -1,5 +1,5 @@
 [project]
-name = "junjun-agent"
+name = "junjun-workspace"
 version = "0.1.0"
 description = "君君 AGENT 架构 - LangChain + Langfuse + Function Calling + MCP"
 requires-python = ">=3.11"
@@ -20,9 +20,20 @@ dependencies = [
     "langgraph>=1.0.0",
     "langfuse>=3.0.0",
     "openai>=1.0.0",
+    # workspace 成员（应用本体）：root 依赖它们，uv sync 才会安装完整闭包
+    "junjun-core",
+    "junjun-adapter-napcat",
+    "junjun-agent",
+    "junjun-llm",
+    "junjun-memory",
+    "junjun-skills",
+    "junjun-mcp-client",
+    "junjun-mcp-server",
+    "junjun-express",
+    "junjun-webui",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "ruff>=0.4.0",
     "pytest>=8.0.0",
@@ -38,9 +49,22 @@ members = [
     "junjun_memory",
     "junjun_skills",
     "junjun_mcp_client",
+    "junjun_mcp_server",
     "junjun_express",
     "junjun_webui",
 ]
+
+[tool.uv.sources]
+junjun-core = { workspace = true }
+junjun-adapter-napcat = { workspace = true }
+junjun-agent = { workspace = true }
+junjun-llm = { workspace = true }
+junjun-memory = { workspace = true }
+junjun-skills = { workspace = true }
+junjun-mcp-client = { workspace = true }
+junjun-mcp-server = { workspace = true }
+junjun-express = { workspace = true }
+junjun-webui = { workspace = true }
 
 [tool.ruff]
 line-length = 120
@@ -48,6 +72,12 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "B"]
 ignore = ["E501"]
+
+# 入口脚本需先插 sys.path 再 import 包，E402 属预期模式
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["E402"]
+"junjun_adapter_napcat/main.py" = ["E402"]
+"junjun_mcp_server/relationship_mcp_server.py" = ["E402"]
 
 [tool.ruff.format]
 docstring-code-format = true

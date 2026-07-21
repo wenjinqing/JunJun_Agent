@@ -8,7 +8,6 @@ try:
 except ImportError:
     HAS_GOOGLESEARCH = False
     
-from urllib.parse import urlencode, parse_qs, urlparse
 from .base import BaseSearchEngine, SearchResult
 
 class GoogleEngine(BaseSearchEngine):

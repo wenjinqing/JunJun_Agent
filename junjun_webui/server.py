@@ -110,10 +110,17 @@ def get_config():
 
 @app.post("/api/config", dependencies=[Depends(_check_auth)])
 async def set_config(payload: dict):
-    """热改内存配置（白名单键）。持久化到 toml 由用户手动确认（防误触写坏）。"""
-    from junjun_core.config import get_global_config
+    """热改配置（白名单键）：内存即时生效 + 默认写回 toml + 事件通知缓存型消费者。
+
+    payload 可带 "_persist": false 跳过写回（仅本次内存生效）。
+    """
+    from junjun_core.config import (
+        get_global_config, notify_config_changed, persist_bot_config,
+    )
     raw = get_global_config().raw
+    persist = bool(payload.pop("_persist", True))
     changed = []
+    pairs = []
     for section, kv in payload.items():
         if not isinstance(kv, dict):
             continue
@@ -122,9 +129,18 @@ async def set_config(payload: dict):
                 raise HTTPException(400, f"不可修改的配置项: {section}.{key}")
             raw.setdefault(section, {})[key] = value
             changed.append(f"{section}.{key}={value}")
+            pairs.append((section, key))
+    persisted = False
     if changed:
         logger.info(f"WebUI 配置热改: {', '.join(changed)}")
-    return {"changed": changed}
+        notify_config_changed(changed)
+        if persist:
+            try:
+                persist_bot_config(pairs)
+                persisted = True
+            except Exception as e:
+                logger.warning(f"配置写回 toml 失败（内存已生效，重启后丢失）: {e}")
+    return {"changed": changed, "persisted": persisted}
 
 
 # ---------- 日志 ----------
@@ -199,6 +215,50 @@ def get_sessions():
             "last_active": s.last_active_ts,
             "context_len": len(s.memory.entries) if s.memory else 0,
         })
+    return out
+
+
+# ---------- 插件管理 ----------
+
+@app.get("/api/plugins", dependencies=[Depends(_check_auth)])
+def list_plugins():
+    from junjun_skills import registry
+    return registry.list_skills()
+
+
+@app.post("/api/plugins/{name}", dependencies=[Depends(_check_auth)])
+def toggle_plugin(name: str, payload: dict):
+    from junjun_skills import registry
+    enabled = bool(payload.get("enabled", True))
+    if not registry.set_enabled(name, enabled):
+        raise HTTPException(404, f"skill 不存在: {name}")
+    return {"name": name, "enabled": enabled}
+
+
+# ---------- 会话调试 ----------
+
+@app.get("/api/chat/{chat_id}/context", dependencies=[Depends(_check_auth)])
+def get_chat_context(chat_id: str, limit: int = 30):
+    """查看会话上下文窗口 + 情绪 + 近期入库消息（调试决策用）。"""
+    from junjun_core.gateway.session_manager import get_session_manager
+    from junjun_core.database import Messages
+    session = get_session_manager().all_sessions().get(chat_id)
+    out = {"chat_id": chat_id, "in_memory": session is not None}
+    if session is not None:
+        out["context"] = session.memory.render(limit=limit) if session.memory else ""
+        out["silenced"] = session.silenced_until_call
+        try:
+            from junjun_express.mood import mood_manager
+            out["mood"] = mood_manager.get_mood(chat_id)
+        except Exception:
+            out["mood"] = ""
+    rows = (Messages.select().where(Messages.chat_id == chat_id)
+            .order_by(Messages.time.desc()).limit(limit))
+    out["recent_messages"] = [
+        {"time": r.time, "who": r.user_nickname or r.user_id or "bot",
+         "is_bot": r.is_bot, "text": r.processed_plain_text[:100]}
+        for r in rows
+    ]
     return out
 
 

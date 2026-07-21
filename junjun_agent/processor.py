@@ -100,6 +100,8 @@ def _quote_message_id(session: ChatSession, meta: InboundMeta) -> Optional[str]:
 
 async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     """会话队列内串行执行的核心处理。发送直接走 gateway（分条延迟）。"""
+    import uuid
+    trace_id = uuid.uuid4().hex[:12]  # 本轮决策 ID：结构化日志 + Langfuse metadata 互查
     cfg = _l1_config(session)
     frequency_control.note_message(session.chat_id)
     session.last_active_ts = time.time()  # 主动系统空闲判定
@@ -211,15 +213,17 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         memory_block = f"{memory_block}\n{expression_block}" if memory_block else expression_block
 
     # ---- L3 主 Agent ----
+    logger.info(f"[{session.chat_id}] 进入 L3 决策 [trace={trace_id}]")
     text = await session.agent.process(
         session.memory.render(), callbacks=callbacks, latest_text=meta.text,
         addressed=(l1 is L1Result.TO_AGENT),
         memory_block=memory_block, relation_block=relation_block,
-        mood_block=mood_block,
+        mood_block=mood_block, trace_id=trace_id,
     )
 
     # 情绪重评（跟随 L3，冷却内跳过；不阻塞发送——先发再评）
     if not text:
+        logger.info(f"[{session.chat_id}] L3 沉默 [trace={trace_id}]")
         return
 
     session.memory.add_bot(text)
@@ -255,8 +259,16 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
 
 
 async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
-    """被动记忆注入：按最新消息检索相关长期记忆 + 黑话释义。失败降级空串。"""
+    """被动记忆注入：按最新消息检索相关长期记忆 + 黑话释义 + 入站图片描述。失败降级空串。"""
     parts = []
+    if meta.image_urls:
+        try:
+            from junjun_memory.vision import describe_images, render_image_block
+            block = render_image_block(await describe_images(meta.image_urls))
+            if block:
+                parts.append(block)
+        except Exception:
+            pass
     try:
         import asyncio as _aio
         from junjun_memory.long_term import get_long_term_memory

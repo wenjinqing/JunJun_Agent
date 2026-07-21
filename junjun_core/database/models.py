@@ -133,7 +133,15 @@ class ReminderTasks(BaseModel):
     is_cancelled = BooleanField(default=False)
 
 
-ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks]
+class OnlineTime(BaseModel):
+    """在线时长记录（对齐原 OnlineTimeRecordTask：每分钟续 end_timestamp）。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    start_timestamp = FloatField()
+    end_timestamp = FloatField(index=True)
+
+
+ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks, OnlineTime]
 
 
 def init_database() -> None:

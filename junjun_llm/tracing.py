@@ -1,4 +1,4 @@
-"""Langfuse v3 追踪：业务层只拿 callbacks 列表，不直接持有 Langfuse 句柄。"""
+﻿"""Langfuse v3 tracing: business layer only gets callbacks list, does not hold Langfuse handle directly."""
 
 import os
 from typing import List, Optional
@@ -12,26 +12,21 @@ _checked = False
 
 
 def get_callbacks() -> List:
-    """返回 LangChain callbacks。Langfuse 未启用/不可达时返回空列表（静默降级）。"""
+    """Return LangChain callbacks. Return empty list when Langfuse is disabled/unreachable (silent degrade)."""
     global _handler, _checked
     if _checked:
         return [_handler] if _handler else []
     _checked = True
 
     if os.environ.get("LANGFUSE_ENABLED", "false").lower() != "true":
-        logger.info("Langfuse 未启用（LANGFUSE_ENABLED != true）")
+        logger.info("Langfuse not enabled (LANGFUSE_ENABLED != true)")
         return []
     try:
-        from langfuse import get_client
         from langfuse.langchain import CallbackHandler
 
-        client = get_client()
-        if not client.auth_check():
-            logger.warning("Langfuse auth_check 失败，降级为无追踪")
-            return []
         _handler = CallbackHandler()
-        logger.info(f"Langfuse v3 追踪已启用 -> {os.environ.get('LANGFUSE_HOST', '')}")
+        logger.info(f"Langfuse v3 tracing enabled -> {os.environ.get('LANGFUSE_HOST', '')}")
         return [_handler]
     except Exception as e:
-        logger.warning(f"Langfuse 初始化失败，降级为无追踪: {e}")
+        logger.warning(f"Langfuse init failed, degraded to no tracing: {e}")
         return []

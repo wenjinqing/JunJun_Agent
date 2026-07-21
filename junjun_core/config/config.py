@@ -80,3 +80,50 @@ def get_global_config() -> GlobalConfig:
     if global_config is None:
         global_config = GlobalConfig.load()
     return global_config
+
+
+# ---------- 配置热改（WebUI）----------
+
+_listeners: list = []
+
+
+def register_config_listener(fn) -> None:
+    """注册热改监听：fn(changed: list[str])，changed 为 "section.key=value" 列表。
+
+    大多数组件每次使用都实时读 raw（天然热生效）；缓存型消费者（如模型槽）
+    应注册监听以便失效重建。
+    """
+    _listeners.append(fn)
+
+
+def notify_config_changed(changed: list) -> None:
+    for fn in _listeners:
+        try:
+            fn(changed)
+        except Exception:
+            pass  # 监听者异常不影响主链路
+
+
+def persist_bot_config(changed: list, path: Optional[Path] = None) -> None:
+    """把热改键写回 bot_config.toml（tomlkit 往返保留注释；tmp+replace 原子写）。
+
+    changed: [(section, key), ...]——只写回这些键，避免把 env 插值后的值固化进文件。
+    原文件中值为 ${VAR} 占位符的键跳过不写。
+    """
+    path = path or (CONFIG_DIR / "bot_config.toml")
+    if not path.exists():
+        raise FileNotFoundError(f"配置文件不存在: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        doc = tomlkit.parse(f.read())
+    cfg = get_global_config()
+    for section, key in changed:
+        original = doc.get(section, {}).get(key) if section in doc else None
+        if isinstance(original, str) and _VAR_RE.search(original):
+            continue  # ${VAR} 占位符键不写回
+        if section not in doc:
+            doc[section] = tomlkit.table()
+        doc[section][key] = cfg.raw[section][key]
+    tmp = path.with_suffix(".toml.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(tomlkit.dumps(doc))
+    tmp.replace(path)
