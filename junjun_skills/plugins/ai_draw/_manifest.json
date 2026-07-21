@@ -1,0 +1,7 @@
+{
+  "name": "ai_draw",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.ai_draw.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

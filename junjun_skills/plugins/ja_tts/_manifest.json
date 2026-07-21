@@ -1,0 +1,7 @@
+{
+  "name": "ja_tts",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.ja_tts.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

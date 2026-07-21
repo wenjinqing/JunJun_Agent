@@ -8,7 +8,9 @@ dependencies = [
     "httpx",
     "beautifulsoup4",
     "aiohttp",
-    "pydantic"
+    "pydantic",
+    "pykakasi",
+    "websockets"
 ]
 
 [build-system]
