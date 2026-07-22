@@ -592,7 +592,11 @@ async def maizone_monitor() -> None:
     try:
         feeds = await _with_auth_retry(fetch_friend_feeds, uin, 10)
     except Exception as e:
-        logger.warning(f"maizone 监控拉取说说失败: {type(e).__name__}: {e}")
+        err_name = type(e).__name__
+        if "JSONDecodeError" in err_name or "Expecting" in str(e):
+            logger.debug(f"maizone 监控: Qzone 返回非标准 JSON（cookie 过期/登录态失效），跳过本轮: {e}")
+        else:
+            logger.warning(f"maizone 监控拉取说说失败: {err_name}: {e}")
         return
     if not feeds:
         return

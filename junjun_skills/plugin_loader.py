@@ -37,12 +37,21 @@ def load_plugins() -> int:
             tools = getattr(module, manifest.get("tools_attr", "TOOLS"))
             whitelist = set(manifest.get("available_for", []))
             gate = (lambda wl: (lambda session: not wl or session.chat_id in wl))(whitelist)
+            # 拦截器在 import 时已注册（decorator side-effect），计数纳入日志
+            from junjun_agent.interceptors import list_interceptors
+            before_interceptors = len(list_interceptors())
 
             for t in tools:
-                register(t, available_for=gate if whitelist else None, plugin=name)
+                register(t, available_for=gate if whitelist else None, plugin=name,
+                         admin_only=bool(manifest.get("admin_only", False)))
                 count += 1
+            interceptors_added = len(list_interceptors()) - before_interceptors
+            suffix = f"（白名单 {len(whitelist)} 会话）" if whitelist else ""
+            suffix += f"（admin 门）" if manifest.get("admin_only") else ""
+            if interceptors_added:
+                suffix += f" + {interceptors_added} 拦截器"
             logger.info(f"插件 [{name}] v{manifest.get('version', '?')} 已加载 "
-                        f"{len(tools)} 个工具" + (f"（白名单 {len(whitelist)} 会话）" if whitelist else ""))
+                        f"{len(tools)} 个工具{suffix}")
         except Exception as e:
             logger.warning(f"插件加载失败 [{manifest_path.parent.name}]（跳过）: {type(e).__name__}: {e}")
     return count
