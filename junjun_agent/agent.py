@@ -130,4 +130,25 @@ class JunJunAgent:
         elif "<think>" in text:
             logger.warning(f"[{self.session.chat_id}] 未闭合 <think> 思考链泄漏，本轮沉默")
             return None
+
+        # 最后保险：推理结构检测——多段落且首段以推理开头词起始，
+        # 取最后一段作为有效回复（deepseek function calling 后常见模式）
+        if text and len(text) > 200:
+            _REASONING_STARTS = ("这个问题", "让我", "我需要", "首先", "根据系统",
+                                 "根据提示", "用户在问", "对方在问", "分析一下")
+            first_line = text.split("\n")[0].strip()
+            if any(first_line.startswith(s) for s in _REASONING_STARTS):
+                lines = [l.strip() for l in text.split("\n") if l.strip()]
+                if len(lines) >= 2:
+                    tail = lines[-1]
+                    # 尾部不像推理且长度合理，取它
+                    if len(tail) < 150 and not any(tail.startswith(s) for s in _REASONING_STARTS):
+                        logger.info(f"[{self.session.chat_id}] 推理结构检测，取尾部: {tail[:40]}")
+                        text = tail
+                    else:
+                        logger.warning(f"[{self.session.chat_id}] 推理结构无法提取，本轮沉默")
+                        return None
+                else:
+                    logger.warning(f"[{self.session.chat_id}] 推理结构无法提取，本轮沉默")
+                    return None
         return text or None
