@@ -481,6 +481,32 @@ async def bilibili_cmd(ctx):
     return None
 
 
+@register_command("bili_info", aliases=["b站简介", "b站信息"], plugin="bilibili",
+                  description="查看 B 站视频简介（信息卡：标题/UP主/时长/简介/封面），不下载视频")
+async def bili_info_cmd(ctx):
+    """只发信息卡不下载：/bili_info <链接> 或 /b站简介 <链接>。"""
+    url = (ctx.args or "").strip()
+    if not url:
+        return "用法：/bili_info <B站链接>  或  /b站简介 <链接>"
+    url = _first_bili_url(url) or ""
+    if not url:
+        return "请提供有效的 B 站视频链接（bilibili.com/video/BVxxx 或 b23.tv 短链）。"
+
+    remain = _check_rate_limit(ctx.session.chat_id)
+    if remain > 0:
+        return f"B站解析太频繁啦，{remain} 秒后再试。"
+
+    bvid = await extract_bvid(url)
+    if not bvid:
+        return "没认出这个 B 站链接，发个 bilibili.com/video/BVxxx 或 b23.tv 短链试试？"
+    info = await _fetch_view(bvid)
+    if not info or not info.get("aid"):
+        return "视频信息获取失败了，可能是链接失效或被风控，稍后再试试吧。"
+    page_url = f"https://www.bilibili.com/video/{info['bvid']}"
+    await _send_info_card(ctx, info, page_url)
+    return None
+
+
 @register_interceptor(BILI_LINK_RE.pattern, name="bilibili_link", plugin="bilibili",
                       group_at_only=_GROUP_AT_ONLY)
 async def bilibili_hit(ctx) -> bool:

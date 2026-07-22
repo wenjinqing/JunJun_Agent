@@ -262,6 +262,25 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     _store_outbound(session, text)
 
     # ---- 回复后处理：分条 + 错别字 + 引用 ----
+    # MCP 长结果特殊处理：被包装为 forward JSON 的不走分条，直接合并转发发出
+    if text.strip().startswith('{"type": "forward"'):
+        try:
+            import json
+            fwd = json.loads(text)
+            from junjun_core.gateway.router import get_gateway
+            gateway = get_gateway()
+            await gateway.send_reply(ReplySet(
+                platform=session.platform,
+                target_user_id=meta.user_id if not session.is_group else None,
+                target_group_id=session.group_id,
+                segments=[ReplySegment(type="text", data=fwd.get("text", "")),
+                          ReplySegment(type="forward", data=json.dumps(fwd.get("nodes", []), ensure_ascii=False))],
+                should_reply=True,
+            ))
+            return
+        except Exception as e:
+            logger.warning(f"forward 消息解析失败，降级分条: {e}")
+
     outbound = process_response(text)
     if not outbound:
         return
