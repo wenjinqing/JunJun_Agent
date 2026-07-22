@@ -122,4 +122,12 @@ class JunJunAgent:
         if isinstance(text, list):  # 部分模型返回 content blocks
             text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
         text = (text or "").strip()
+
+        # 防御：LLM 自白式思考泄漏（deepseek 在 function calling 后常混入推理）
+        # 有 </think> 则只取其后；只有 <think> 没 </think> 则整个不可信
+        if "</think>" in text:
+            text = text.split("</think>")[-1].strip()
+        elif "<think>" in text:
+            logger.warning(f"[{self.session.chat_id}] 未闭合 <think> 思考链泄漏，本轮沉默")
+            return None
         return text or None

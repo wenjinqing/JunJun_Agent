@@ -13,7 +13,10 @@ from junjun_core.config import get_global_config
 from junjun_agent.postprocess.splitter import split_response, typing_delay
 from junjun_agent.postprocess.typo import ChineseTypoGenerator
 
-_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.S)
+# 完整 <think>...</think> 块剥离
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.S)
+# 无闭合标签的尾部思考链（LLM 没吐 </think> 的情况）——从 <think> 到文本末尾全砍
+_THINK_TAIL_RE = re.compile(r"<think>.*$", re.S)
 _NICKNAME_PREFIX_RE = re.compile(r"^\s*(你|君君)\s*[:：]\s*")
 
 _typo_gen: Optional[ChineseTypoGenerator] = None
@@ -46,7 +49,8 @@ def process_response(text: str, *, rand: Optional[random.Random] = None) -> List
     typo_cfg = raw.get("chinese_typo", {})
     rng = rand or random
 
-    text = _THINK_RE.sub("", text or "")
+    text = _THINK_BLOCK_RE.sub("", text or "")
+    text = _THINK_TAIL_RE.sub("", text)
     text = _NICKNAME_PREFIX_RE.sub("", text.strip())
     if not text:
         return []
