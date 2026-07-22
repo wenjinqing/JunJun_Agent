@@ -1,0 +1,7 @@
+{
+  "name": "pixiv_novel",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.pixiv_novel.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

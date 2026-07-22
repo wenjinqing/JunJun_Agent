@@ -1,0 +1,20 @@
+# pixiv_novel 插件配置模板（入库模板；复制为 config.toml 后填真实值）
+# Cookie 不放这里：从 .env 的 PIXIV_COOKIE 读取（PHPSESSID=xxx 或整串 cookie 均可）
+
+[auth]
+# 允许使用 /novel 命令的 QQ 白名单；留空列表 = 所有人可用（不推荐，涉及内容管控）
+allow_qq_list = ["你的QQ号"]
+
+[features]
+# 每用户命令冷却（秒）
+cooldown_seconds = 60
+# Pixiv AJAX 请求超时（秒）
+api_timeout = 30
+# 抓取系列时最多下载的章节数
+max_chapters_per_series = 50
+# txt 文件保存目录（相对项目根目录，自动创建）
+save_dir = "data/pixiv_novel"
+
+[network]
+# HTTP 代理（如 http://127.0.0.1:7890），留空不使用代理
+proxy = ""
