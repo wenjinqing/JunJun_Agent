@@ -53,6 +53,23 @@ class CommandContext:
             should_reply=True,
         ))
 
+    async def send_forward(self, title: str, content: str, *, nickname: str = "君君") -> None:
+        """长内容合并转发（防刷屏）。单条 >200 字或含多行列表时优先用此。
+
+        content 为完整文本（可多行），adapter 打包为 OneBot 合并转发发出。
+        """
+        import json
+        nodes = [{
+            "type": "node",
+            "data": {
+                "name": nickname,
+                "uin": str(getattr(self.session, "bot_user_id", "") or "10000001"),
+                "content": [{"type": "text", "data": {"text": content}}],
+            },
+        }]
+        await self.send([ReplySegment(type="text", data=f"📋 {title}"),
+                        ReplySegment(type="forward", data=json.dumps(nodes, ensure_ascii=False))])
+
 
 # handler: async (CommandContext) -> Optional[str]；返回 str 自动作为文本回复
 Handler = Callable[[CommandContext], Awaitable[Optional[str]]]

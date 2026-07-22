@@ -1,11 +1,16 @@
 """回复分割器：长回复拆多条气泡（拟人化核心）。
 
 对齐原 [response_splitter] 语义：
-- 按标点（，,。;！？!? 换行）分割，句末标点必切，逗号类概率性合并
+- 按标点（，,。;！？!? 换行 ——）分割，句末标点必切，逗号类概率性合并
 - max_sentence_num 上限，超出按 enable_overflow_return_all 合并整发
 - max_chars_per_message 单条硬上限
 - 颜文字保护（可关）
 - 去除包裹中文的括号内容（舞台说明）
+
+2026-07-22 调整（用户反馈拆太碎 + 符号丢失）：
+- 分隔符**保留**在句子尾部（不再 strip 掉，保留原文标点）
+- 逗号合并概率上调（短 0.8/中 0.5/长 0.25），句子自然变长
+- max_sentence_num 默认 5（原 10，防刷屏）
 """
 
 import random
@@ -49,31 +54,35 @@ def _strip_stage_directions(text: str, protect_kaomoji: bool) -> str:
 
 
 def _split_sentences(text: str, rng) -> List[str]:
-    """按标点切句：句末标点必切，逗号/分号概率性合并（短文本更倾向合并）。"""
+    """按标点切句：句末标点必切，逗号/分号概率性合并（短文本更倾向合并）。
+
+    分隔符保留在句子尾部（不 strip），原文标点完整保留。
+    """
     parts = _SPLIT_RE.split(text)
-    merge_p = 0.6 if len(text) < 60 else (0.35 if len(text) < 150 else 0.15)
+    merge_p = 0.8 if len(text) < 60 else (0.5 if len(text) < 150 else 0.25)
 
     sentences: List[str] = []
     buf = ""
     for i in range(0, len(parts), 2):
-        seg = parts[i].strip()
+        seg = parts[i]
         sep = parts[i + 1] if i + 1 < len(parts) else ""
         if seg:
             buf += seg
         if not buf:
             continue
         if sep in _HARD_STOPS or not sep:
-            sentences.append(buf)
+            # 句末标点保留在句尾（不再 strip）
+            sentences.append(buf + (sep if sep else ""))
             buf = ""
         elif rng.random() > merge_p:
-            # 逗号处切开，丢掉句中分隔符（气泡感）
-            sentences.append(buf)
+            # 逗号处切开：分隔符保留（不丢符号）
+            sentences.append(buf + sep)
             buf = ""
         else:
-            # 合并：保留逗号连接
-            buf += "，"
+            # 合并：逗号连接，不重复加
+            buf += sep if sep else "，"
     if buf:
-        sentences.append(buf.rstrip("，"))
+        sentences.append(buf)
     return [s for s in (x.strip() for x in sentences) if s]
 
 
