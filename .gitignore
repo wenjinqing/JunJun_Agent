@@ -226,3 +226,6 @@ data/
 .idea/
 .vscode/
 config/bot_config.toml
+
+# pixiv_novel 插件真实配置（含 QQ 白名单，不入库）
+junjun_skills/plugins/pixiv_novel/config.toml
