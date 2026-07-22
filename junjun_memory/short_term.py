@@ -40,15 +40,15 @@ class ShortTermMemory:
             self.entries = self.entries[-self.max_size:]
 
     def render(self, limit: Optional[int] = None, *, mark_latest: bool = False,
-               include_bot: bool = False) -> str:
+               include_bot: bool = True) -> str:
         """渲染为对话文本（供 prompt）。群聊格式 `昵称: 内容`。
 
         管理员消息带「(管理员)」系统标记——按真实 user_id 判定，聊天内容无法伪造，
         是 LLM 识别管理员指令的锚点（配合 persona 安全段）。
 
         mark_latest: True 时最后一条 user 消息前缀「【最新】」——帮模型聚焦。
-        include_bot: False 时 bot 自己的回复不进 context（防复读根因：
-        模型把 bot 历史回复当成「自己该接续的话」）。True 仅调试/摘要场景用。
+        include_bot: True 时 bot 回复进 context（记忆效果），但前缀「你(历史):」
+        明确标记为「已发生的历史输出」而非「待接续的话」（防复读关键）。
 
         边界感知（LangChain trim_messages 语义）：永远以 user 消息开头，
         不从 bot 回复中间截断——模型不会把被截断的历史当成待续写文本。
@@ -65,14 +65,14 @@ class ShortTermMemory:
                     break
         # 边界感知：跳过开头的 bot 消息（不从 bot 回复中间截断）
         start = 0
-        if not include_bot:
-            while start < len(entries) and entries[start].role == "bot":
-                start += 1
+        while start < len(entries) and entries[start].role == "bot":
+            start += 1
         for i, e in enumerate(entries[start:], start=start):
             if e.role == "bot":
                 if include_bot:
-                    lines.append(f"你: {e.text}")
-                # 默认不进 context（防复读）
+                    # 标记为「历史输出」而非「待接续的话」（防复读关键）
+                    lines.append(f"你(历史): {e.text}")
+                # 默认不进 context（include_bot=False 时）
             else:
                 prefix = f"{e.nickname or e.user_id}"
                 if is_admin(e.user_id):
