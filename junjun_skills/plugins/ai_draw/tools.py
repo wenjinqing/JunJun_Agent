@@ -227,7 +227,10 @@ async def draw_cmd(ctx):
 @tool
 async def ai_draw(prompt: str) -> str:
     """根据描述 AI 生成图片。当用户要求画图、画个xxx、帮我画、来张图、需要配图时使用。
-    prompt 为画面描述（如「猫娘少女」「星空下的城市」）。"""
+    prompt 为画面描述（如「猫娘少女」「星空下的城市」）。
+
+    返回图片直链 URL（http/https 开头）。调用后 agent 应把 URL 作为 image 段发送，
+    不要把 URL 当文本复述给用户。"""
     prompt = (prompt or "").strip()
     if not prompt:
         return "没有描述词，画不了。"
@@ -238,7 +241,8 @@ async def ai_draw(prompt: str) -> str:
     url, _ = await _draw_pipeline(prompt)
     if not url:
         return "画图失败了，稍后再试。"
-    return url
+    # 特殊标记：agent 识别后转 image 段发送，不复述 URL
+    return f"[IMAGE:{url}]"
 
 
 TOOLS = [ai_draw]

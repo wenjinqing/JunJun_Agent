@@ -39,16 +39,26 @@ class ShortTermMemory:
         if len(self.entries) > self.max_size:
             self.entries = self.entries[-self.max_size:]
 
-    def render(self, limit: Optional[int] = None) -> str:
+    def render(self, limit: Optional[int] = None, *, mark_latest: bool = False) -> str:
         """渲染为对话文本（供 prompt）。群聊格式 `昵称: 内容`。
 
         管理员消息带「(管理员)」系统标记——按真实 user_id 判定，聊天内容无法伪造，
         是 LLM 识别管理员指令的锚点（配合 persona 安全段）。
+
+        mark_latest: True 时最后一条 user 消息前缀「【最新】」——帮模型聚焦，
+        防止把上下文里的旧话题当成自己该接续的话（串台修复）。
         """
         from junjun_core.security import is_admin
         entries = self.entries[-limit:] if limit else self.entries
         lines = []
-        for e in entries:
+        # 找最后一条 user 消息的下标（mark_latest 用）
+        last_user_idx = -1
+        if mark_latest:
+            for i in range(len(entries) - 1, -1, -1):
+                if entries[i].role == "user":
+                    last_user_idx = i
+                    break
+        for i, e in enumerate(entries):
             if e.role == "bot":
                 lines.append(f"你: {e.text}")
             else:
@@ -56,6 +66,8 @@ class ShortTermMemory:
                 if is_admin(e.user_id):
                     prefix += "(管理员)"
                 mark = " [@你]" if e.at_bot else ""
+                if mark_latest and i == last_user_idx:
+                    prefix = f"【最新】{prefix}"
                 lines.append(f"{prefix}{mark}: {e.text}")
         return "\n".join(lines)
 
