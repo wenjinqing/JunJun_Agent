@@ -382,8 +382,8 @@ scheduler.add(ScheduledTask("topic_finder", topic_finder_tick, interval=60))
 
 # ---------------------------------------------------------------- 调试命令
 
-@register_command("topic_test", plugin="topic_finder",
-                  description="立即生成并发一条话题（调试）")
+@register_command("topic_test", plugin="topic_finder", admin_only=True,
+                  description="立即生成并发一条话题（调试用，触发 LLM 生成，管理员专用）")
 async def topic_test_cmd(ctx):
     cfg = _cfg()
     materials = await _gather_materials(cfg)

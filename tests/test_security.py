@@ -213,3 +213,58 @@ class TestMcpEnvSubstitution:
                      'env = { KEY = "${NOPE_VAR}" }\n', encoding="utf-8")
         monkeypatch.setattr(mc, "MCP_CONFIG", p)
         assert mc.load_server_configs()["x"]["env"]["KEY"] == ""
+
+
+class TestToolAdminGate:
+    """registry admin_only 工具权限门（2026-07-22 权限治理）。"""
+
+    @pytest.mark.asyncio
+    async def test_async_tool_gated(self, monkeypatch):
+        monkeypatch.setenv("ADMIN_QQ", "10001")
+        reports = []
+        monkeypatch.setattr("junjun_core.security.report_violation",
+                            lambda *a, **k: reports.append(a))
+        from langchain_core.tools import tool
+        from junjun_core.security import current_user_id
+        from junjun_skills import registry
+
+        @tool
+        async def danger_op(x: str) -> str:
+            """危险操作"""
+            return f"executed {x}"
+
+        registry.clear()
+        registry.register(danger_op, admin_only=True)
+
+        current_user_id.set("12345")
+        out = await registry._registry["danger_op"].ainvoke({"x": "1"})
+        assert "权限不足" in out and reports
+        current_user_id.set("10001")
+        out = await registry._registry["danger_op"].ainvoke({"x": "1"})
+        assert out == "executed 1"
+        current_user_id.set("")
+        registry.clear()
+
+    def test_sync_tool_gated(self, monkeypatch):
+        monkeypatch.setenv("ADMIN_QQ", "10001")
+        from langchain_core.tools import tool
+        from junjun_core.security import current_user_id
+        from junjun_skills import registry
+
+        @tool
+        def danger_sync(x: str) -> str:
+            """危险同步操作"""
+            return f"did {x}"
+
+        registry.clear()
+        registry.register(danger_sync, admin_only=True)
+        current_user_id.set("12345")
+        assert "权限不足" in registry._registry["danger_sync"].invoke({"x": "y"})
+        current_user_id.set("10001")
+        assert registry._registry["danger_sync"].invoke({"x": "y"}) == "did y"
+        current_user_id.set("")
+        registry.clear()
+
+    def test_mcp_admin_tool_set(self):
+        from junjun_mcp_client.client import _ADMIN_TOOLS
+        assert "apply_relationship_penalty" in _ADMIN_TOOLS
