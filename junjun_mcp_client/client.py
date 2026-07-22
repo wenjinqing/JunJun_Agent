@@ -1,11 +1,12 @@
 """MCP 客户端：连接多 server，工具转 LangChain BaseTool 注入 registry。
 
 - config/mcp_servers.toml 声明 server（command/args/cwd/env，stdio 传输）
-- 启动逐个连接（10s 超时），失败降级跳过不阻塞
+- 启动逐个连接（60s 超时），失败降级跳过不阻塞
 - 工具命名空间 mcp_<server>_<tool>，与内置 skill 冲突检测由 registry 重名报错承担
 """
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Dict, List
 
@@ -14,6 +15,11 @@ import tomlkit
 from junjun_core.observability import get_logger
 
 logger = get_logger("mcp.client")
+
+# mcp SDK 的 stdout_reader 对非 JSON 行打 logger.exception——
+# 某些第三方 server（bilibili-mcp-js 等）会把数据 print 到 stdout 污染协议流。
+# 解析失败静默（数据不会丢，只是 server 自己的日志噪音），其他错误仍 WARN。
+logging.getLogger("mcp.client.stdio").setLevel(logging.CRITICAL)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MCP_CONFIG = PROJECT_ROOT / "config" / "mcp_servers.toml"
