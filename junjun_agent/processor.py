@@ -242,8 +242,15 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     # ---- L3 主 Agent（Langfuse span：漏斗决策在后台可见）----
     from junjun_core.observability import lf
     logger.info(f"[{session.chat_id}] 进入 L3 决策 [trace={trace_id}]")
+    # system prompt 快照写 span metadata——Langfuse UI 渲染 bug 时 WebUI 日志页可直接查
+    from junjun_agent.persona import build_system_prompt
+    _prompt_snapshot = build_system_prompt(
+        is_group=session.is_group, latest_text=meta.text,
+        mood_block=mood_block, memory_block=memory_block, relation_block=relation_block,
+    )
     with lf.start_span(name=f"agent.{session.chat_id}", metadata={
         "trace_id": trace_id, "l1_result": l1.value, "at_bot": meta.at_bot,
+        "system_prompt": _prompt_snapshot[:2000],  # 截断防爆 metadata
     }) as _span:
         text = await session.agent.process(
             session.memory.render(), callbacks=callbacks, latest_text=meta.text,
