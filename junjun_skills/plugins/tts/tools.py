@@ -47,7 +47,20 @@ _BACKEND_NAMES = {"doubao": "豆包", "siliconflow": "硅基流动",
                   "gsv2p": "GSV2P", "sovits": "GPT-SoVITS"}
 
 # 各后端默认音色常量（可用 env 覆盖；豆包预设表见 ja_tts.VOICE_PRESETS）
-_DOUBAO_DEFAULT_SPEAKER = "zh_female_vv_uranus_bigtts"   # 旧 config.toml [doubao].speaker
+# 豆包音色按语言路由（2026-07-22 用户指定）：
+#   日语文本 -> ja_female_bv521_uranus_bigtts（原生日语，仅支持日语）
+#   中文/其他 -> zh_female_vv_uranus_bigtts
+_DOUBAO_SPEAKER_JA = "ja_female_bv521_uranus_bigtts"
+_DOUBAO_SPEAKER_ZH = "zh_female_vv_uranus_bigtts"
+_KANA_RE = re.compile(r"[぀-ヿ]")  # 平假名/片假名
+
+
+def _doubao_speaker_for(text: str) -> str:
+    """按文本语言选豆包音色；TTS_DOUBAO_SPEAKER env 可强制覆盖。"""
+    override = os.environ.get("TTS_DOUBAO_SPEAKER", "").strip()
+    if override:
+        return override
+    return _DOUBAO_SPEAKER_JA if _KANA_RE.search(text) else _DOUBAO_SPEAKER_ZH
 _SF_API_BASE = "https://api.siliconflow.cn/v1"
 _SF_MODEL = "fnlp/MOSS-TTSD-v0.5"
 _SF_DEFAULT_VOICE = "fnlp/MOSS-TTSD-v0.5:claire"          # 旧 config.toml [siliconflow]
@@ -65,7 +78,7 @@ async def synthesize_doubao(text: str) -> bytes | None:
     api_key = os.environ.get("DOUBAO_TTS_API_KEY", "").strip()
     if not api_key:
         return None
-    speaker = os.environ.get("TTS_DOUBAO_SPEAKER", "").strip() or _DOUBAO_DEFAULT_SPEAKER
+    speaker = _doubao_speaker_for(text)
     try:
         # 懒加载避免 import 本模块时连带注册 ja_tts 命令
         from junjun_skills.plugins.ja_tts.tools import synthesize as _ja_synthesize

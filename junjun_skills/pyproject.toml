@@ -9,7 +9,6 @@ dependencies = [
     "beautifulsoup4",
     "aiohttp",
     "pydantic",
-    "pykakasi",
     "websockets",
     "Pillow",
     "feedparser"
