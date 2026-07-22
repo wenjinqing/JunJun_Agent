@@ -18,8 +18,8 @@ _KAOMOJI_RE = re.compile(
 )
 # 包裹中文的括号内容（舞台说明如「（摸摸头）」）
 _CN_PAREN_RE = re.compile(r"[(\[（](?=[^)\]）]*[一-鿿])[^)\]）]*[)\]）]")
-_SPLIT_RE = re.compile(r"([，,。;；！!？?\n])")
-_HARD_STOPS = frozenset("。！!？?\n")
+_SPLIT_RE = re.compile(r"([，,。;；！!？?——\n])")
+_HARD_STOPS = frozenset("。！!？?——\n")
 
 
 def _protect_kaomoji(text: str):
