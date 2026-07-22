@@ -49,13 +49,13 @@ def _admin_refusal(tool_name: str, args: tuple, kwargs: dict) -> str:
 
 def _wrap_admin_gate(skill: BaseTool) -> BaseTool:
     """给工具包管理员权限门（运行时按真实发送者 QQ 判定，LLM 不可伪造）。"""
-    from junjun_core.security import current_user_id, is_admin
+    from junjun_core.security import is_admin_privileged
     name = skill.name
     if getattr(skill, "coroutine", None) is not None:
         original = skill.coroutine
 
         async def gated(*args, _orig=original, **kwargs):
-            if not is_admin(current_user_id.get()):
+            if not is_admin_privileged():
                 return _admin_refusal(name, args, kwargs)
             return await _orig(*args, **kwargs)
         skill.coroutine = gated
@@ -63,7 +63,7 @@ def _wrap_admin_gate(skill: BaseTool) -> BaseTool:
         original_sync = skill.func
 
         def gated_sync(*args, _orig=original_sync, **kwargs):
-            if not is_admin(current_user_id.get()):
+            if not is_admin_privileged():
                 return _admin_refusal(name, args, kwargs)
             return _orig(*args, **kwargs)
         skill.func = gated_sync

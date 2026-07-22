@@ -27,11 +27,11 @@ def query_cross_scene_chat(user_name: str = "", scene_type: str = "",
         keyword: 内容关键词（空=不限）
         limit: 最多返回条数，默认 10（上限 30）
     """
-    from junjun_core.security import current_user_id, is_admin, report_violation
+    from junjun_core.security import current_user_id, is_admin_privileged, report_violation
     from junjun_skills.builtin.memory_skills import current_chat_id
 
     cur_chat = current_chat_id.get()
-    if not is_admin(current_user_id.get()):
+    if not is_admin_privileged():
         report_violation("跨会话查询聊天记录", current_user_id.get(), "", cur_chat,
                          f"user={user_name} scene={scene_type} kw={keyword}")
         return "查询被拒绝：跨会话聊天记录只有管理员能查（已通知管理员）。"

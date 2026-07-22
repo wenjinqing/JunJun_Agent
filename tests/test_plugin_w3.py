@@ -70,8 +70,10 @@ class TestChatFrequency:
     @pytest.mark.asyncio
     async def test_set_admin_and_clamp(self, _fake_bot_config, monkeypatch):
         monkeypatch.setenv("ADMIN_QQ", "10001")
+        from junjun_core.security import set_caller
         import junjun_skills.plugins.chat_frequency.tools as cf
         from junjun_agent.funnel.frequency import frequency_control
+        set_caller("10001", at_bot=True, is_group=True)
         out = await cf.chat_cmd(_ctx("/chat talk_frequency 2.5", user_id="10001"))
         assert "2.50" in out
         assert frequency_control.state("qq:999:group").adjust_factor == 2.5
@@ -96,10 +98,10 @@ class TestCrossScene:
         reports = []
         monkeypatch.setattr("junjun_core.security.report_violation",
                             lambda *a, **k: reports.append(a))
-        from junjun_core.security import current_user_id
+        from junjun_core.security import set_caller
         from junjun_skills.builtin.memory_skills import current_chat_id
         from junjun_skills.plugins.cross_scene.tools import query_cross_scene_chat
-        current_user_id.set("12345")
+        set_caller("12345", at_bot=True, is_group=True)
         current_chat_id.set("qq:999:group")
         out = query_cross_scene_chat.invoke({"user_name": "乙"})
         assert "拒绝" in out and reports
@@ -115,10 +117,10 @@ class TestCrossScene:
                               message_id="a", processed_plain_text="本会话的话", bot_id="1")
             m.Messages.create(chat_id="qq:888:group", user_nickname="乙", time=2.0,
                               message_id="b", processed_plain_text="别群聊火锅", bot_id="1")
-            from junjun_core.security import current_user_id
+            from junjun_core.security import set_caller
             from junjun_skills.builtin.memory_skills import current_chat_id
             from junjun_skills.plugins.cross_scene.tools import query_cross_scene_chat
-            current_user_id.set("10001")
+            set_caller("10001", at_bot=True, is_group=True)
             current_chat_id.set("qq:999:group")
             out = query_cross_scene_chat.invoke({"keyword": "火锅"})
             assert "别群聊火锅" in out and "本会话的话" not in out

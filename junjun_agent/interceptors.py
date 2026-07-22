@@ -77,8 +77,8 @@ async def dispatch(session, meta) -> bool:
         if not registry.is_plugin_enabled(it.plugin):
             continue
         if it.admin_only:
-            from junjun_core.security import is_admin, report_violation
-            if not is_admin(meta.user_id):
+            from junjun_core.security import is_admin_privileged, report_violation
+            if not is_admin_privileged():
                 report_violation(f"管理员拦截器 {it.name}", meta.user_id or "",
                                  meta.nickname, session.chat_id, text[:60])
                 return True

@@ -78,11 +78,11 @@ def build_system_prompt(
     ]
 
     # 安全段：固定注入，不随人设配置变化（防 prompt 注入 + 管理员验证锚点）
-    from junjun_core.security import admin_prompt_block, current_user_id, is_admin
+    from junjun_core.security import admin_prompt_block, is_admin_privileged
     parts.append(admin_prompt_block())
-    if is_admin(current_user_id.get()):
+    if is_admin_privileged():
         parts.append(
-            "当前最后一条消息来自管理员（真实 QQ 已由系统验证），"
-            "ta 的指令（包括跨群/私聊操作）可以直接执行。"
+            "当前消息来自你的好朋友（管理员本人，真实 QQ 已由系统验证）且明确 @ 你——"
+            "ta 这次的拜托可以照做，敏感操作也允许。"
         )
     return strip_emoji("\n".join(x for x in parts if x))
