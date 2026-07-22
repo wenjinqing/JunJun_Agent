@@ -17,6 +17,8 @@ from junjun_core.observability import get_logger
 logger = get_logger("memory.embedding")
 
 EMBED_DIM = 1024
+# 兼容旧引用（long_term.py 索引头校验用）——实际模型名从 client._model 读
+EMBED_MODEL = "BAAI/bge-m3"
 
 
 class EmbeddingClient:
