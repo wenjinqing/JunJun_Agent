@@ -24,21 +24,33 @@ _RESULT_MAX_CHARS = 2000
 
 
 def load_server_configs() -> Dict[str, dict]:
-    """读 mcp_servers.toml。文件缺失返回空。"""
+    """读 mcp_servers.toml。文件缺失返回空。
+
+    env 值支持 "${VAR}" 占位符——从进程环境变量（.env）替换，
+    密钥不落 toml（该文件入库）。
+    """
     if not MCP_CONFIG.exists():
         return {}
+    import os
     with open(MCP_CONFIG, "r", encoding="utf-8") as f:
         data = tomlkit.parse(f.read()).unwrap()
+
+    def _sub(value: str) -> str:
+        if value.startswith("${") and value.endswith("}"):
+            return os.environ.get(value[2:-1], "")
+        return value
+
     servers = {}
     for name, cfg in data.get("servers", {}).items():
         if not cfg.get("enable", True):
             continue
+        raw_env = dict(cfg.get("env", {}))
         servers[name] = {
             "transport": "stdio",
             "command": str(cfg["command"]).replace("${REPO_ROOT}", str(PROJECT_ROOT)),
             "args": [str(a).replace("${REPO_ROOT}", str(PROJECT_ROOT)) for a in cfg.get("args", [])],
             "cwd": str(cfg.get("cwd", "")).replace("${REPO_ROOT}", str(PROJECT_ROOT)) or None,
-            "env": dict(cfg.get("env", {})) or None,
+            "env": {k: _sub(str(v)) for k, v in raw_env.items()} or None,
         }
     return servers
 

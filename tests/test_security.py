@@ -188,3 +188,28 @@ class TestReflectorAdmin:
             receipt = r.handle_operator_reply("qq:10001:private", "删除 1")
             assert receipt and "删" in receipt
             assert m.Expression.select().count() == 0
+
+
+class TestMcpEnvSubstitution:
+    def test_env_var_placeholder(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MY_SECRET", "s3cret")
+        import junjun_mcp_client.client as mc
+        p = tmp_path / "mcp_servers.toml"
+        p.write_text(
+            '[servers.x]\nenable = true\ncommand = "cmd"\nargs = ["/c", "npx", "-y", "pkg"]\n'
+            'env = { KEY = "${MY_SECRET}", LITERAL = "abc" }\n'
+            '[servers.off]\nenable = false\ncommand = "cmd"\nargs = []\n',
+            encoding="utf-8")
+        monkeypatch.setattr(mc, "MCP_CONFIG", p)
+        cfgs = mc.load_server_configs()
+        assert cfgs["x"]["env"] == {"KEY": "s3cret", "LITERAL": "abc"}
+        assert "off" not in cfgs
+
+    def test_missing_env_var_becomes_empty(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("NOPE_VAR", raising=False)
+        import junjun_mcp_client.client as mc
+        p = tmp_path / "mcp_servers.toml"
+        p.write_text('[servers.x]\nenable = true\ncommand = "cmd"\nargs = []\n'
+                     'env = { KEY = "${NOPE_VAR}" }\n', encoding="utf-8")
+        monkeypatch.setattr(mc, "MCP_CONFIG", p)
+        assert mc.load_server_configs()["x"]["env"]["KEY"] == ""
