@@ -91,9 +91,32 @@ class JunJunAgent:
         )
         if addressed:
             system += "\n最后一条消息明确 @ 你或直呼你的名字，你必须正面回应，禁止调用 do_not_reply。"
+        # context_text 包含历史消息（可能含最新消息）。把最新消息剥离单独作为
+        # HumanMessage 传入，context 只作为背景参考——模型明确知道「这是背景，这是你要回的」。
+        context_lines = context_text.strip().split("\n") if context_text.strip() else []
+        # 最后一条非 bot 消息（user 消息）作为最新指令
+        latest_msg = ""
+        background_lines = []
+        for line in reversed(context_lines):
+            if not latest_msg and not line.startswith("你: "):
+                latest_msg = line
+            else:
+                background_lines.insert(0, line)
+        background = "\n".join(background_lines[-10:])  # 背景只留最近 10 条
+
+        messages = [SystemMessage(content=system)]
+        if background:
+            messages.append(HumanMessage(content=f"[群聊背景，仅供参考]\n{background}"))
+        if latest_msg:
+            # 去掉「【最新】」前缀（processor 加的标记），还原原始消息
+            clean_latest = latest_msg.replace("【最新】", "").strip()
+            messages.append(HumanMessage(content=f"[你要回复的消息]\n{clean_latest}"))
+        else:
+            messages.append(HumanMessage(content=context_text))
+
         try:
             result = await self._agent.ainvoke(
-                {"messages": [SystemMessage(content=system), HumanMessage(content=context_text)]},
+                {"messages": messages},
                 config={
                     "callbacks": callbacks or [],
                     "recursion_limit": 2 * max_iter + 1,
