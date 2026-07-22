@@ -183,7 +183,7 @@ class TestTool:
     @pytest.mark.asyncio
     async def test_tool_returns_url(self, _plugin):
         out = await _plugin.ai_draw.ainvoke({"prompt": "星空下的城市"})
-        assert out == "http://x/draw.png"
+        assert out == "[IMAGE:http://x/draw.png]"  # 特殊标记：processor 转 image 段
 
     @pytest.mark.asyncio
     async def test_tool_rejects_minor_nsfw(self, _plugin):

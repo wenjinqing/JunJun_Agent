@@ -257,7 +257,9 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         },
     ) as _span:
         text = await session.agent.process(
-            session.memory.render(), callbacks=callbacks, latest_text=meta.text,
+            # 只给最近 10 条上下文 + 标记最后一条，防串台
+            session.memory.render(limit=10, mark_latest=True),
+            callbacks=callbacks, latest_text=meta.text,
             addressed=(l1 is L1Result.TO_AGENT),
             memory_block=memory_block, relation_block=relation_block,
             mood_block=mood_block, trace_id=trace_id,
@@ -275,6 +277,38 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     _store_outbound(session, text)
 
     # ---- 回复后处理：分条 + 错别字 + 引用 ----
+    # 特殊标记：[IMAGE:url] -> 提取为 image 段单独发送（ai_draw 等工具产出）
+    import re as _re
+    _img_match = _re.search(r"\[IMAGE:(https?://[^\]]+)\]", text)
+    if _img_match:
+        img_url = _img_match.group(1)
+        # 文本部分去掉标记，图片单独发
+        clean_text = text.replace(_img_match.group(0), "").strip()
+        from junjun_core.gateway.router import get_gateway
+        gateway = get_gateway()
+        if clean_text:
+            outbound = process_response(clean_text)
+            for i, msg in enumerate(outbound):
+                if msg.delay > 0:
+                    await asyncio.sleep(msg.delay)
+                await gateway.send_reply(ReplySet(
+                    platform=session.platform,
+                    target_user_id=meta.user_id if not session.is_group else None,
+                    target_group_id=session.group_id,
+                    segments=[ReplySegment(type="text", data=msg.text)],
+                    should_reply=True,
+                    reply_to_message_id=quote_id if i == 0 else None,
+                ))
+        await gateway.send_reply(ReplySet(
+            platform=session.platform,
+            target_user_id=meta.user_id if not session.is_group else None,
+            target_group_id=session.group_id,
+            segments=[ReplySegment(type="image", data=img_url)],
+            should_reply=True,
+        ))
+        logger.info(f"[{session.chat_id}] 图片已发送: {img_url[:60]}")
+        return
+
     # MCP 长结果特殊处理：被包装为 forward JSON 的不走分条，直接合并转发发出
     if text.strip().startswith('{"type": "forward"'):
         try:
