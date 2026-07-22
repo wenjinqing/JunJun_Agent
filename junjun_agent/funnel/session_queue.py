@@ -53,19 +53,35 @@ class SessionQueue:
                 logger.warning(f"[{self.chat_id}] 丢弃过期消息（排队 >{_STALE_SECONDS}s）: {meta.text[:40]}")
                 self._queue.task_done()
                 continue
+
+            # 合并：把队列里剩余消息全部 drain 进上下文，只对最新一条触发决策
+            # （预期语义：连发消息合并一次回复，不是逐条触发）
+            drained = []
+            while not self._queue.empty():
+                try:
+                    _, m2, ts2 = self._queue.get_nowait()
+                    self._queue.task_done()
+                    if time.time() - ts2 > _STALE_SECONDS:
+                        logger.warning(f"[{self.chat_id}] 丢弃过期消息（合并窗口内）: {m2.text[:40]}")
+                        continue
+                    drained.append(m2)
+                except asyncio.QueueEmpty:
+                    break
+            if drained:
+                # 最新消息替代原消息（上下文里已包含全部，只回最新一条）
+                meta = drained[-1]
+                logger.debug(f"[{self.chat_id}] 合并 {len(drained)} 条连发消息，只回最新一条")
+
             wait = _timing_gate_wait()
             if wait > 0:
-                # Timing Gate：等连发聚拢，窗口内只评估最新一条；超时强制继续
                 await asyncio.sleep(wait)
-                drained = 0
+                # timing gate 窗口内再 drain 一次（合并逻辑已在上面对最新一条生效）
                 while not self._queue.empty():
-                    _, meta, ts2 = self._queue.get_nowait()
+                    _, m2, ts2 = self._queue.get_nowait()
                     self._queue.task_done()
-                    drained += 1
-                    if time.time() - ts2 > _STALE_SECONDS:
-                        logger.warning(f"[{self.chat_id}] 丢弃过期消息（聚拢窗口内）: {meta.text[:40]}")
-                if drained:
-                    logger.debug(f"[{self.chat_id}] timing gate 聚拢 {drained} 条，只评估最新一条")
+                    if time.time() - ts2 <= _STALE_SECONDS:
+                        meta = m2  # 更新为最新
+
             try:
                 await self._handler(session, meta)
             except Exception as e:
