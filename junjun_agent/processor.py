@@ -248,16 +248,22 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         is_group=session.is_group, latest_text=meta.text,
         mood_block=mood_block, memory_block=memory_block, relation_block=relation_block,
     )
-    with lf.start_span(name=f"agent.{session.chat_id}", metadata={
-        "trace_id": trace_id, "l1_result": l1.value, "at_bot": meta.at_bot,
-        "system_prompt": _prompt_snapshot[:2000],  # 截断防爆 metadata
-    }) as _span:
+    with lf.start_span(
+        name=f"agent.{session.chat_id}",
+        input={"latest_text": meta.text, "context_preview": session.memory.render(limit=5)[:500]},
+        metadata={
+            "trace_id": trace_id, "l1_result": l1.value, "at_bot": meta.at_bot,
+            "system_prompt": _prompt_snapshot[:2000],
+        },
+    ) as _span:
         text = await session.agent.process(
             session.memory.render(), callbacks=callbacks, latest_text=meta.text,
             addressed=(l1 is L1Result.TO_AGENT),
             memory_block=memory_block, relation_block=relation_block,
             mood_block=mood_block, trace_id=trace_id,
         )
+        # span output：回复内容或沉默标记，后台直接可见
+        _span.update(output={"reply": text[:500] if text else None, "silenced": text is None})
         if not text:
             logger.info(f"[{session.chat_id}] L3 沉默 [trace={trace_id}]")
 
