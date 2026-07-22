@@ -74,8 +74,9 @@ async def wife_cmd(ctx):
         except Exception as e:
             logger.warning(f"老婆记录写入失败（不影响本次结果）: {e}")
     from junjun_core.napcat_client import qq_avatar_url
+    # @ 发命令的人（不是抽中的老婆），文本里写老婆名字
     await ctx.send([
-        ReplySegment(type="at", data=record["user_id"]),
+        ReplySegment(type="at", data=ctx.meta.user_id),
         ReplySegment(type="image", data=qq_avatar_url(record["user_id"])),
         ReplySegment(type="text",
                      data=f" 你今天的群老婆是「{record['nickname']}」，好好珍惜～"),
