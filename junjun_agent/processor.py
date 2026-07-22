@@ -239,18 +239,23 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     if expression_block:
         memory_block = f"{memory_block}\n{expression_block}" if memory_block else expression_block
 
-    # ---- L3 主 Agent ----
+    # ---- L3 主 Agent（Langfuse span：漏斗决策在后台可见）----
+    from junjun_core.observability import lf
     logger.info(f"[{session.chat_id}] 进入 L3 决策 [trace={trace_id}]")
-    text = await session.agent.process(
-        session.memory.render(), callbacks=callbacks, latest_text=meta.text,
-        addressed=(l1 is L1Result.TO_AGENT),
-        memory_block=memory_block, relation_block=relation_block,
-        mood_block=mood_block, trace_id=trace_id,
-    )
+    with lf.start_span(name=f"agent.{session.chat_id}", metadata={
+        "trace_id": trace_id, "l1_result": l1.value, "at_bot": meta.at_bot,
+    }) as _span:
+        text = await session.agent.process(
+            session.memory.render(), callbacks=callbacks, latest_text=meta.text,
+            addressed=(l1 is L1Result.TO_AGENT),
+            memory_block=memory_block, relation_block=relation_block,
+            mood_block=mood_block, trace_id=trace_id,
+        )
+        if not text:
+            logger.info(f"[{session.chat_id}] L3 沉默 [trace={trace_id}]")
 
     # 情绪重评（跟随 L3，冷却内跳过；不阻塞发送——先发再评）
     if not text:
-        logger.info(f"[{session.chat_id}] L3 沉默 [trace={trace_id}]")
         return
 
     session.memory.add_bot(text)

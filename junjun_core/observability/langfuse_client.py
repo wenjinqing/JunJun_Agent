@@ -49,11 +49,12 @@ class LangfuseClient:
     def enabled(self) -> bool:
         return self._enabled
 
-    def start_span(self, *a, **k):
+    def start_span(self, name: str, **kwargs):
+        """v3 统一入口：未启用时返回空操作 span。"""
         if not self._enabled:
             return _NoopSpan()
         try:
-            return self._client.start_span(*a, **k)  # type: ignore
+            return self._client.start_as_current_observation(name=name, as_type="span", **kwargs)
         except Exception:
             return _NoopSpan()
 
