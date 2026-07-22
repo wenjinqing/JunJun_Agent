@@ -133,8 +133,8 @@ async def dispatch(session, meta) -> bool:
         return False
 
     if cmd.admin_only:
-        from junjun_core.security import is_admin, report_violation
-        if not is_admin(meta.user_id):
+        from junjun_core.security import is_admin_privileged, report_violation
+        if not is_admin_privileged():
             report_violation(f"管理员命令 /{cmd.name}", meta.user_id or "",
                              meta.nickname, session.chat_id, text[:60])
             ctx = CommandContext(session=session, meta=meta, args=args)

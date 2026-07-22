@@ -206,7 +206,9 @@ class TestAdminGate:
         assert "管理员" in _fake_gateway[0].segments[0].data
         assert reports  # 已上报
 
-        # 管理员可以正常用
+        # 管理员 @bot（权限激活）可以正常用
+        from junjun_core.security import set_caller
+        set_caller("10001", at_bot=True, is_group=True)
         _fake_gateway.clear()
         handled = await commands.dispatch(session, _meta("/emoji list", user_id="10001"))
         assert handled is True

@@ -58,6 +58,15 @@ async def start_gateway():
     return router
 
 
+
+def _nc_connect(uri):
+    """连接 fake NapCat：.env 配了 NAPCAT_TOKEN 就带 Bearer（对齐真实 NapCat）。"""
+    import os
+    token = os.environ.get("NAPCAT_TOKEN", "").strip()
+    if token:
+        return websockets.connect(uri, additional_headers={"Authorization": f"Bearer {token}"})
+    return websockets.connect(uri)
+
 async def start_adapter():
     # 覆盖 adapter 配置到隔离端口
     from junjun_adapter_napcat.config import get_config
@@ -97,7 +106,7 @@ async def main():
     await asyncio.sleep(2)
 
     print("[3] fake NapCat 连入 Adapter ...", flush=True)
-    async with websockets.connect("ws://127.0.0.1:8195") as nc:
+    async with _nc_connect("ws://127.0.0.1:8195") as nc:
         # 发一条群消息，期待 echo 回来
         await nc.send(fake_group_message("hello junjun e2e"))
         try:
@@ -124,7 +133,7 @@ async def main():
     print("[4] 名单过滤：ban_user 消息应被拦截 ...", flush=True)
     from junjun_adapter_napcat.config import get_config
     get_config().chat.ban_user_id = [66666]
-    async with websockets.connect("ws://127.0.0.1:8195") as nc:
+    async with _nc_connect("ws://127.0.0.1:8195") as nc:
         await nc.send(fake_group_message("banned user msg", user_id=66666))
         try:
             raw = await asyncio.wait_for(nc.recv(), timeout=4)

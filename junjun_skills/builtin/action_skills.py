@@ -10,7 +10,7 @@ import time
 
 from langchain_core.tools import tool
 
-from junjun_core.security import current_user_id, is_admin, report_violation
+from junjun_core.security import current_user_id, is_admin_privileged, report_violation
 from junjun_skills.builtin.memory_skills import current_chat_id
 
 
@@ -33,7 +33,7 @@ async def send_message(target_id: str, is_group: bool, text: str) -> str:
         text: 要发送的文字
     """
     cur_chat = current_chat_id.get()
-    if _target_chat_id(target_id, is_group) != cur_chat and not is_admin(current_user_id.get()):
+    if _target_chat_id(target_id, is_group) != cur_chat and not is_admin_privileged():
         report_violation(
             "跨会话发消息", current_user_id.get(), "", cur_chat,
             f"目标 {'群' if is_group else '私聊'} {target_id}，内容: {text[:60]}",

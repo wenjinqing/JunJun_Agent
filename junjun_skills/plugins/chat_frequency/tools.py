@@ -33,8 +33,8 @@ async def chat_cmd(ctx):
         return _show(ctx.session.chat_id)
 
     if sub in ("talk_frequency", "t"):
-        from junjun_core.security import is_admin, report_violation
-        if not is_admin(ctx.meta.user_id):
+        from junjun_core.security import is_admin_privileged, report_violation
+        if not is_admin_privileged():
             report_violation("调整发言频率", ctx.meta.user_id or "", ctx.meta.nickname,
                              ctx.session.chat_id, ctx.args[:60])
             return "调频率只有管理员能操作哦（已通知管理员）。"

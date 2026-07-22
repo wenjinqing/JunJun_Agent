@@ -77,14 +77,23 @@ class TestCommandBus:
         reports = []
         monkeypatch.setattr("junjun_core.security.report_violation",
                             lambda *a, **k: reports.append(a))
+        from junjun_core.security import set_caller
 
         @commands.register_command("purge", plugin="p", admin_only=True)
         async def _cmd(ctx):
             return "done"
 
+        set_caller("12345", at_bot=False, is_group=True)
         assert await commands.dispatch(_session(), _meta("/purge", user_id="12345")) is True
         assert "管理员" in _fake_gateway[0].segments[0].data and reports
+        # 管理员没 @bot：平时=普通群友，同样被拒
         _fake_gateway.clear()
+        set_caller("10001", at_bot=False, is_group=True)
+        assert await commands.dispatch(_session(), _meta("/purge", user_id="10001")) is True
+        assert "管理员" in _fake_gateway[0].segments[0].data
+        # 管理员 @bot：激活权限
+        _fake_gateway.clear()
+        set_caller("10001", at_bot=True, is_group=True)
         assert await commands.dispatch(_session(), _meta("/purge", user_id="10001")) is True
         assert _fake_gateway[0].segments[0].data == "done"
 

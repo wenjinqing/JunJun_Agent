@@ -3,7 +3,7 @@
 import pytest
 
 from junjun_core import security
-from junjun_core.security import current_user_id, is_admin
+from junjun_core.security import is_admin, set_caller
 
 
 @pytest.fixture(autouse=True)
@@ -37,11 +37,13 @@ class TestPromptSecurity:
 
     def test_admin_anchor_line_only_for_admin(self, _fake_bot_config):
         from junjun_agent.persona import build_system_prompt
-        current_user_id.set("12345")
-        assert "来自管理员" not in build_system_prompt(is_group=True)
-        current_user_id.set("10001")
-        assert "来自管理员" in build_system_prompt(is_group=True)
-        current_user_id.set("")
+        set_caller("12345", at_bot=True, is_group=True)
+        assert "你的好朋友（管理员本人" not in build_system_prompt(is_group=True)
+        set_caller("10001", at_bot=False, is_group=True)   # 管理员没 @：平时就是普通群友
+        assert "你的好朋友（管理员本人" not in build_system_prompt(is_group=True)
+        set_caller("10001", at_bot=True, is_group=True)    # @了才激活
+        assert "你的好朋友（管理员本人" in build_system_prompt(is_group=True)
+        set_caller("", at_bot=False, is_group=True)
 
     def test_render_marks_admin_by_real_user_id(self):
         from junjun_memory.short_term import ShortTermMemory
@@ -59,7 +61,7 @@ class TestSendMessageGate:
         from junjun_skills.builtin import action_skills
         from junjun_skills.builtin.memory_skills import current_chat_id
         current_chat_id.set("qq:999:group")
-        current_user_id.set("12345")
+        set_caller("12345", at_bot=True, is_group=True)
 
         reports = []
         monkeypatch.setattr(
@@ -76,7 +78,7 @@ class TestSendMessageGate:
         from junjun_skills.builtin import action_skills
         from junjun_skills.builtin.memory_skills import current_chat_id
         current_chat_id.set("qq:999:group")
-        current_user_id.set("10001")
+        set_caller("10001", at_bot=True, is_group=True)
 
         sent = []
 
@@ -97,7 +99,7 @@ class TestSendMessageGate:
         from junjun_skills.builtin import action_skills
         from junjun_skills.builtin.memory_skills import current_chat_id
         current_chat_id.set("qq:999:group")
-        current_user_id.set("12345")
+        set_caller("12345", at_bot=True, is_group=True)
 
         sent = []
 
@@ -225,7 +227,6 @@ class TestToolAdminGate:
         monkeypatch.setattr("junjun_core.security.report_violation",
                             lambda *a, **k: reports.append(a))
         from langchain_core.tools import tool
-        from junjun_core.security import current_user_id
         from junjun_skills import registry
 
         @tool
@@ -236,19 +237,18 @@ class TestToolAdminGate:
         registry.clear()
         registry.register(danger_op, admin_only=True)
 
-        current_user_id.set("12345")
+        set_caller("12345", at_bot=True, is_group=True)
         out = await registry._registry["danger_op"].ainvoke({"x": "1"})
         assert "权限不足" in out and reports
-        current_user_id.set("10001")
+        set_caller("10001", at_bot=True, is_group=True)
         out = await registry._registry["danger_op"].ainvoke({"x": "1"})
         assert out == "executed 1"
-        current_user_id.set("")
+        set_caller("", at_bot=False, is_group=True)
         registry.clear()
 
     def test_sync_tool_gated(self, monkeypatch):
         monkeypatch.setenv("ADMIN_QQ", "10001")
         from langchain_core.tools import tool
-        from junjun_core.security import current_user_id
         from junjun_skills import registry
 
         @tool
@@ -258,11 +258,11 @@ class TestToolAdminGate:
 
         registry.clear()
         registry.register(danger_sync, admin_only=True)
-        current_user_id.set("12345")
+        set_caller("12345", at_bot=True, is_group=True)
         assert "权限不足" in registry._registry["danger_sync"].invoke({"x": "y"})
-        current_user_id.set("10001")
+        set_caller("10001", at_bot=True, is_group=True)
         assert registry._registry["danger_sync"].invoke({"x": "y"}) == "did y"
-        current_user_id.set("")
+        set_caller("", at_bot=False, is_group=True)
         registry.clear()
 
     def test_mcp_admin_tool_set(self):
