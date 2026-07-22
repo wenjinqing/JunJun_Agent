@@ -1,0 +1,90 @@
+{
+  "url": "https://api.github.com/repos/langchain-ai/langchainjs/issues/10883",
+  "repository_url": "https://api.github.com/repos/langchain-ai/langchainjs",
+  "labels_url": "https://api.github.com/repos/langchain-ai/langchainjs/issues/10883/labels{/name}",
+  "comments_url": "https://api.github.com/repos/langchain-ai/langchainjs/issues/10883/comments",
+  "events_url": "https://api.github.com/repos/langchain-ai/langchainjs/issues/10883/events",
+  "html_url": "https://github.com/langchain-ai/langchainjs/issues/10883",
+  "id": 4427729688,
+  "node_id": "I_kwDOI6n6iM8AAAABB-nLGA",
+  "number": 10883,
+  "title": "DeepSeek reasoning model tool-call loop drops `reasoning_content`, causing 400 error",
+  "user": {
+    "login": "Charlesqu76",
+    "id": 31912647,
+    "node_id": "MDQ6VXNlcjMxOTEyNjQ3",
+    "avatar_url": "https://avatars.githubusercontent.com/u/31912647?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/Charlesqu76",
+    "html_url": "https://github.com/Charlesqu76",
+    "followers_url": "https://api.github.com/users/Charlesqu76/followers",
+    "following_url": "https://api.github.com/users/Charlesqu76/following{/other_user}",
+    "gists_url": "https://api.github.com/users/Charlesqu76/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/Charlesqu76/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/Charlesqu76/subscriptions",
+    "organizations_url": "https://api.github.com/users/Charlesqu76/orgs",
+    "repos_url": "https://api.github.com/users/Charlesqu76/repos",
+    "events_url": "https://api.github.com/users/Charlesqu76/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/Charlesqu76/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "labels": [
+    {
+      "id": 5124115127,
+      "node_id": "LA_kwDOI6n6iM8AAAABMWvKtw",
+      "url": "https://api.github.com/repos/langchain-ai/langchainjs/labels/bug",
+      "name": "bug",
+      "color": "d73a4a",
+      "default": true,
+      "description": "Something isn't working"
+    }
+  ],
+  "state": "open",
+  "locked": false,
+  "assignees": [
+
+  ],
+  "milestone": null,
+  "comments": 2,
+  "created_at": "2026-05-12T09:02:39Z",
+  "updated_at": "2026-06-06T15:07:54Z",
+  "closed_at": null,
+  "assignee": null,
+  "author_association": "NONE",
+  "issue_field_values": [
+
+  ],
+  "type": null,
+  "active_lock_reason": null,
+  "sub_issues_summary": {
+    "total": 0,
+    "completed": 0,
+    "percent_completed": 0
+  },
+  "issue_dependencies_summary": {
+    "blocked_by": 0,
+    "total_blocked_by": 0,
+    "blocking": 0,
+    "total_blocking": 0
+  },
+  "body": "# Bug: DeepSeek Tool-Calling Loop Fails Because `reasoning_content` Is Not Passed Back\n\n## Description\n\nWhen using `@langchain/deepseek` with a DeepSeek model through LangChain's `createAgent` tool-calling loop, the agent fails on the next model invocation after a tool call.\n\nDeepSeek returns `reasoning_content` in the assistant message during reasoning mode. According to DeepSeek's API behavior, this `reasoning_content` must be passed back in the following conversation turn when continuing the tool-calling loop.\n\nHowever, LangChain appears to drop or not preserve `reasoning_content` when converting the assistant message into the next request payload. As a result, after the tool is executed and LangChain sends the conversation back to the model, DeepSeek rejects the request.\n\nThe issue occurs with `ChatDeepSeek`, but the stack trace goes through the OpenAI-compatible client path used internally by LangChain.\n\n## Error\n\n```txt\ngetCurrentTime tool called\nnode:internal/process/promises:394\n    triggerUncaughtException(err, true /* fromPromise */);\n    ^\n\nBadRequestError: 400 The `reasoning_content` in the thinking mode must be passed back to the API.\n    at APIError.generate (file:///Users/charles/Desktop/project/animi/node_modules/.pnpm/openai@6.35.0_ws@8.20.0_zod@4.4.1/node_modules/openai/core/error.mjs:41:20)\n    at OpenAI.makeStatusError (file:///Users/charles/Desktop/project/animi/node_modules/.pnpm/openai@6.35.0_ws@8.20.0_zod@4.4.1/node_modules/openai/client.mjs:208:32)\n    at OpenAI.makeRequest (file:///Users/charles/Desktop/project/animi/node_modules/.pnpm/openai@6.35.0_ws@8.20.0_zod@4.4.1/node_modules/openai/client.mjs:394:30)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///Users/charles/Desktop/project/animi/node_modules/.pnpm/@langchain+openai@1.4.5_@langchain+core@1.1.46_openai@6.35.0_ws@8.20.0_zod@4.4.1__ws@8.20.0__ws@8.20.0/node_modules/@langchain/openai/dist/chat_models/completions.js:225:17\n    at async pRetry (file:///Users/charles/Desktop/project/animi/node_modules/.pnpm/@langchain+core@1.1.46_openai@6.35.0_ws@8.20.0_zod@4.4.1__ws@8.20.0/node_modules/@langchain/core/dist/utils/p-retry/index.js:122:19)\n    at async run (/Users/charles/Desktop/project/animi/node_modules/.pnpm/p-queue@6.6.2/node_modules/p-queue/dist/index.js:163:29) {\n  status: 400,\n  headers: Headers {},\n  requestID: null,\n  error: {\n    message: 'The `reasoning_content` in the thinking mode must be passed back to the API.',\n    type: 'invalid_request_error',\n    param: null,\n    code: 'invalid_request_error'\n  },\n  code: 'invalid_request_error',\n  param: null,\n  type: 'invalid_request_error',\n  pregelTaskId: '42641f41-8610-5105-93dc-6d8d7e928053'\n}\n```\n\n## Expected Behavior\n\nWhen the model returns an assistant message containing both `reasoning_content` and `tool_calls`, LangChain should preserve `reasoning_content` on the assistant message and include it when sending the next request after the tool result.\n\nThe next message sequence should include the assistant message with its original `reasoning_content`, followed by the tool message.\n\n## Actual Behavior\n\nLangChain executes the tool successfully, but the following model request does not include the previous assistant message's `reasoning_content`.\n\nDeepSeek then returns:\n\n```txt\n400 The `reasoning_content` in the thinking mode must be passed back to the API.\n```\n\n## Environment\n\n```txt\nlangchain: 1.4.0\n@langchain/deepseek: 1.0.25\n@langchain/openai: 1.4.5\n@langchain/core: 1.1.46\nopenai: 6.35.0\nNode.js: >=18\nModel provider: DeepSeek\nModel: provided through DEEPSEEK_MODEL\nBase URL: provided through DEEPSEEK_API_BASE_URL\n```\n\n## Why This Matters\n\nDeepSeek reasoning models require `reasoning_content` to be preserved across turns in thinking mode. This is especially important in tool-calling loops, because the assistant message that requested the tool contains reasoning state that DeepSeek expects to receive again when continuing generation.\n\n## Possible Fix\n\n`@langchain/deepseek` / `@langchain/openai` may need to preserve provider-specific assistant message fields such as `reasoning_content`, similar to how it preserves `tool_calls`.\n\nPotentially this field could be stored in `AIMessage.additional_kwargs.reasoning_content` and serialized back into the OpenAI-compatible request payload when present.\n\n## Minimal Reproduction\n\n```ts\nimport { ChatDeepSeek } from \"@langchain/deepseek\";\nimport {\n  createAgent,\n  createMiddleware,\n  HumanMessage,\n  ToolMessage,\n  tool,\n} from \"langchain\";\nimport dotenv from \"dotenv\";\n\ndotenv.config();\n\nconst getCurrentTime = tool(\n  () => {\n    console.log(\"getCurrentTime tool called\");\n    return new Date().toISOString();\n  },\n  {\n    name: \"get_current_time\",\n    description: \"Get the current time in ISO format\",\n  },\n);\n\nconst handleToolErrors = createMiddleware({\n  name: \"HandleToolErrors\",\n  wrapToolCall: async (request, handler) => {\n    try {\n      return await handler(request);\n    } catch (error) {\n      return new ToolMessage({\n        content: `Tool error: Please check your input and try again. (${error})`,\n        tool_call_id: request.toolCall.id!,\n      });\n    }\n  },\n});\n\nconst model = new ChatDeepSeek({\n  apiKey: process.env.DEEPSEEK_API_KEY!,\n  model: process.env.DEEPSEEK_MODEL!,\n  configuration: {\n    baseURL: process.env.DEEPSEEK_API_BASE_URL!,\n  },\n  reasoning: {\n    effort: \"none\",\n  },\n  maxRetries: 0,\n});\n\nconst agent = createAgent({\n  model,\n  tools: [getCurrentTime],\n  middleware: [handleToolErrors],\n});\n\nasync function main() {\n  const response = await agent.stream(\n    {\n      messages: [new HumanMessage(\"the current time is?\")],\n    },\n    {\n      streamMode: [\"messages\"],\n    },\n  );\n\n  for await (const [mode, chunk] of response) {\n    if (mode === \"messages\") {\n      const [token] = chunk;\n      if (!token.contentBlocks) continue;\n    }\n  }\n}\n\nmain();\n```\n\nThe tool executes successfully and logs:\n\n```txt\ngetCurrentTime tool called\n```\n\nThen the next model request fails because `reasoning_content` is not passed back.\n\n## Related DeepSeek Behavior\n\nDeepSeek documentation states that in reasoning/thinking mode, the returned `reasoning_content` must be included again in the next API request when continuing the conversation.\n",
+  "closed_by": null,
+  "reactions": {
+    "url": "https://api.github.com/repos/langchain-ai/langchainjs/issues/10883/reactions",
+    "total_count": 1,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 1
+  },
+  "timeline_url": "https://api.github.com/repos/langchain-ai/langchainjs/issues/10883/timeline",
+  "performed_via_github_app": null,
+  "state_reason": null,
+  "pinned_comment": null
+}

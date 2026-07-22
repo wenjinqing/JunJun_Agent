@@ -110,7 +110,12 @@ def list_skills() -> List[dict]:
 
 
 def get_tools(session=None) -> List[BaseTool]:
-    """按会话取可用工具集。session=None 返回全量（不含已禁用）。"""
+    """按会话取可用工具集。session=None 返回全量（不含已禁用）。
+
+    Berkeley Function-Calling Leaderboard：超过 20 工具性能显著下降，
+    动态选择/掩码是必需。按会话最近话题做 embedding 检索相关工具：
+    核心工具（决策/记忆/时间/提醒）永远保留，其余按语义相关性取前 8 个。
+    """
     tools = []
     for name, skill in _registry.items():
         if name in _disabled or not is_plugin_enabled(_skill_plugin.get(name, "builtin")):
@@ -118,7 +123,84 @@ def get_tools(session=None) -> List[BaseTool]:
         gate = _availability.get(name)
         if session is None or gate is None or gate(session):
             tools.append(skill)
+
+    # 动态掩码：超过 15 个时按语义相关性裁剪（保留核心 + embedding 检索相关）
+    if len(tools) > 15 and session is not None:
+        tools = _mask_by_relevance(tools, session)
     return tools
+
+
+def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
+    """按会话最近话题语义相关性过滤工具，保留 ≤12 个。
+
+    核心工具永远保留；其余按「最近 3 条消息」与「工具 description」的
+    embedding 余弦相似度排序取前 8 个。embedding 不可用时降级关键词匹配。
+    """
+    CORE = {"do_not_reply", "get_time", "recall_memory", "save_memory",
+            "set_reminder", "list_reminders", "manage_mood", "send_message"}
+    core_tools = [t for t in tools if t.name in CORE]
+    other_tools = [t for t in tools if t.name not in CORE]
+
+    recent_text = ""
+    if session.memory:
+        recent_text = " ".join(e.text for e in session.memory.entries[-3:])
+
+    # embedding 检索（不可用降级关键词）
+    try:
+        from junjun_memory.embedding import get_embedding_client
+        client = get_embedding_client()
+        if client.available and recent_text:
+            import asyncio
+            from functools import partial
+            # 同步调 embedding（registry 是同步接口）
+            loop = asyncio.get_event_loop()
+            query_vec = loop.run_until_complete(client.embed_one(recent_text))
+            if query_vec:
+                import numpy as np
+                q = np.array(query_vec)
+                q /= (np.linalg.norm(q) + 1e-9)
+                scored = []
+                for t in other_tools:
+                    desc_vec = loop.run_until_complete(client.embed_one(t.description or t.name))
+                    if desc_vec:
+                        d = np.array(desc_vec)
+                        d /= (np.linalg.norm(d) + 1e-9)
+                        score = float(np.dot(q, d))
+                    else:
+                        score = 0.0
+                    scored.append((score, t))
+                scored.sort(key=lambda x: -x[0])
+                return core_tools + [t for _, t in scored[:8]]
+    except Exception:
+        pass
+
+    # 降级：关键词匹配
+    recent_lower = recent_text.lower()
+    scored = []
+    for t in other_tools:
+        desc = (t.description or "").lower()
+        score = sum(1 for kw in _TOPIC_KEYWORDS.get(t.name, []) if kw in recent_lower)
+        scored.append((score, t))
+    scored.sort(key=lambda x: -x[0])
+    return core_tools + [t for _, t in scored[:8]]
+
+
+# 工具名 -> 话题关键词（embedding 降级时的兜底）
+_TOPIC_KEYWORDS = {
+    "ai_draw": ["画", "图", "生成", "照片", "图片"],
+    "get_weather": ["天气", "下雨", "温度", "热", "冷"],
+    "web_search": ["搜", "查", "找", "什么是", "是谁", "哪里"],
+    "search_knowledge": ["知识", "资料", "设定", "文档"],
+    "send_emoji": ["表情", "emoji", "图"],
+    "query_jargon": ["黑话", "梗", "什么意思", "缩写"],
+    "manage_user_profile": ["记住", "我叫", "我喜欢", "我的"],
+    "vrchat_play_pose": ["动作", "跳舞", "挥手", "vrchat"],
+    "send_voice": ["语音", "说话", "念", "听"],
+    "send_poke": ["戳", "poke"],
+    "bilibili": ["b站", "bilibili", "视频", "bv"],
+    "douyin": ["抖音", "douyin"],
+    "music": ["音乐", "歌", "点歌"],
+}
 
 
 def clear() -> None:

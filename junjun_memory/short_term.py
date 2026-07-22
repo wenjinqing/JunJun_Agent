@@ -39,14 +39,19 @@ class ShortTermMemory:
         if len(self.entries) > self.max_size:
             self.entries = self.entries[-self.max_size:]
 
-    def render(self, limit: Optional[int] = None, *, mark_latest: bool = False) -> str:
+    def render(self, limit: Optional[int] = None, *, mark_latest: bool = False,
+               include_bot: bool = False) -> str:
         """渲染为对话文本（供 prompt）。群聊格式 `昵称: 内容`。
 
         管理员消息带「(管理员)」系统标记——按真实 user_id 判定，聊天内容无法伪造，
         是 LLM 识别管理员指令的锚点（配合 persona 安全段）。
 
-        mark_latest: True 时最后一条 user 消息前缀「【最新】」——帮模型聚焦，
-        防止把上下文里的旧话题当成自己该接续的话（串台修复）。
+        mark_latest: True 时最后一条 user 消息前缀「【最新】」——帮模型聚焦。
+        include_bot: False 时 bot 自己的回复不进 context（防复读根因：
+        模型把 bot 历史回复当成「自己该接续的话」）。True 仅调试/摘要场景用。
+
+        边界感知（LangChain trim_messages 语义）：永远以 user 消息开头，
+        不从 bot 回复中间截断——模型不会把被截断的历史当成待续写文本。
         """
         from junjun_core.security import is_admin
         entries = self.entries[-limit:] if limit else self.entries
@@ -58,9 +63,16 @@ class ShortTermMemory:
                 if entries[i].role == "user":
                     last_user_idx = i
                     break
-        for i, e in enumerate(entries):
+        # 边界感知：跳过开头的 bot 消息（不从 bot 回复中间截断）
+        start = 0
+        if not include_bot:
+            while start < len(entries) and entries[start].role == "bot":
+                start += 1
+        for i, e in enumerate(entries[start:], start=start):
             if e.role == "bot":
-                lines.append(f"你: {e.text}")
+                if include_bot:
+                    lines.append(f"你: {e.text}")
+                # 默认不进 context（防复读）
             else:
                 prefix = f"{e.nickname or e.user_id}"
                 if is_admin(e.user_id):

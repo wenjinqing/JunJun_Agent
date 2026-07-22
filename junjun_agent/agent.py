@@ -102,7 +102,7 @@ class JunJunAgent:
                 latest_msg = line
             else:
                 background_lines.insert(0, line)
-        background = "\n".join(background_lines[-10:])  # 背景只留最近 10 条
+        background = "\n".join(background_lines[-5:])  # 背景留最近 5 轮（Weaviate: just enough to keep thread coherent）
 
         messages = [SystemMessage(content=system)]
         if background:
@@ -141,21 +141,37 @@ class JunJunAgent:
             logger.debug(f"[{self.session.chat_id}] agent 选择沉默")
             return None
 
-        text = messages[-1].content if messages else ""
-        if isinstance(text, list):  # 部分模型返回 content blocks
+        # DeepSeek 官方规则（调研确认）：
+        # - 无工具调用时：上一轮的 reasoning_content 禁止拼入后续 context（传了也被忽略）
+        # - 有工具调用时：reasoning_content 必须完整回传，缺失直接 400
+        # 实现：检测本轮是否有 tool_call，有则保留 reasoning 链；无则确保不发 reasoning
+        has_tool_call = any(
+            isinstance(m, AIMessage) and (m.tool_calls or [])
+            for m in messages[-3:]  # 最近 3 条内有无 tool_call
+        )
+        last_msg = messages[-1] if messages else None
+        text = ""
+        if last_msg:
+            reasoning = (getattr(last_msg, "additional_kwargs", {}) or {}).get("reasoning_content")
+            if reasoning and has_tool_call:
+                # 工具调用链内：reasoning 保留（DeepSeek 要求回传，否则 400）
+                logger.debug(f"[{self.session.chat_id}] 工具链内 reasoning_content 保留 ({len(reasoning)} 字)")
+            elif reasoning:
+                # 无工具调用：reasoning 已分离，content 是最终答案
+                logger.debug(f"[{self.session.chat_id}] reasoning_content 已分离 ({len(reasoning)} 字)")
+            text = last_msg.content or ""
+        if isinstance(text, list):
             text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
         text = (text or "").strip()
 
-        # 直接截断：<think>...</think> 之间的内容全砍（deepseek 推理残留）
-        # 有闭合标签取其后；只有开标签没闭合则整个不可信（模型没完成思考）
+        # 直接截断：<think>...</think> 之间的内容全砍（无 reasoning_content 字段时的兜底）
         if "</think>" in text:
             text = text.split("</think>")[-1].strip()
         elif "<think>" in text:
             logger.warning(f"[{self.session.chat_id}] 未闭合 <think> 思考链泄漏，本轮沉默")
             return None
 
-        # 最后保险：推理结构检测——多段落且首段以推理开头词起始，
-        # 取最后一段作为有效回复（deepseek function calling 后常见模式）
+        # 推理结构检测（无 reasoning_content 字段且 text 仍含推理时的最后保险）
         if text and len(text) > 200:
             _REASONING_STARTS = ("这个问题", "让我", "我需要", "首先", "根据系统",
                                  "根据提示", "用户在问", "对方在问", "分析一下")
@@ -164,7 +180,6 @@ class JunJunAgent:
                 lines = [l.strip() for l in text.split("\n") if l.strip()]
                 if len(lines) >= 2:
                     tail = lines[-1]
-                    # 尾部不像推理且长度合理，取它
                     if len(tail) < 150 and not any(tail.startswith(s) for s in _REASONING_STARTS):
                         logger.info(f"[{self.session.chat_id}] 推理结构检测，取尾部: {tail[:40]}")
                         text = tail

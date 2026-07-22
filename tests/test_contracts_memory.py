@@ -44,10 +44,14 @@ class TestShortTermMemory:
         m.add_user("你好", "甲", at_bot=False)
         m.add_user("君君在吗", "乙", at_bot=True)
         m.add_bot("在的")
+        # 默认 bot 不进 context（防复读）
         text = m.render()
         assert "甲: 你好" in text
         assert "乙 [@你]: 君君在吗" in text
-        assert "你: 在的" in text
+        assert "你: 在的" not in text
+        # include_bot=True 时 bot 进 context（调试用）
+        text_with_bot = m.render(include_bot=True)
+        assert "你: 在的" in text_with_bot
 
     def test_render_limit(self):
         m = ShortTermMemory()
