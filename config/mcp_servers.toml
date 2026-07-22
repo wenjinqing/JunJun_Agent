@@ -1,6 +1,8 @@
 # MCP server 连接配置
 # 每个 [servers.<name>] 一个 server；stdio 传输
 # ${REPO_ROOT} 会替换为仓库根路径
+# env 值支持 "${VAR}" 占位符（从 .env 替换，密钥不落本文件）
+# Windows 下 npx 是 .cmd 批处理，子进程直拉不起，必须走 cmd /c 包一层
 
 [servers.relationship]
 enable = true
@@ -8,3 +10,55 @@ command = "${REPO_ROOT}/.venv/Scripts/python.exe"
 # -u 必须：Windows 下 stdout 块缓冲会让 JSON-RPC 响应卡在缓冲区（工具执行了但客户端等超时）
 args = ["-u", "-m", "junjun_mcp_server.relationship_mcp_server"]
 cwd = "${REPO_ROOT}"
+
+# ---------- 中文热榜（微博/知乎/B站/抖音/36氪 等 20+ 源，免 key） ----------
+[servers.trends]
+enable = true
+command = "cmd"
+args = ["/c", "npx", "-y", "mcp-trends-hub"]
+
+# ---------- 12306 火车票查询（免 key） ----------
+[servers.train12306]
+enable = true
+command = "cmd"
+args = ["/c", "npx", "-y", "12306-mcp"]
+
+# ---------- B 站搜索/热门/视频详情（免 key，补齐下载插件的查询面） ----------
+[servers.bilibili]
+enable = true
+command = "cmd"
+args = ["/c", "npx", "-y", "bilibili-mcp-js"]
+
+# ---------- 高德地图（天气/POI/路线；key 放 .env AMAP_MAPS_API_KEY，拿到后把 enable 改 true） ----------
+[servers.amap]
+enable = false
+command = "cmd"
+args = ["/c", "npx", "-y", "@amap/amap-maps-mcp-server"]
+env = { AMAP_MAPS_API_KEY = "${AMAP_MAPS_API_KEY}" }
+
+# ---------- 网页抓取 -> markdown（官方参考实现，免 key） ----------
+[servers.fetch]
+enable = true
+command = "uvx"
+args = ["mcp-server-fetch"]
+env = { PYTHONIOENCODING = "utf-8" }
+
+# ---------- 时间/时区（官方参考实现，免 key） ----------
+[servers.time]
+enable = true
+command = "uvx"
+args = ["mcp-server-time"]
+
+# ---------- 中文维基百科（免 key） ----------
+[servers.wikipedia]
+enable = true
+command = "uvx"
+args = ["wikipedia-mcp", "--language", "zh"]
+env = { PYTHONIOENCODING = "utf-8" }
+
+# ---------- 抖音链接 -> 无水印视频 + 语音转文案（硅基流动 SenseVoice，key 复用 .env） ----------
+[servers.douyin_extract]
+enable = true
+command = "uvx"
+args = ["douyin-mcp-server"]
+env = { API_KEY = "${SILICONFLOW_API_KEY}", PYTHONIOENCODING = "utf-8" }
