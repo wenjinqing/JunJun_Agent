@@ -57,13 +57,28 @@ class EmojiManager:
                 h = hashlib.md5(data).hexdigest()
                 if Emoji.get_or_none(Emoji.emoji_hash == h) or (EMOJI_RAW_DIR / f"{h}.img").exists():
                     continue
-                (EMOJI_RAW_DIR / f"{h}.img").write_bytes(data)
+                # 按实际格式存正确扩展名（NapCat/QQ 按扩展名识别类型，.img 显示为未知文件）
+                ext = self._detect_ext(data)
+                (EMOJI_RAW_DIR / f"{h}{ext}").write_bytes(data)
                 count += 1
             except Exception as e:
                 logger.debug(f"偷图失败（忽略）: {e}")
         if count:
             logger.info(f"偷到 {count} 张新表情包（待注册）")
         return count
+
+    @staticmethod
+    def _detect_ext(data: bytes) -> str:
+        """按 magic bytes 检测真实图片格式。"""
+        if data[:3] == b"\xff\xd8\xff":
+            return ".jpg"
+        if data[:6] in (b"GIF87a", b"GIF89a"):
+            return ".gif"
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return ".png"
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return ".webp"
+        return ".jpg"  # 默认兜底
 
     async def _download(self, url: str) -> Optional[bytes]:
         import aiohttp
@@ -79,7 +94,8 @@ class EmojiManager:
         """把待注册池的图片 VLM 描述后注册。每轮限量防烧 token。返回注册数。"""
         from junjun_core.database import Emoji
         cfg = _cfg()
-        pending = sorted(EMOJI_RAW_DIR.glob("*.img"))[:limit]
+        pending = sorted(EMOJI_RAW_DIR.glob("*.*"))[:limit]  # 任意扩展名（.jpg/.gif/.png/.webp）
+        pending = [p for p in pending if p.suffix.lower() in (".jpg", ".jpeg", ".gif", ".png", ".webp")]
         if not pending:
             return 0
 
