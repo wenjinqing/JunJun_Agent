@@ -123,11 +123,30 @@ class JunJunAgent:
             text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
         text = (text or "").strip()
 
-        # 防御：LLM 自白式思考泄漏（deepseek 在 function calling 后常混入推理）
-        # 有 </think> 则只取其后；只有 <think> 没 </think> 则整个不可信
+        # 防御 1：LLM 自白式思考泄漏（<think> 标签场景）
         if "</think>" in text:
             text = text.split("</think>")[-1].strip()
         elif "<think>" in text:
             logger.warning(f"[{self.session.chat_id}] 未闭合 <think> 思考链泄漏，本轮沉默")
             return None
+
+        # 防御 2：无标签推理残留（deepseek function calling 后常见）——
+        # content 以推理开头词起始且后续有「正式回复」迹象的，视为推理泄漏
+        _REASONING_STARTS = ("这个问题", "让我", "我需要", "首先", "根据系统", "根据提示",
+                             "用户在问", "对方在问", "分析一下", "思考一下")
+        if any(text.startswith(s) for s in _REASONING_STARTS):
+            # 找最后一个换行后的段落作为真正回复（推理通常在前半段）
+            lines = [l.strip() for l in text.split("\n") if l.strip()]
+            if len(lines) >= 2:
+                # 最后一段如果是短句且不像推理，取它
+                tail = lines[-1]
+                if len(tail) < 100 and not any(tail.startswith(s) for s in _REASONING_STARTS):
+                    logger.info(f"[{self.session.chat_id}] 推理残留检测，取尾部回复: {tail[:30]}")
+                    text = tail
+                else:
+                    logger.warning(f"[{self.session.chat_id}] 推理残留无法提取有效回复，本轮沉默")
+                    return None
+            else:
+                logger.warning(f"[{self.session.chat_id}] 推理残留无法提取有效回复，本轮沉默")
+                return None
         return text or None
