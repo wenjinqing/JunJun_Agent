@@ -102,7 +102,7 @@ class JunJunAgent:
                 latest_msg = line
             else:
                 background_lines.insert(0, line)
-        background = "\n".join(background_lines[-5:])  # 背景留最近 5 轮（Weaviate: just enough to keep thread coherent）
+        background = "\n".join(background_lines[-10:])  # 背景留最近 10 轮（记忆效果 vs 防分心平衡）
 
         messages = [SystemMessage(content=system)]
         if background:
