@@ -66,7 +66,8 @@ class TestWife:
         await wife.wife_cmd(ctx)
         assert len(_fake_gateway) == 1
         segs = _fake_gateway[0].segments
-        assert segs[0].type == "at" and segs[0].data in ("111", "222")  # 排除 bot
+        # @ 发命令的人（_ctx 默认 user_id="111"），不是抽中的老婆
+        assert segs[0].type == "at" and segs[0].data == "111"
         assert segs[1].type == "image" and "qlogo" in segs[1].data
         # 同一天再抽：不查成员列表，复用记录
         _fake_gateway.clear()
