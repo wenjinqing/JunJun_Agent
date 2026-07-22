@@ -40,7 +40,9 @@ async def call(action: str, params: Optional[dict] = None,
         token = os.environ.get("NAPCAT_HTTP_TOKEN", "").strip()
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        # trust_env=False：本地 127.0.0.1 的 HTTP 请求不该走系统代理
+        # （实测代理拦截返回 502 -> resp.json() 空 JSONDecodeError）
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             resp = await client.post(f"{base}/{action}", json=params or {}, headers=headers)
             data = resp.json()
         if data.get("status") == "ok" or data.get("retcode") == 0:
