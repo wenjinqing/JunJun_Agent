@@ -1,7 +1,11 @@
 """Embedding 客户端：bge-m3 (SiliconFlow, 1024 维)。
 
-对齐原 lpmm embedding 配置。SILICONFLOW_API_KEY 未设置时 available=False，
-上层（长期记忆/知识库）自动降级关键词检索，不阻塞主循环。
+对齐原 lpmm embedding 配置。支持两套 env 配置：
+1. EMBEDDING_BASE_URL / EMBEDDING_MODEL / EMBEDDING_API_KEY（专用 embedding 服务）
+2. 降级：VLM_BASE_URL / VLM_MODEL / VLM_API_KEY（复用多模态服务的 embedding 能力）
+3. 再降级：SILICONFLOW_API_KEY（默认 bge-m3）
+
+任一不可用则 available=False，上层自动降级关键词检索，不阻塞主循环。
 """
 
 import os
@@ -12,19 +16,45 @@ from junjun_core.observability import get_logger
 
 logger = get_logger("memory.embedding")
 
-EMBED_MODEL = "BAAI/bge-m3"
 EMBED_DIM = 1024
-_BASE_URL = "https://api.siliconflow.cn/v1"
 
 
 class EmbeddingClient:
-    def __init__(self, api_key: Optional[str] = None):
-        self._api_key = api_key if api_key is not None else os.environ.get("SILICONFLOW_API_KEY", "")
+    def __init__(self):
+        self._api_key = ""
+        self._base_url = ""
+        self._model = ""
         self._client = None
+        self._load_config()
+
+    def _load_config(self) -> None:
+        """按优先级加载 embedding 配置。"""
+        # 1. 专用 embedding 配置
+        self._api_key = os.environ.get("EMBEDDING_API_KEY", "")
+        self._base_url = os.environ.get("EMBEDDING_BASE_URL", "")
+        self._model = os.environ.get("EMBEDDING_MODEL", "")
+        if self._api_key and self._base_url and self._model:
+            logger.info(f"embedding 配置: {self._base_url[:40]}... / {self._model}")
+            return
+        # 2. 复用 VLM 配置（多模态服务通常也提供 embedding）
+        self._api_key = os.environ.get("VLM_API_KEY", "")
+        self._base_url = os.environ.get("VLM_BASE_URL", "")
+        self._model = os.environ.get("VLM_MODEL", "")
+        if self._api_key and self._base_url and self._model:
+            logger.info(f"embedding 复用 VLM 配置: {self._base_url[:40]}... / {self._model}")
+            return
+        # 3. 默认 SiliconFlow bge-m3
+        self._api_key = os.environ.get("SILICONFLOW_API_KEY", "")
+        self._base_url = "https://api.siliconflow.cn/v1"
+        self._model = "BAAI/bge-m3"
+        if self._api_key:
+            logger.info("embedding 配置: siliconflow / BAAI/bge-m3")
+            return
+        logger.warning("embedding 未配置（EMBEDDING_*/VLM_*/SILICONFLOW_API_KEY 均无），向量检索禁用")
 
     @property
     def available(self) -> bool:
-        return bool(self._api_key)
+        return bool(self._api_key and self._base_url and self._model)
 
     def _get_client(self):
         if self._client is None:
@@ -32,7 +62,7 @@ class EmbeddingClient:
             import httpx
             self._client = AsyncOpenAI(
                 api_key=self._api_key,
-                base_url=_BASE_URL,
+                base_url=self._base_url,
                 timeout=15,
                 http_client=httpx.AsyncClient(
                     timeout=httpx.Timeout(15, connect=5),
@@ -53,7 +83,7 @@ class EmbeddingClient:
         if not self.available or not texts:
             return None
         try:
-            resp = await self._get_client().embeddings.create(model=EMBED_MODEL, input=texts)
+            resp = await self._get_client().embeddings.create(model=self._model, input=texts)
             return [d.embedding for d in resp.data]
         except Exception as e:
             logger.warning(f"embedding 调用失败（降级关键词检索）: {e}")
@@ -71,6 +101,4 @@ def get_embedding_client() -> EmbeddingClient:
     global _client
     if _client is None:
         _client = EmbeddingClient()
-        if not _client.available:
-            logger.warning("SILICONFLOW_API_KEY 未设置，向量检索禁用（关键词兜底）")
     return _client
