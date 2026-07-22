@@ -2,8 +2,9 @@
 
 用途：插件需要「主动调用」OneBot 能力（查群成员列表、上传文件等），
 这类调用不是消息回复，走 NapCat 的 HTTP API 直连。
-地址/token 从 .env 读（NAPCAT_HTTP_BASE / NAPCAT_TOKEN），未配置时所有调用
+地址/token 从 .env 读（NAPCAT_HTTP_BASE / NAPCAT_HTTP_TOKEN），未配置时所有调用
 返回 None 降级——插件应给出「功能不可用」的友好回复而不是炸掉。
+（注意与 NAPCAT_TOKEN 区分：后者是 NapCat→Adapter WS 连入鉴权，别混用。）
 
 NapCat HTTP 服务端默认端口 3000（在 NapCat 配置里开启 httpServers）。
 """
@@ -36,7 +37,7 @@ async def call(action: str, params: Optional[dict] = None,
     try:
         import httpx
         headers = {}
-        token = os.environ.get("NAPCAT_TOKEN", "").strip()
+        token = os.environ.get("NAPCAT_HTTP_TOKEN", "").strip()
         if token:
             headers["Authorization"] = f"Bearer {token}"
         async with httpx.AsyncClient(timeout=timeout) as client:
