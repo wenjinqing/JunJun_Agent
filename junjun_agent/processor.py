@@ -277,6 +277,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     _store_outbound(session, text)
 
     # ---- 回复后处理：分条 + 错别字 + 引用 ----
+    quote_id = _quote_message_id(session, meta)  # 提前定义（image/forward 分支也要用）
     # 特殊标记：[IMAGE:url] -> 提取为 image 段单独发送（ai_draw 等工具产出）
     import re as _re
     _img_match = _re.search(r"\[IMAGE:(https?://[^\]]+)\]", text)

@@ -12,7 +12,6 @@ from maim_message import (
 
 from ..config import get_config
 from ..logger import logger
-from ..message_sending import message_send_instance
 
 
 class NoticeHandler:

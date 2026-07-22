@@ -151,7 +151,6 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
         client = get_embedding_client()
         if client.available and recent_text:
             import asyncio
-            from functools import partial
             # 同步调 embedding（registry 是同步接口）
             loop = asyncio.get_event_loop()
             query_vec = loop.run_until_complete(client.embed_one(recent_text))
@@ -178,7 +177,6 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
     recent_lower = recent_text.lower()
     scored = []
     for t in other_tools:
-        desc = (t.description or "").lower()
         score = sum(1 for kw in _TOPIC_KEYWORDS.get(t.name, []) if kw in recent_lower)
         scored.append((score, t))
     scored.sort(key=lambda x: -x[0])

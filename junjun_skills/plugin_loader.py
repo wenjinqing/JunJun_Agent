@@ -47,7 +47,7 @@ def load_plugins() -> int:
                 count += 1
             interceptors_added = len(list_interceptors()) - before_interceptors
             suffix = f"（白名单 {len(whitelist)} 会话）" if whitelist else ""
-            suffix += f"（admin 门）" if manifest.get("admin_only") else ""
+            suffix += "（admin 门）" if manifest.get("admin_only") else ""
             if interceptors_added:
                 suffix += f" + {interceptors_added} 拦截器"
             logger.info(f"插件 [{name}] v{manifest.get('version', '?')} 已加载 "
