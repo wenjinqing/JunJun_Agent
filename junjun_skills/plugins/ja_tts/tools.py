@@ -6,7 +6,7 @@
      自定义二进制帧（4 字节头 + event/session/payload），握手流程：
      StartConnection -> ConnectionStarted -> StartSession -> SessionStarted
      -> TaskRequest(文本分块) -> FinishSession -> 收 TTSResponse 音频直到 SessionFinished
-文本：含汉字时先尝试 pykakasi 转罗马字（失败/未装则用原文）
+文本：日语直接送默认音色 ja_female_bv521_uranus_bigtts（原生日语，不转罗马音——用户指定）
 降级：DOUBAO_TTS_API_KEY 未配置或合成失败时回友好文本，不抛异常
 限制：文本上限 300 字（截断）；整体超时 30s；每会话 15s 限流
 """
@@ -55,26 +55,6 @@ DEFAULT_VOICE = "ja"
 
 # 每会话上次合成时间戳（chat_id -> ts）
 _last_use: dict = {}
-
-# ========== 汉字 -> 罗马字（可选，pykakasi 缺失时静默降级） ==========
-_HAN_RE = re.compile(r"[一-鿿㐀-䶿]")
-_kks = None
-try:
-    import pykakasi
-    _kks = pykakasi.kakasi()
-except Exception as e:  # pykakasi 装不上不阻断插件加载
-    logger.info(f"ja_tts: pykakasi 不可用，跳过罗马字转换: {type(e).__name__}")
-
-
-def _maybe_romaji(text: str) -> str:
-    """文本含汉字时尝试转罗马字；任何失败返回原文。"""
-    if _kks is None or not _HAN_RE.search(text):
-        return text
-    try:
-        return " ".join(p["hepburn"] for p in _kks.convert(text))
-    except Exception as e:
-        logger.warning(f"ja_tts: 转罗马字失败，用原文: {type(e).__name__}: {e}")
-        return text
 
 
 # ========== 豆包双向 WS 二进制帧协议（按官方协议重写，仅保留所需子集） ==========
@@ -306,9 +286,9 @@ def _parse_args(args: str) -> tuple:
 
 
 async def _synthesize_to_file(text: str, speaker: str) -> Path | None:
-    """预处理（截断 + 罗马字）-> 合成 -> 落盘 mp3，返回文件路径；失败 None。"""
+    """预处理（截断）-> 合成 -> 落盘 mp3，返回文件路径；失败 None。"""
     text = text[:_MAX_TEXT_LEN]
-    audio = await synthesize(_maybe_romaji(text), speaker)
+    audio = await synthesize(text, speaker)
     if not audio:
         return None
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -400,7 +380,7 @@ async def ja_tts_tool(text: str, speaker: str = "") -> str:
 
 
 def probe_available() -> bool:
-    """依赖探测：不阻断加载——缺 key / 缺 pykakasi 都在运行时友好降级。"""
+    """依赖探测：不阻断加载——缺 key 在运行时友好降级。"""
     if not _get_api_key():
         logger.info("ja_tts: DOUBAO_TTS_API_KEY 未设置，调用时将降级为文本提示")
     return True

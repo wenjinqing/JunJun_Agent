@@ -242,3 +242,24 @@ class TestUnifiedTTSTool:
         tts = _plugin
         assert tts.TOOLS == [tts.unified_tts]
         assert tts.unified_tts.name == "unified_tts"
+
+
+class TestDoubaoSpeakerRouting:
+    """豆包音色按语言路由（2026-07-22 用户指定）：日语 ja_*，中文 zh_female_vv_*。"""
+
+    def test_japanese_text_uses_ja_voice(self, monkeypatch):
+        monkeypatch.delenv("TTS_DOUBAO_SPEAKER", raising=False)
+        from junjun_skills.plugins.tts import tools as tts
+        assert tts._doubao_speaker_for("こんにちは、元気ですか") == "ja_female_bv521_uranus_bigtts"
+        assert tts._doubao_speaker_for("カタカナテスト") == "ja_female_bv521_uranus_bigtts"
+
+    def test_chinese_text_uses_zh_voice(self, monkeypatch):
+        monkeypatch.delenv("TTS_DOUBAO_SPEAKER", raising=False)
+        from junjun_skills.plugins.tts import tools as tts
+        assert tts._doubao_speaker_for("今天天气真好") == "zh_female_vv_uranus_bigtts"
+        assert tts._doubao_speaker_for("hello world") == "zh_female_vv_uranus_bigtts"
+
+    def test_env_override_wins(self, monkeypatch):
+        monkeypatch.setenv("TTS_DOUBAO_SPEAKER", "custom_voice")
+        from junjun_skills.plugins.tts import tools as tts
+        assert tts._doubao_speaker_for("こんにちは") == "custom_voice"
