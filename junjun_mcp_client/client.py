@@ -18,7 +18,7 @@ logger = get_logger("mcp.client")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MCP_CONFIG = PROJECT_ROOT / "config" / "mcp_servers.toml"
 
-_CONNECT_TIMEOUT = 10.0
+_CONNECT_TIMEOUT = 60.0   # 冷启动 npx/uvx 首次解析+下载较慢（10s 实测不够）
 _TOOL_TIMEOUT = 30.0
 _RESULT_MAX_CHARS = 2000
 
@@ -76,16 +76,21 @@ class MCPManager:
             return 0
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        # 逐 server 隔离连接：一个坏不拖全部
+        # 逐 server 隔离连接：一个坏不拖全部；冷启动慢，失败重试一次
         ok_configs = {}
         for name, cfg in configs.items():
-            try:
-                probe = MultiServerMCPClient({name: cfg})
-                tools = await asyncio.wait_for(probe.get_tools(), timeout=_CONNECT_TIMEOUT)
-                ok_configs[name] = cfg
-                logger.info(f"MCP server [{name}] 连接成功: {len(tools)} 个工具")
-            except Exception as e:
-                logger.warning(f"MCP server [{name}] 连接失败（降级跳过）: {type(e).__name__}: {e}")
+            for attempt in (1, 2):
+                try:
+                    probe = MultiServerMCPClient({name: cfg})
+                    tools = await asyncio.wait_for(probe.get_tools(), timeout=_CONNECT_TIMEOUT)
+                    ok_configs[name] = cfg
+                    logger.info(f"MCP server [{name}] 连接成功: {len(tools)} 个工具")
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        logger.warning(f"MCP server [{name}] 连接失败（降级跳过）: {type(e).__name__}: {e}")
+                    else:
+                        logger.info(f"MCP server [{name}] 首次连接失败，重试: {type(e).__name__}")
 
         if not ok_configs:
             return 0
