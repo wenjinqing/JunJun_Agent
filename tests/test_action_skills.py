@@ -113,18 +113,18 @@ class TestNoticePoke:
     @pytest.mark.asyncio
     async def test_poke_not_targeting_bot_ignored(self, monkeypatch):
         from junjun_adapter_napcat.recv_handler import notice_handler as nh
-        sent = []
+        handled = []
 
-        class _FakeSend:
-            async def message_send(self, msg_base):
-                sent.append(msg_base)
+        class _FakeGateway:
+            async def handle_inbound(self, msg_dict):
+                handled.append(msg_dict)
 
-        monkeypatch.setattr(nh, "message_send_instance", _FakeSend())
+        monkeypatch.setattr("junjun_core.gateway.router._gateway", _FakeGateway())
         await nh.notice_handler.handle_notice({
             "post_type": "notice", "notice_type": "notify", "sub_type": "poke",
             "self_id": 10000001, "target_id": 22222, "user_id": 12345, "group_id": 999,
         })
-        assert sent == []
+        assert handled == []
 
 
 class TestForwardExpand:

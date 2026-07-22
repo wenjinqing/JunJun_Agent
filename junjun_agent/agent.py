@@ -177,7 +177,7 @@ class JunJunAgent:
                                  "根据提示", "用户在问", "对方在问", "分析一下")
             first_line = text.split("\n")[0].strip()
             if any(first_line.startswith(s) for s in _REASONING_STARTS):
-                lines = [l.strip() for l in text.split("\n") if l.strip()]
+                lines = [line.strip() for line in text.split("\n") if line.strip()]
                 if len(lines) >= 2:
                     tail = lines[-1]
                     if len(tail) < 150 and not any(tail.startswith(s) for s in _REASONING_STARTS):
