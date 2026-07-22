@@ -19,18 +19,57 @@ _plugin_disabled: set = set()
 
 
 def register(skill: BaseTool, available_for: Optional[Callable] = None,
-             plugin: str = "builtin") -> None:
+             plugin: str = "builtin", admin_only: bool = False) -> None:
     """注册 skill。重名直接报错（拒绝静默覆盖）。
 
     available_for: (session) -> bool，None 表示全会话可用。
     plugin: 所属插件名（WebUI 插件级禁用用）。
+    admin_only: True 时包一层权限门——非管理员调用直接拒绝并上报
+                （security.report_violation），不进入工具本体。
+                与工具内部的自定义校验可共存（框架门先触发，不会双重上报）。
     """
     if skill.name in _registry:
         raise ValueError(f"skill 重名: {skill.name}")
+    if admin_only:
+        skill = _wrap_admin_gate(skill)
     _registry[skill.name] = skill
     _availability[skill.name] = available_for
     _skill_plugin[skill.name] = plugin
-    logger.debug(f"注册 skill: {skill.name} [{plugin}]")
+    logger.debug(f"注册 skill: {skill.name} [{plugin}]{' (admin)' if admin_only else ''}")
+
+
+def _admin_refusal(tool_name: str, args: tuple, kwargs: dict) -> str:
+    from junjun_core.security import current_user_id, report_violation
+    from junjun_skills.builtin.memory_skills import current_chat_id
+    detail = " ".join(str(a) for a in (*args, *kwargs.values()))[:80]
+    report_violation(f"管理员工具 {tool_name}", current_user_id.get(), "",
+                     current_chat_id.get(), detail)
+    return "（权限不足：这个操作只有管理员能做，已通知管理员）"
+
+
+def _wrap_admin_gate(skill: BaseTool) -> BaseTool:
+    """给工具包管理员权限门（运行时按真实发送者 QQ 判定，LLM 不可伪造）。"""
+    from junjun_core.security import current_user_id, is_admin
+    name = skill.name
+    if getattr(skill, "coroutine", None) is not None:
+        original = skill.coroutine
+
+        async def gated(*args, _orig=original, **kwargs):
+            if not is_admin(current_user_id.get()):
+                return _admin_refusal(name, args, kwargs)
+            return await _orig(*args, **kwargs)
+        skill.coroutine = gated
+    elif getattr(skill, "func", None) is not None:
+        original_sync = skill.func
+
+        def gated_sync(*args, _orig=original_sync, **kwargs):
+            if not is_admin(current_user_id.get()):
+                return _admin_refusal(name, args, kwargs)
+            return _orig(*args, **kwargs)
+        skill.func = gated_sync
+    else:
+        logger.warning(f"admin 门包装失败（无可包装入口）: {name}")
+    return skill
 
 
 def set_enabled(name: str, enabled: bool) -> bool:

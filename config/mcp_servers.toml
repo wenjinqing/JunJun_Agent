@@ -43,9 +43,10 @@ command = "uvx"
 args = ["mcp-server-fetch"]
 env = { PYTHONIOENCODING = "utf-8" }
 
-# ---------- 时间/时区（官方参考实现，免 key） ----------
+# ---------- 时间/时区（官方参考实现） ----------
+# 2026-07-22 权限治理：与内置 get_time 功能重复，禁用以减少工具噪声
 [servers.time]
-enable = true
+enable = false
 command = "uvx"
 args = ["mcp-server-time"]
 

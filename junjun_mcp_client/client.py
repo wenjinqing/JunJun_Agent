@@ -22,6 +22,10 @@ _CONNECT_TIMEOUT = 10.0
 _TOOL_TIMEOUT = 30.0
 _RESULT_MAX_CHARS = 2000
 
+# 仅管理员可用的 MCP 工具（按工具原名匹配，注册时包权限门）
+# apply_relationship_penalty：惩罚是处置行为，不能交给群友触发
+_ADMIN_TOOLS = {"apply_relationship_penalty"}
+
 
 def load_server_configs() -> Dict[str, dict]:
     """读 mcp_servers.toml。文件缺失返回空。
@@ -120,11 +124,13 @@ class MCPManager:
         return tool
 
     def register_all(self) -> None:
-        """注入 skill registry（重名由 registry 报错）。"""
+        """注入 skill registry（重名由 registry 报错）。_ADMIN_TOOLS 包权限门。"""
         from junjun_skills.registry import register
         for t in self._tools:
             try:
-                register(t)
+                # t.name 已在 _wrap 加 mcp_ 前缀；匹配原始名
+                raw_name = t.name[len("mcp_"):] if t.name.startswith("mcp_") else t.name
+                register(t, plugin="mcp", admin_only=raw_name in _ADMIN_TOOLS)
             except ValueError as e:
                 logger.warning(f"MCP 工具注册冲突（跳过）: {e}")
 
