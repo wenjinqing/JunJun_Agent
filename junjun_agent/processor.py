@@ -81,12 +81,17 @@ def _store_outbound(session: ChatSession, text: str) -> None:
 def _quote_message_id(session: ChatSession, meta: InboundMeta) -> Optional[str]:
     """引用回复决策（reply_message_quote 简化实现）：
 
-    群聊中被 @ 且距离该消息已有他人插话时带引用，避免歧义；私聊不引用。
+    群聊中被 @ **且是追问/指令类**（长度>10 字或含问号），且距离该消息已有他人
+    插话时带引用避免歧义；闲聊/短促回应不带。私聊不引用。
     """
     mode = str(get_global_config().raw.get("chat", {}).get("reply_message_quote", "llm"))
     if mode == "never" or not session.is_group:
         return None
     if not meta.at_bot:
+        return None
+    # 追问/指令类才引用：短促闲聊不引用（防满屏引用气泡）
+    is_question = len(meta.text) > 10 or "?" in meta.text or "？" in meta.text
+    if not is_question:
         return None
     entries = session.memory.entries
     # 最后一条 user 消息之后若还有别人发言，回复带引用
