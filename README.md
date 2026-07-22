@@ -1,6 +1,6 @@
 # JunJun_Agent · 君君
 
-君君 QQ 聊天机器人的现代 Agent 架构版。由原 MaiBot（Astron bot）架构升级：LangChain 1.x `create_agent` + Function Calling + MCP + Langfuse 可观测，monorepo 分层，拒绝屎山。
+君君 QQ 聊天机器人的现代 Agent 架构版。由原 MaiBot（Astron bot）架构升级：LangChain 1.x `create_agent` + Function Calling + MCP + Langfuse 可观测，monorepo 分层。
 
 ## 架构
 
