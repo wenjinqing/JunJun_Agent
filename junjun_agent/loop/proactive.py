@@ -27,7 +27,7 @@ _TOPIC_PROMPT = """你是"{nickname}"。你想主动找朋友聊天。
 {used_topics}
 
 生成一条自然的开场消息（像朋友突然想起对方发的微信，简短口语化，可以基于之前聊过的内容延续）。
-只输出消息本身。"""
+只输出一条消息本身，不要给多个选项、不要用「或者」、不要列点。"""
 
 _JUDGE_PROMPT = """你是聊天机器人的把关员。机器人想主动给朋友发这条消息：
 「{message}」
@@ -107,7 +107,9 @@ class ProactiveChatManager:
                     nickname=cfg.bot.nickname, recent=recent, used_topics=used))],
                 config={"callbacks": callbacks or []},
             )
-            message = str(resp.content).strip().splitlines()[0][:200]
+            raw = str(resp.content).strip()
+            # 取第一行，去掉「或者」分隔的多选项（LLM 常给 A（或者）B（或者）C）
+            message = raw.splitlines()[0].split("（或者）")[0].split("(或者)")[0].strip()[:200]
             if not message:
                 return False
             judge = await model.ainvoke(
