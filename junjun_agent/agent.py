@@ -94,11 +94,22 @@ class JunJunAgent:
         # context_text 包含历史消息（可能含最新消息）。把最新消息剥离单独作为
         # HumanMessage 传入，context 只作为背景参考——模型明确知道「这是背景，这是你要回的」。
         context_lines = context_text.strip().split("\n") if context_text.strip() else []
-        # 最后一条非 bot 消息（user 消息）作为最新指令
+        # 最后一条 user 消息（排除 bot 的「你(历史):」前缀和空行）作为最新指令
         latest_msg = ""
         background_lines = []
         for line in reversed(context_lines):
-            if not latest_msg and not line.startswith("你: "):
+            stripped = line.strip()
+            if not stripped:
+                background_lines.insert(0, line)
+                continue
+            # 排除 bot 历史输出（「你(历史):」前缀）——它不是 user 消息
+            if stripped.startswith("你(历史):"):
+                background_lines.insert(0, line)
+                continue
+            # 排除 bot 输出的续行（不以「昵称:」或「你(历史):」开头的行）
+            # user 消息格式为「昵称: 内容」或「昵称 [@你]: 内容」
+            if not latest_msg and (":" in stripped or "：" in stripped):
+                # 判定为 user 消息：有「昵称:」前缀且不是「你(历史):」
                 latest_msg = line
             else:
                 background_lines.insert(0, line)
