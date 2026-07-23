@@ -99,14 +99,15 @@ async def _search_with_fallback(query: str, num_results: int = 10) -> List[Dict[
 # ---------------------------------------------------------------------------
 @tool
 def web_search(query: str, num_results: int = 10) -> str:
-    """Perform a web search using multiple engines with automatic fallback.
+    """上网搜索实时信息。当用户问「帮我搜一下」「查一下」「XXX 是什么」「XXX 什么时候」、
+    需要最新新闻/资料/时间敏感信息时使用（区别于 search_knowledge 查本地知识库）。
 
     Args:
-        query: The search query string.
-        num_results: Maximum number of results to return (default 10).
+        query: 搜索关键词
+        num_results: 返回结果数上限（默认 10）
 
     Returns:
-        A JSON-formatted string containing the search results.
+        JSON 格式的搜索结果（标题/链接/摘要）。
     """
     import asyncio
     import json as _json
