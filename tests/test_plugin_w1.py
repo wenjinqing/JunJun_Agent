@@ -62,19 +62,57 @@ class TestWife:
         cfg_mod.global_config = cfg_mod.GlobalConfig(
             bot=cfg_mod.BotConfig(platform="qq", qq_account="10000001", nickname="君君"), raw={})
 
+        # 第一次抽：@ 发命令的人，显示新老婆
         ctx = _ctx("抽老婆")
         await wife.wife_cmd(ctx)
         assert len(_fake_gateway) == 1
         segs = _fake_gateway[0].segments
-        # @ 发命令的人（_meta 默认 user_id="12345"），不是抽中的老婆
         assert segs[0].type == "at" and segs[0].data == "12345"
-        assert segs[1].type == "image" and "qlogo" in segs[1].data
-        # 同一天再抽：不查成员列表，复用记录
+        assert segs[1].type == "text" and "今天的群老婆是" in segs[1].data
+        assert segs[2].type == "image" and "qlogo" in segs[2].data
+
+        # 同一天再抽：显示「已经有老婆了」，不查成员列表
         _fake_gateway.clear()
         ctx2 = _ctx("今日老婆")
         await wife.wife_cmd(ctx2)
-        assert len(calls) == 1
-        assert _fake_gateway[0].segments[0].type == "at"
+        assert len(calls) == 1  # 没再查成员列表
+        segs2 = _fake_gateway[0].segments
+        assert segs2[0].type == "at" and segs2[0].data == "12345"
+        # 文本段（第 2 个）包含「已经有群老婆了」
+        text_segs = [s for s in segs2 if s.type == "text"]
+        assert any("已经有群老婆了" in s.data for s in text_segs)
+
+    @pytest.mark.asyncio
+    async def test_different_users_different_wives(self, _fake_gateway, monkeypatch, tmp_path):
+        """不同人抽到的老婆应该不同（每人每天一个）。"""
+        import junjun_skills.plugins.wife.tools as wife
+        monkeypatch.setattr(wife, "DATA_DIR", tmp_path)
+        monkeypatch.setenv("MAIBOT_QQ_ACCOUNT", "10000001")
+
+        members = [{"user_id": 111, "nickname": "乙", "card": ""},
+                   {"user_id": 222, "nickname": "丙", "card": "小丙"},
+                   {"user_id": 333, "nickname": "丁", "card": ""},
+                   {"user_id": 10000001, "nickname": "bot"}]
+
+        async def _members(group_id):
+            return members
+        monkeypatch.setattr("junjun_core.napcat_client.get_group_members", _members)
+        import junjun_core.config.config as cfg_mod
+        cfg_mod.global_config = cfg_mod.GlobalConfig(
+            bot=cfg_mod.BotConfig(platform="qq", qq_account="10000001", nickname="君君"), raw={})
+
+        # 用户 12345 抽
+        ctx1 = _ctx("抽老婆")
+        await wife.wife_cmd(ctx1)
+        # 用户 67890 抽
+        ctx2 = _ctx("抽老婆")
+        ctx2.meta.user_id = "67890"
+        await wife.wife_cmd(ctx2)
+
+        data = wife._load_today("999")
+        assert "12345" in data
+        assert "67890" in data
+        assert data["12345"]["user_id"] != data["67890"]["user_id"]  # 不同人不同老婆
 
     @pytest.mark.asyncio
     async def test_private_rejected(self, _fake_gateway):
