@@ -32,17 +32,29 @@ api_key_env = "DEEPSEEK_API_KEY"
 # 主 Agent：必须支持 function calling
 temperature = 0.8
 max_tokens = 2048
+# 主：讯飞 MaaS；备：deepseek（503 限流时自动切换）
+[[task.agent.models]]
 base_url_env = "LLM_BASE_URL"
 model_env = "LLM_MODEL"
 api_key_env = "LLM_API_KEY"
+[[task.agent.models]]
+base_url_env = "DS_BASE_URL"
+model_env = "DS_MODEL"
+api_key_env = "DEEPSEEK_API_KEY"
 
 [task.utils]
 # 杂项小任务（频率评估/摘要/提醒文案等）
 temperature = 0.3
 max_tokens = 512
+# 主：讯飞 MaaS；备：deepseek
+[[task.utils.models]]
 base_url_env = "LLM_BASE_URL"
 model_env = "LLM_MODEL"
 api_key_env = "LLM_API_KEY"
+[[task.utils.models]]
+base_url_env = "DS_BASE_URL"
+model_env = "DS_MODEL"
+api_key_env = "DEEPSEEK_API_KEY"
 
 [task.utils_small]
 # 更轻量的杂项（情绪重评等高频低难度任务）
