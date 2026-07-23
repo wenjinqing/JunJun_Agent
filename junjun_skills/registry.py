@@ -137,7 +137,8 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
     embedding 余弦相似度排序取前 8 个。embedding 不可用时降级关键词匹配。
     """
     CORE = {"do_not_reply", "get_time", "recall_memory", "save_memory",
-            "set_reminder", "list_reminders", "manage_mood", "send_message"}
+            "set_reminder", "list_reminders", "manage_mood", "send_message",
+            "web_search", "search_knowledge"}  # web_search/search_knowledge 高频刚需，永远保留
     core_tools = [t for t in tools if t.name in CORE]
     other_tools = [t for t in tools if t.name not in CORE]
 
