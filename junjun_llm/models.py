@@ -93,7 +93,7 @@ def _build_chat(spec: ModelSpec) -> ChatOpenAI:
         temperature=spec.temperature,
         max_tokens=spec.max_tokens,
         timeout=60,
-        max_retries=1,
+        max_retries=3,  # 503 限流时自动重试（指数退避），避免 L2 gate 直接兜底 no_reply
         http_socket_options=_SOCKET_OPTIONS,
     )
 
