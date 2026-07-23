@@ -250,7 +250,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     )
     with lf.start_span(
         name=f"agent.{session.chat_id}",
-        input={"latest_text": meta.text, "context_preview": session.memory.render(limit=5)[:500]},
+        input={"latest_text": meta.text, "context_preview": session.memory.render(limit=5, for_security=True)[:500]},
         metadata={
             "trace_id": trace_id, "l1_result": l1.value, "at_bot": meta.at_bot,
             "system_prompt": _prompt_snapshot[:2000],
@@ -258,7 +258,9 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     ) as _span:
         text = await session.agent.process(
             # 只给最近 10 条上下文 + 标记最后一条，防串台
-            session.memory.render(limit=10, mark_latest=True),
+            # for_security=True：保留（管理员）标记供安全验证锚点（不影响回复意愿——
+            # 标记在 system prompt 安全段说明，L2/L3 看到的仍是普通群友）
+            session.memory.render(limit=10, mark_latest=True, for_security=True),
             callbacks=callbacks, latest_text=meta.text,
             addressed=(l1 is L1Result.TO_AGENT),
             memory_block=memory_block, relation_block=relation_block,
