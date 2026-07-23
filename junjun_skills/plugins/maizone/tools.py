@@ -188,6 +188,18 @@ def _strip_jsonp(text: str) -> str:
     return text.replace("undefined", "null")
 
 
+def _parse_qzone_json(text: str) -> dict:
+    """解析 Qzone 非标准 JSON（data 段是 JS 对象字面量，key 无引号，单引号字符串）。
+
+    Qzone feeds3_html_more 的 format=json 实际返回 JSON5 变体：
+    - 外层是标准 JSON（code/subcode/message）
+    - data 段是 JS 对象（{main:{...}}，key 无引号，值用单引号）
+    用 json5 解析（对齐原插件实现）。
+    """
+    import json5
+    return json5.loads(_strip_jsonp(text))
+
+
 def _check_code(payload: dict, action: str) -> None:
     """检查 Qzone 响应 code；登录态类错误抛 _AuthError，其余抛 RuntimeError。"""
     code = payload.get("code")
@@ -239,7 +251,7 @@ async def publish_feed(cookies: dict, uin: str, content: str) -> str:
                 "origin": "https://user.qzone.qq.com",
             },
         )
-    payload = json.loads(_strip_jsonp(resp.text))
+    payload = _parse_qzone_json(resp.text)
     _check_code(payload, "发表说说")
     return str(payload.get("tid", ""))
 
@@ -276,7 +288,7 @@ async def fetch_friend_feeds(cookies: dict, uin: str, num: int = 10) -> list:
                 "Referer": f"https://user.qzone.qq.com/{uin}",
             },
         )
-    payload = json.loads(_strip_jsonp(resp.text))
+    payload = _parse_qzone_json(resp.text)
     if isinstance(payload, dict) and payload.get("code") not in (None, 0):
         _check_code(payload, "获取说说列表")
     raw_list = (payload.get("data") or {}).get("data") or []
@@ -332,7 +344,7 @@ async def like_feed(cookies: dict, uin: str, target_qq: str, fid: str) -> bool:
                 "origin": "https://user.qzone.qq.com",
             },
         )
-    payload = json.loads(_strip_jsonp(resp.text))
+    payload = _parse_qzone_json(resp.text)
     _check_code(payload, "点赞")
     return True
 
