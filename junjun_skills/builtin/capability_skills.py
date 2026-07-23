@@ -46,13 +46,16 @@ def get_capabilities(query_type: str = "all") -> str:
                 parts.append(f"- {s['name']}: {s['description'][:50]}")
 
     if query_type in ("all", "mcp"):
-        mcp_tools = [s for items in by_plugin.values() for s in items if s["name"].startswith("mcp_")]
+        # MCP 工具在 registry 里 plugin="mcp"，name 带 mcp_ 前缀
+        mcp_tools = [s for s in skills if s["enabled"] and s["plugin"] == "mcp"]
         if mcp_tools:
             parts.append("## MCP 工具")
             for s in mcp_tools[:20]:  # 最多列 20 个
                 parts.append(f"- {s['name']}: {s['description'][:50]}")
             if len(mcp_tools) > 20:
                 parts.append(f"  ... 共 {len(mcp_tools)} 个")
+        else:
+            parts.append("## MCP 工具：当前无已连接的 MCP server")
 
     if query_type in ("all", "commands"):
         if commands:
