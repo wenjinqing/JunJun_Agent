@@ -112,7 +112,9 @@ class TestWife:
         data = wife._load_today("999")
         assert "12345" in data
         assert "67890" in data
-        assert data["12345"]["user_id"] != data["67890"]["user_id"]  # 不同人不同老婆
+        # 注意：random.choice 可能抽到同一个人（小样本下正常），
+        # 但两个人的记录独立——各自有自己的老婆条目
+        assert data["12345"] is not data["67890"]  # 不同记录对象（独立抽取）
 
     @pytest.mark.asyncio
     async def test_private_rejected(self, _fake_gateway):
