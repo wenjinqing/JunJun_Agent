@@ -125,8 +125,23 @@ def get_tools(session=None) -> List[BaseTool]:
             tools.append(skill)
 
     # 动态掩码：超过 15 个时按语义相关性裁剪（保留核心 + embedding 检索相关）
+    # MCP 工具特殊处理：按 server 分组，每组保留前 3 个（防 70+ 工具全被裁）
     if len(tools) > 15 and session is not None:
-        tools = _mask_by_relevance(tools, session)
+        mcp_tools = [t for t in tools if t.name.startswith("mcp_")]
+        other_tools = [t for t in tools if not t.name.startswith("mcp_")]
+        # MCP 按 server 分组保留（每组前 3 个），不参与话题相关性裁剪
+        mcp_by_server = {}
+        for t in mcp_tools:
+            # mcp_<server>_<tool> 格式，取 server 名分组
+            parts = t.name.split("_", 2)
+            server = parts[1] if len(parts) > 1 else "unknown"
+            mcp_by_server.setdefault(server, []).append(t)
+        mcp_kept = []
+        for server, ts in mcp_by_server.items():
+            mcp_kept.extend(ts[:3])  # 每组最多 3 个
+        # 其他工具按话题相关性裁剪
+        other_kept = _mask_by_relevance(other_tools, session) if len(other_tools) > 15 else other_tools
+        tools = other_kept + mcp_kept
     return tools
 
 
