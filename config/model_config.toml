@@ -18,9 +18,15 @@
 # L2 语义门：小模型，判定 reply / no_reply / no_reply_until_call
 temperature = 0.1
 max_tokens = 128
+# 主：讯飞 MaaS（与 agent 共用）；备：deepseek（503 时自动切换）
+[[task.gate.models]]
 base_url_env = "LLM_BASE_URL"
 model_env = "LLM_MODEL"
 api_key_env = "LLM_API_KEY"
+[[task.gate.models]]
+base_url_env = "DS_BASE_URL"
+model_env = "DS_MODEL"
+api_key_env = "DEEPSEEK_API_KEY"
 
 [task.agent]
 # 主 Agent：必须支持 function calling
