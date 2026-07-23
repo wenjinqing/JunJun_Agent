@@ -11,6 +11,20 @@ command = "${REPO_ROOT}/.venv/Scripts/python.exe"
 args = ["-u", "-m", "junjun_mcp_server.relationship_mcp_server"]
 cwd = "${REPO_ROOT}"
 
+# ---------- 网页搜索（Tavily，需 TAVILY_API_KEY；无 key 时降级 duckduckgo） ----------
+[servers.tavily]
+enable = true
+command = "cmd"
+args = ["/c", "npx", "-y", "tavily-mcp"]
+env = { TAVILY_API_KEY = "${TAVILY_API_KEY}", PYTHONIOENCODING = "utf-8" }
+
+# ---------- 网页搜索（DuckDuckGo，免 key 兜底） ----------
+[servers.duckduckgo_search]
+enable = true
+command = "uvx"
+args = ["duckduckgo-mcp-server"]
+env = { PYTHONIOENCODING = "utf-8" }
+
 # ---------- 中文热榜（微博/知乎/B站/抖音/36氪 等 20+ 源，免 key） ----------
 [servers.trends]
 enable = true
