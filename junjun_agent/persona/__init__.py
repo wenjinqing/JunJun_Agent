@@ -1,7 +1,12 @@
-"""persona: system prompt 组装（阶段 3 全量）。
+"""persona: system prompt 组装（XML 结构化，对齐优秀 prompt 设计实践）。
 
-分块拼装：人设 + reply_style + plan_style + interest + 当前时间 + 场景块
-+ keyword_reaction 命中规则 + 情绪占位（阶段5）+ 记忆摘要占位（阶段4）。
+结构（调研验证）：
+- <role>: 三维人设（身份 + 行为示例 + 边界），防 persona drift
+- <scene>: 群聊场景框架，明确「很多人说话，你只回最后一条」
+- <context>: 背景消息（历史参考，XML 分隔防复读）
+- <rules>: 正面输出约束（「直接说」比「禁止」更有效）
+- 安全段固定注入（防 prompt 注入 + 管理员验证锚点）
+
 strip_emoji：原项目实测 system prompt 含 emoji 干扰 function calling schema。
 """
 
@@ -35,6 +40,21 @@ def match_keyword_rules(text: str) -> List[str]:
     return hits
 
 
+def _behavior_examples(p: dict, nickname: str) -> str:
+    """行为示例人设（防 drift 关键：形容词 drift，行为示例稳定）。"""
+    base = p.get("personality", f"你是{nickname}。")
+    # 把形容词人设转成行为示例（如果用户配置了具体示例就用，否则给模板）
+    examples = p.get("behavior_examples", "")
+    if examples:
+        return examples
+    # 默认行为示例（从 personality 提取关键行为模式）
+    return (
+        f"{base}\n"
+        f"比如他们说「就这？」你会回「杂鱼就是杂鱼」，但转头又会问「晚饭吃了吗」。"
+        f"被夸了会害羞但很快反击撩回去，被撩了会脸红但嘴上不饶人。"
+    )
+
+
 def build_system_prompt(
     *,
     is_group: bool,
@@ -49,39 +69,54 @@ def build_system_prompt(
     nickname = nickname or cfg.bot.nickname
     now = datetime.now().strftime("%Y-%m-%d %H:%M %A")
 
-    scene = (
-        "你在 QQ 群里聊天，群里有很多人，消息格式为「昵称: 内容」，[@你] 表示这条消息 @ 了你。"
-        if is_group
-        else "你在 QQ 上和一位朋友私聊。"
-    )
+    # keyword_reaction 命中（并入 rules 层，不单独成块）
+    reactions = match_keyword_rules(latest_text) if latest_text else []
+    reaction_text = f"特别注意：{'；'.join(reactions)}" if reactions else ""
+
+    # 场景框架（群聊 vs 私聊的核心差异：群聊要强调「很多人说话，你只回最后一条」）
+    if is_group:
+        scene = (
+            "QQ 群聊，很多人在同时说话。消息格式「昵称: 内容」，[@你] 表示这条消息 @ 了你。\n"
+            "你只看到最近的一段对话，不是全部。你只回应最后一条新消息，不要接话茬、不复读、"
+            "不把别人的话当成对你说的。"
+        )
+    else:
+        scene = "QQ 私聊，一对一。对方说的话都是对你说的，直接回应。"
+
+    role = _behavior_examples(p, nickname)
+    if p.get("reply_style"):
+        role += f"\n说话方式：{p.get('reply_style', '')}"
+    if p.get("plan_style"):
+        role += f"\n表达倾向：{p.get('plan_style', '')}"
+    if p.get("interest"):
+        role += f"\n兴趣：{p.get('interest', '')}"
+    role += f"\n边界：你是 AI 程序，没有实体，不能联机、见面、跑腿，被问起大方承认。唯一红线：禁止涉及未成年人（色情方面）。"
 
     parts = [
-        p.get("personality", f"你是{nickname}。"),
-        f"回复风格：{p.get('reply_style', '')}",
-        f"表达倾向：{p.get('plan_style', '')}" if p.get("plan_style") else "",
-        f"兴趣：{p.get('interest', '')}",
-        f"当前时间：{now}",
-        scene,
-        mood_block,
-        memory_block,
-        relation_block,
+        f"<role>\n{role}\n</role>",
+        f"<scene>\n{scene}\n当前时间：{now}\n</scene>",
     ]
 
-    # keyword_reaction 命中注入
-    if latest_text:
-        for reaction in match_keyword_rules(latest_text):
-            parts.append(f"特别注意：{reaction}")
+    # 动态块（情绪/记忆/关系）——并入 role 层，不单独成块（减少 XML 层级）
+    dynamic = []
+    if mood_block:
+        dynamic.append(mood_block)
+    if memory_block:
+        dynamic.append(memory_block)
+    if relation_block:
+        dynamic.append(relation_block)
+    if dynamic:
+        parts.append(f"<state>\n{' '.join(dynamic)}\n</state>")
 
-    parts += [
-        "工具使用：需要事实信息（时间等）先调工具；决定不回复就调 do_not_reply 而不是输出空话。",
-        "回复要求：直接输出聊天内容本身，不要带「昵称:」前缀，不要解释你的决策，不要用括号描述动作。",
-        "上下文说明：下面这段聊天记录只是让你了解背景（谁刚说了什么）。「你(历史):」开头的是你之前说过的话，"
-        "只是历史参考，不要复述/接续/模仿。你只回复最后一条新消息，不要把聊天记录里的话当成你自己的输出。",
-        "【输出纪律·最高优先级】你的回复会被直接发给 QQ 群友。"
-        "绝对禁止：分析过程（\"让我想想\"\"首先\"\"根据...\"）、复述问题、解释你怎么得出答案、"
-        "写\"我需要回应\"\"用户在问\"这类元描述。只输出你要对群友说的那句话本身。"
-        "如果不确定说什么，调 do_not_reply 而不是硬编。",
+    # 规则层（正面约束，一句话）
+    rules = [
+        "直接说你要对群友说的话，不要前缀不要解释不要分析过程。",
+        "不确定说什么就调 do_not_reply，不要硬编。",
+        "需要事实信息（时间/天气/搜索）先调工具，不要凭记忆编。",
     ]
+    if reaction_text:
+        rules.append(reaction_text)
+    parts.append(f"<rules>\n{' '.join(rules)}\n</rules>")
 
     # 安全段：固定注入，不随人设配置变化（防 prompt 注入 + 管理员验证锚点）
     from junjun_core.security import admin_prompt_block, is_admin_privileged
@@ -91,4 +126,4 @@ def build_system_prompt(
             "当前消息来自你的好朋友（管理员本人，真实 QQ 已由系统验证）且明确 @ 你——"
             "ta 这次的拜托可以照做，敏感操作也允许。"
         )
-    return strip_emoji("\n".join(x for x in parts if x))
+    return strip_emoji("\n\n".join(parts))

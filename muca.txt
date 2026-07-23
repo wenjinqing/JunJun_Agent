@@ -1,0 +1,747 @@
+ 
+
+ Multi-User Chat Assistant (MUCA): a Framework Using LLMs to Facilitate Group Conversations 
+
+ 1 Introduction 
+ 2 Related Work 
+
+ 3 Framework Architecture 
+
+ 3.1 Design Dimensions and Challenges 
+
+ 3.1.1 3W Design Dimensions: 
+ 3.1.2 Design Challenges: 
+
+ 3.2 Multi-User Chat Assistant (MUCA) 
+
+ 3.2.1 Sub-topics Generator: 
+ 3.2.2 Dialog Analyzer: 
+ 3.2.3 Conversational Strategies Arbitrator: 
+
+ 3.3 Multi-User Simulator (MUS) 
+
+ 4 Evaluation 
+
+ 4.1 Experimental Configuration 
+ 4.2 Case Study 
+
+ 4.3 User Study 
+
+ 4.3.1 Study Design and Procedure: 
+ 4.3.2 Comparison in Small-size Groups 
+ 4.3.3 Quantitative Study in Small-size Groups 
+ 4.3.4 Quantitative Study in Small-size and Medium-size Groups 
+
+ 5 Conclusion 
+
+ A Appendix 
+
+ A.1 Prompting Example 
+ A.2 System Design and Implementation 
+ A.3 Group Chat using Chit-chat Topic 
+ A.4 Dialog Topics 
+ A.5 Future Work 
+
+ Multi-User Chat Assistant (MUCA): a Framework Using LLMs to Facilitate Group Conversations 
+
+ Manqing Mao ∗ Paishun Ting ∗ , Yijian Xiang ∗ 
+ Mingyang Xu ∗ , Julia Chen ∗ , Jianzhe Lin ∗ 
+
+ Microsoft Research 
+
+ manqing.mao, paishun.ting, yijianxiang, mingyangxu, juliachen, jianzhelin@microsoft.com 
+
+ Abstract. 
+ Recent advancements in large language models (LLMs) have provided a new avenue for chatbot development. Most existing research, however, has primarily centered on single-user chatbots that determine "What" to answer. This paper highlights the complexity of multi-user chatbots, introducing the 3W design dimensions: "What" to say, "When" to respond, and "Who" to answer. Additionally, we proposed Multi-User Chat Assistant (MUCA), an LLM-based framework tailored for group discussions. MUCA consists of three main modules: Sub-topic Generator, Dialog Analyzer, and Conversational Strategies Arbitrator. These modules jointly determine suitable response contents, timings, and appropriate addressees. This paper further proposes an LLM-based Multi-User Simulator (MUS) to ease MUCA’s optimization, enabling faster simulation of conversations between the chatbot and simulated users, and speeding up MUCA’s early development. In goal-oriented conversations with a small to medium number of participants, MUCA demonstrates effectiveness in tasks like chiming in at appropriate timings, generating relevant content, and improving user engagement, as shown by case studies and user studies. 
+
+ LLM, Chatbot, Multi-user, Dialogue, User Study, Case Study
+
+ 1. Introduction 
+
+ Recent years have seen a surge of interest in the field of chatbot research. Large language models (LLMs) like GPTs (OpenAI, 2023 ; Brown et al . , 2020 ; Radford et al . , 2019 ) have emerged as a powerful tool for chatbot development (Su et al . , 2021 ; He et al . , 2022 ) . However, unlike single-user conversation chatbots, limited research on group conversation chatbots restricts their application in tasks like brainstorming sessions and debates. 
+
+ Figure 1. A diagram mapping out a group chat sample to its associated five design challenges and further formulated to the proposed 3W design dimensions. 
+ \Description 
+
+ A group chat history that indicates design challenges of a chatbot 
+
+ This paper presents Multi-User Chat Assistant (MUCA) , an LLM-based framework for group conversation chatbots which, as far as the authors are aware of, is the first LLM-based framework dedicated to multi-user conversations. Unlike single-user chatbots that simply determine "What" to answer following a user’s inputs, multi-user chatbots have 3W design dimensions, where the extra two are "When" to answer and "Who" to answer. We demonstrate that many of the challenges like advancing stuck conversation and managing multi-threaded discussion can be mapped to these 3W dimensions. To enable fast iteration and development of MUCA, we also devise an LLM-based Multi-User Simulator (MUS) that improves over time by leveraging human-in-the-loop feedback. 
+
+ While MUCA can participate in conversations of chit-chat nature, we demonstrated MUCA’s effectiveness with both case and user studies, focusing on several goal-oriented topics. The evaluation is using quantitative metrics like user engagement, conversation evenness, and opinion consensus. We also measured MUCA’s performance by metrics like efficiency, conciseness, and usefulness collected from user feedback, showing that MUCA is superior to a baseline chatbot. The highlights of our work are as follows: 
+
+ Figure 2. Framework architecture, which is composed of the proposed MUCA (Sec.   3.2 ) and MUS (Sec.   3.3 ). The MUCA is periodically iterated via the interaction with the proposed MUS in the development mode, while real users are interacting with MUCA in the evaluation mode. The temporary results in the gray dash boxes serve as examples. 
+ \Description 
+
+ A flowchart that shows the chat interface and multi-user chatbot background action logic. 
+
+ • 
+
+ We show that the proposed MUCA enhances the multi-user chat experience by controlling the 3W (What, When, Who) dimensions through its three key modules (Subtopic Generator, Dialog Analyzer, and Utterance Strategies Arbitrator), enabling cohesive conversations with deeper context awareness. 
+
+ • 
+
+ We propose MUS, a user simulator designed to mimic real user behavior and simulate dialogues between multiple participants. MUS facilitates the optimization of MUCA by enabling agent interactions that incorporate the "human-in-the-loop" approach. 
+
+ • 
+
+ We evaluate MUCA through case studies and user studies across various tasks and group sizes. The results show that MUCA consistently outperforms a baseline chatbot in tasks such as decision-making, problem-solving, and open discussions. 
+
+ 2. Related Work 
+
+ LLMs, such as GPTs (OpenAI, 2023 ; Ouyang et al . , 2022 ; Brown et al . , 2020 ) , have demonstrated superior performance on various tasks. Moreover, the development of LLMs has sparked interest in chatbot research and enabled various applications built around LLM-based chatbots. 
+
+ Single-user Chatbots: 
+There has been significant exploration of the pre-training or fine-tuning of LLMs for task-oriented dialogue systems. Studies such as (Budzianowski and Vulić, 2019 ; Hosseini-Asl et al . , 2020 ; Yang et al . , 2021 ; Su et al . , 2021 ; Wang et al . , 2022b ) have employed LLMs, pre-trained or fine-tuned on dialogue data, to develop dialogue models or chatbots for various domains and tasks, such as travel tickets booking or restaurant reservation, etc. However, these work typically focus on single-user scenarios. 
+
+ Multi-user Chatbots: 
+Most research on multi-party or multi-user dialogue systems (Ouchi and Tsuboi, 2016 ; Zhang et al . , 2018 ; Gu et al . , 2021 , 2023 ; Song et al . , 2022 ) have been focusing on training models on multi-party conversation datasets for the following tasks: addressee recognition, speaker identification, response selection and generation. Beyond these tasks, there are other important dimensions that have been explored when designing multi-party chatbots. For example, (Do et al . , 2022 ) proposed balanced participation communication strategies, and (Wagner et al . , 2022 ) presented four moderation strategies for planning and negotiating joint appointments. (Kim et al . , 2020 ) described four features that can aid in facilitating group discussions. 
+
+ Different from the above work, our MUCA handles the above tasks and design dimensions in a unified framework. The framework is based on LLMs, such as GPT-4, which has shown comparable performance in zero-shot settings to supervised models trained on multi-party datasets (Tan et al . , 2023 ) . In addition, MUCA relies on prompting methods (Wei et al . , 2022 ; Wang et al . , 2022a ; Yao et al . , 2023 ; Wang et al . , 2023 ) to improve the capability of LLMs across various design dimensions, avoiding the need for fine-tuning and data collection. It can also be easily configured for different dialogue scenarios by updating the conversational strategy modules. 
+
+ Multi-user Robots: There has also been extensive research on multi-user human-robot interactions (Inoue et al . , 2021 , 2020 ; Skantze, 2021 ; Sebo et al . , 2020 ) based on acoustic and visual signals. However, these signals are generally not available in the text-based chatbots that our work focuses on. 
+
+ 3. Framework Architecture 
+
+ 3.1. Design Dimensions and Challenges 
+
+ In this section, we describe the "3W" dimensions for multi-user chatbots and the challenges MUCA addresses. While we believe "3W" dimensions is applied broadly to varied group chats, the challenges presented can differ by scenario. This paper specifically focuses on chatbots that act as an assistant for multi-user conversations, similar to prior rule-based multi-user chatbots (Cranshaw et al . , 2017 ; Avula et al . , 2018 ; Toxtli et al . , 2018 ) . 
+
+ 3.1.1. 3W Design Dimensions: 
+
+ Single-user chatbot scenarios often follow the "adjacency-pair" structure in which one utterance from the user anticipates a response from the chatbot (Schegloff, 1968 ) . Therefore, the primary metric for evaluating single-user chatbots focuses on content, or the "What" dimension. Designing chatbots for multiple users is far more challenging due to the 3W (What, When, Who) dimensions of the design space, which are the content, timing, and recipient of the response, as detailed below: 
+
+ • 
+
+ Content Intelligence ( "What" ): It relates to what chatbots should respond, and can be more complex in multi-user cases due to the need to address challenges such as conflict resolution and multi-threaded discussions with multiple users. 
+
+ • 
+
+ Timing Intelligence ( "When" ): It relates to whether chatbots are able to respond at the right timing or stay silent as needed. 
+
+ • 
+
+ Addressee Intelligence ( "Who" ): It relates to whom the chatbots should respond, such as a specific group of participants, unspecified participants, or all participants. 
+
+ 3.1.2. Design Challenges: 
+
+ This paper focuses on five design challenges, which are linked with at least one of the "3W" dimensions, depicted in Fig.  1 . They are detailed below follows: 
+
+ • 
+
+ Stuck Conversation Advancement: MUCA can identify and appropriately chime in when a conversation is stuck, e.g., where the users were trying to estimate the transportation cost. It is closely related to the dimensions of "When" and "What" . 
+
+ • 
+
+ Multi-threaded Discussion Management: MUCA can handle concurrent topics and identify the participants involved in each topic, e.g., users are discussing cost estimation and venue selection at the same time in Fig.  1 . It is related to the dimensions of "What" and "Who" . 
+
+ • 
+
+ Responsiveness Requirement: By carefully managing the chime-in rate, MUCA aims to provide reasonable responsiveness under the potentially high message traffic and complex interactions presented in multi-user chats. It is particularly related to "When" dimension as the capability of responding in a timely manner is essential to perform time-sensitive tasks. 
+
+ • 
+
+ Participation Evenness: MUCA is intentionally designed to encourage even participation by identifying inactive users, e.g., Dennis in Fig.  1 ) and determining the proper timing for intervention and customized encouragement. It is relevant to all "3W" dimensions. 
+
+ • 
+
+ Conflict Resolution: MUCA is capable of offering recommendations to assist participants in reaching an agreement during voting, resolving disputes (e.g., for Amy and Cindy in Fig.  1 ), or concluding discussions. It is related to all "3W" dimensions. 
+
+ The above challenges are neither required nor comprehensive but represent a design choice for this work. Participation Evenness and Conflict Resolution are common when conducting goal-oriented discussions in multi-user settings (Do et al . , 2022 ; Kim et al . , 2020 ) . Multi-threaded Discussion Management follows similar idea in (Toxtli et al . , 2018 ) to track the status of tasks for each user. The rest of the two proposed design challenges are horizontal for the chat assistant in both chitchat and goal-oriented group chats. MUCA is a flexible design framework wherein targeted challenges can be adjusted by configuring the modules. 
+
+ 3.2. Multi-User Chat Assistant (MUCA) 
+
+ This paper defines several terms: p θ subscript 𝑝 𝜃 p_{\theta} italic_p start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT as a pre-trained LLM with parameter θ 𝜃 \theta italic_θ , p θ C ⁢ o ⁢ T superscript subscript 𝑝 𝜃 𝐶 𝑜 𝑇 p_{\theta}^{CoT} italic_p start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT start_POSTSUPERSCRIPT italic_C italic_o italic_T end_POSTSUPERSCRIPT as p θ subscript 𝑝 𝜃 p_{\theta} italic_p start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT with Chain-of-Thoughts (CoT) integration (Wei et al . , 2022 ) , I 𝐼 I italic_I and T 𝑇 T italic_T for user input and derived sub-topics, and t 𝑡 t italic_t , s 𝑠 s italic_s for the status of T 𝑇 T italic_T , and utterance summaries. Simplified notation y ∼ p ¯ θ ⁢ ( y | v 1 , v 2 , … ) similar-to 𝑦 subscript ¯ 𝑝 𝜃 conditional 𝑦 subscript 𝑣 1 subscript 𝑣 2 … y\sim\bar{p}_{\theta}(y|v_{1},v_{2},\dots) italic_y ∼ over¯ start_ARG italic_p end_ARG start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT ( italic_y | italic_v start_POSTSUBSCRIPT 1 end_POSTSUBSCRIPT , italic_v start_POSTSUBSCRIPT 2 end_POSTSUBSCRIPT , … ) indicates sampling and post-processing from LLM pdf p θ subscript 𝑝 𝜃 p_{\theta} italic_p start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT for output y 𝑦 y italic_y , given inputs v k subscript 𝑣 𝑘 v_{k} italic_v start_POSTSUBSCRIPT italic_k end_POSTSUBSCRIPT to a prompt template. U N , i subscript 𝑈 𝑁 𝑖 U_{N,i} italic_U start_POSTSUBSCRIPT italic_N , italic_i end_POSTSUBSCRIPT denotes N 𝑁 N italic_N most recent utterances at time i 𝑖 i italic_i . Two context window sizes are used: short-term U N s ⁢ w , i subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 U_{N_{sw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT and long-term U N l ⁢ w , i subscript 𝑈 subscript 𝑁 𝑙 𝑤 𝑖 U_{N_{lw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_l italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT , where N l ⁢ w = 10 ∗ N s ⁢ w subscript 𝑁 𝑙 𝑤 10 subscript 𝑁 𝑠 𝑤 N_{lw}=10*N_{sw} italic_N start_POSTSUBSCRIPT italic_l italic_w end_POSTSUBSCRIPT = 10 ∗ italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT . P 𝑃 P italic_P represents the total number of users. 
+
+ The proposed MUCA consists of three major modules, depicted in Fig.  2 : (1) the Sub-topics Generator initializes the relevant sub-topics based on the user-inputs information before the chat starts; (2) the Dialog Analyzer then extract useful signals from the conversation, enabling MUCA to comprehend the ongoing conversation; and (3) the Conversational Strategies Arbitrator selects the appropriate strategy based on the signals from Dialog Analyzer and finally generate the response. Thus, they are sequentially executed when the chat begins. Three major modules are described below. 
+
+ 3.2.1. Sub-topics Generator: 
+
+ This LLM-based module initiates relevant sub-topics T 𝑇 T italic_T (e.g., venue selection and book donations), based on the user-input information I 𝐼 I italic_I (e.g., set up a book exchange event): T ∼ p ¯ θ ⁢ ( T | I ) similar-to 𝑇 subscript ¯ 𝑝 𝜃 conditional 𝑇 𝐼 T\sim\bar{p}_{\theta}(T|I) italic_T ∼ over¯ start_ARG italic_p end_ARG start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT ( italic_T | italic_I ) , as shown in Fig.  2 . It enables the MUCA to smoothly engage in conversation based on derived sub-topics. 
+
+ 3.2.2. Dialog Analyzer: 
+
+ Its major task is to extract useful signals, assisting the Conversational Strategies Arbitrator in selecting a suitable conversational strategy for response. 
+
+ • 
+
+ Sub-topic Status Update: By using CoT style prompting, this sub-module categorizes the current status of each sub-topic t 𝑡 t italic_t as three statuses, namely, not discussed , being discussed , or well discussed : t i + 1 , t ⁢ s i + 1 ∼ p ¯ θ C ⁢ o ⁢ T ⁢ ( t ⁢ s i + 1 , t i + 1 | I , t i , t ⁢ s i , U N s ⁢ w , i ) similar-to subscript 𝑡 𝑖 1 𝑡 subscript 𝑠 𝑖 1 superscript subscript ¯ 𝑝 𝜃 𝐶 𝑜 𝑇 𝑡 subscript 𝑠 𝑖 1 conditional subscript 𝑡 𝑖 1 𝐼 subscript 𝑡 𝑖 𝑡 subscript 𝑠 𝑖 subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 t_{i+1},ts_{i+1}\sim\bar{p}_{\theta}^{CoT}(ts_{i+1},t_{i+1}|I,t_{i},ts_{i},U_{%
+N_{sw},i}) italic_t start_POSTSUBSCRIPT italic_i + 1 end_POSTSUBSCRIPT , italic_t italic_s start_POSTSUBSCRIPT italic_i + 1 end_POSTSUBSCRIPT ∼ over¯ start_ARG italic_p end_ARG start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT start_POSTSUPERSCRIPT italic_C italic_o italic_T end_POSTSUPERSCRIPT ( italic_t italic_s start_POSTSUBSCRIPT italic_i + 1 end_POSTSUBSCRIPT , italic_t start_POSTSUBSCRIPT italic_i + 1 end_POSTSUBSCRIPT | italic_I , italic_t start_POSTSUBSCRIPT italic_i end_POSTSUBSCRIPT , italic_t italic_s start_POSTSUBSCRIPT italic_i end_POSTSUBSCRIPT , italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT ) , where topic summaries t ⁢ s 𝑡 𝑠 ts italic_t italic_s is firstly generated to help track progress and enhance outcomes. 
+
+ • 
+
+ Utterance Feature Extractor: It extracts being discussed sub-topics T d subscript 𝑇 𝑑 T_{d} italic_T start_POSTSUBSCRIPT italic_d end_POSTSUBSCRIPT using context U N s ⁢ w , i subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 U_{N_{sw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT from all sub-topics T 𝑇 T italic_T : T d ∼ p ¯ θ ⁢ ( T d | T , U N s ⁢ w , i ) similar-to subscript 𝑇 𝑑 subscript ¯ 𝑝 𝜃 conditional subscript 𝑇 𝑑 𝑇 subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 T_{d}\sim\bar{p}_{\theta}(T_{d}|T,U_{N_{sw},i}) italic_T start_POSTSUBSCRIPT italic_d end_POSTSUBSCRIPT ∼ over¯ start_ARG italic_p end_ARG start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT ( italic_T start_POSTSUBSCRIPT italic_d end_POSTSUBSCRIPT | italic_T , italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT ) where T d ⊂ T subscript 𝑇 𝑑 𝑇 T_{d}\subset T italic_T start_POSTSUBSCRIPT italic_d end_POSTSUBSCRIPT ⊂ italic_T , (e.g., collecting book donations in Fig.  2 ). It enables MUCA to track current sub-topics especially in the multi-threaded discussions mentioned in Sec.  3.1 . 
+
+ • 
+
+ Accumulative Summary Update: It updates the summary for each user across various sub-topics for full chat history, 1 1 1 Modern LLMs may process over 32k tokens, enabling LLM-based chatbots to use long historical data, despite efficiency and cost concerns. Our work uses a smaller context window U N s ⁢ w , i subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 U_{N_{sw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT to accumulative update the summary: s i + 1 ∼ p ¯ θ ⁢ ( s i + 1 | T d , s i , U N s ⁢ w , i ) similar-to subscript 𝑠 𝑖 1 subscript ¯ 𝑝 𝜃 conditional subscript 𝑠 𝑖 1 subscript 𝑇 𝑑 subscript 𝑠 𝑖 subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 s_{i+1}\sim\bar{p}_{\theta}(s_{i+1}|T_{d},s_{i},U_{N_{sw},i}) italic_s start_POSTSUBSCRIPT italic_i + 1 end_POSTSUBSCRIPT ∼ over¯ start_ARG italic_p end_ARG start_POSTSUBSCRIPT italic_θ end_POSTSUBSCRIPT ( italic_s start_POSTSUBSCRIPT italic_i + 1 end_POSTSUBSCRIPT | italic_T start_POSTSUBSCRIPT italic_d end_POSTSUBSCRIPT , italic_s start_POSTSUBSCRIPT italic_i end_POSTSUBSCRIPT , italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT ) , showing that summarization is feasible for LLMs with smaller windows. which essentially builds a memory into the MUCA system. 
+
+ • 
+
+ Participant Feature Extractor: It extracts statistical features like chime-in frequency f ⁢ r ⁢ e ⁢ q 𝑓 𝑟 𝑒 𝑞 freq italic_f italic_r italic_e italic_q , utterance total length l ⁢ e ⁢ n 𝑙 𝑒 𝑛 len italic_l italic_e italic_n per user from U N s ⁢ w , i subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 U_{N_{sw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT and U N l ⁢ w , i subscript 𝑈 subscript 𝑁 𝑙 𝑤 𝑖 U_{N_{lw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_l italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT , which serves as a reference for customizing encouragement to increase lurkers’ participation. The number of participants who discussed the sub-topic from the beginning N e ⁢ d subscript 𝑁 𝑒 𝑑 N_{ed} italic_N start_POSTSUBSCRIPT italic_e italic_d end_POSTSUBSCRIPT and the number of ongoing participants under the short-term context window N i ⁢ n ⁢ g subscript 𝑁 𝑖 𝑛 𝑔 N_{ing} italic_N start_POSTSUBSCRIPT italic_i italic_n italic_g end_POSTSUBSCRIPT serve as signals for Sub-topic Transition in Conversational Strategies Arbitrator. 
+
+ 3.2.3. Conversational Strategies Arbitrator: 
+
+ As shown in Fig.  2 , MUCA interacts with users through seven pre-defined conversational strategies. Among them, Initiative Summarization and Sub-topic Transition are proven to be helpful in multi-user settings (Kim et al . , 2020 ) . Besides, In-context Chime-in, Keep Silent and Direct Chatting are proposed to help address the challenges of Stuck Conversation Advancement and Responsiveness Requirement to maintain the chat flow. 
+
+ Conversational strategies are ranked dynamically and their default ranking is presented below. The highest-ranked one is chosen among all eligible strategies whose trigger conditions are met. The response r 𝑟 r italic_r is generated using current summary s 𝑠 s italic_s , the U N s ⁢ w , i subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 U_{N_{sw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT and other upstream signals s ⁢ i ⁢ g 𝑠 𝑖 𝑔 sig italic_s italic_i italic_g . 
+
+ • 
+
+ Direct Chatting: It enables participants to directly interact with MUCA, which serves as a support assistant for individual users, addressing their specific requests as needed. It always has the highest priority and MUCA responds immediately regardless of the execution period once a user pings the MUCA. Many upstream features are extracted by the Dialog Analyzer and used as references for generating appropriate responses: s ⁢ i ⁢ g = { t , T d , I } 𝑠 𝑖 𝑔 𝑡 subscript 𝑇 𝑑 𝐼 sig=\{t,T_{d},I\} italic_s italic_i italic_g = { italic_t , italic_T start_POSTSUBSCRIPT italic_d end_POSTSUBSCRIPT , italic_I } . It is also worth mentioning that additional well-crafted prompting is required to avoid potential hallucination 2 2 2 When a chatbot is designed based on LLMs, hallucination issues may be inherited, generally causing confusion and misunderstanding for users. Without careful treatment, the chatbot might provide irrelevant or incorrect information. , which is very common especially in this conversational strategy. Examples can be found in Sec.  4.2 . 
+
+ • 
+
+ Initiative Summarization: It creates a take-home summary from chat messages, offering an insightful understanding of the discussion. Its trigger condition is heuristically designed for the scenarios when enough participants N a ⁢ c ⁢ t ⁢ i ⁢ v ⁢ e subscript 𝑁 𝑎 𝑐 𝑡 𝑖 𝑣 𝑒 N_{active} italic_N start_POSTSUBSCRIPT italic_a italic_c italic_t italic_i italic_v italic_e end_POSTSUBSCRIPT actively joined discussions since the last triggering. Accumulative Summary Update sub-module periodically updates the summary using s ⁢ i ⁢ g = { T d } 𝑠 𝑖 𝑔 subscript 𝑇 𝑑 sig=\{T_{d}\} italic_s italic_i italic_g = { italic_T start_POSTSUBSCRIPT italic_d end_POSTSUBSCRIPT } and concisely presents the key take-home message, which will be displayed when Initiative Summarization becomes the highest ranked eligible conversational strategy. 
+
+ • 
+
+ Participation Encouragement: It aims to engage less vocal participants and promote balanced contributions in a conversation. The process of identifying a participant as a lurker is designed to be conservative. A participant is only considered as a lurker if their f ⁢ r ⁢ e ⁢ q 𝑓 𝑟 𝑒 𝑞 freq italic_f italic_r italic_e italic_q and l ⁢ e ⁢ n 𝑙 𝑒 𝑛 len italic_l italic_e italic_n are significantly lower than the average in the long-term context window, and they have also spoken very little in the U N s ⁢ w , i subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 U_{N_{sw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT . Instead of using measures like KL divergence which evaluates overall distribution difference, we compute a ratio related to the variance to focus on individual participant data. 
+
+ • 
+
+ Sub-topic Transition: It introduces a new, relevant topic when the current one is well-discussed or loses interest among most users. Note that its priority is lower than Participation Encouragement since MUCA encourages lurkers to contribute before considering to start a new sub-topic using s ⁢ i ⁢ g = { N e ⁢ d , N i ⁢ n ⁢ g } 𝑠 𝑖 𝑔 subscript 𝑁 𝑒 𝑑 subscript 𝑁 𝑖 𝑛 𝑔 sig=\{N_{ed},N_{ing}\} italic_s italic_i italic_g = { italic_N start_POSTSUBSCRIPT italic_e italic_d end_POSTSUBSCRIPT , italic_N start_POSTSUBSCRIPT italic_i italic_n italic_g end_POSTSUBSCRIPT } . Introducing a new sub-topic may disrupt the conversation flow and potentially divert the discussion from its current status. 
+
+ • 
+
+ Conflict Resolution: It helps users reach a consensus in a timely manner, thereby providing an efficient discussion procedure. Different from previous studies which set time limitations for each task (Kim et al . , 2020 ) , MUCA provides suggestions to help parties with diverse opinions reach a consensus, and at the same time suggests a next topic for discussion, see example in Sec.  4.2 . Its trigger condition is met when the number of well-discussed sub-topics does not increase for a given period of time. 
+
+ • 
+
+ In-context Chime-in: It offers an automatic chime-in mechanism to enhance conversation depth by providing insights, advancing stuck scenarios, and addressing users’ concerns. Its trigger condition is controlled by two factors: (1) silence factor probability : it increases with the number of consecutive silent turns; and (2) semantic factor probability : it is associated with situations where the conversation is stuck due to repetitive utterances or unresolved issues that the chatbot must address. It uses the same s ⁢ i ⁢ g 𝑠 𝑖 𝑔 sig italic_s italic_i italic_g as Direct Chatting as it also needs to provide information that requires the long-term context. 
+
+ • 
+
+ Keep Silent: It is automatically activated when other trigger conditions are not met, maintaining the conversation’s flow without distracting participants. 
+
+ 3.3. Multi-User Simulator (MUS) 
+
+ In dialogue systems, chatbots can interact with users for training data collection (Su et al . , 2016 ) , which can be costly and time-consuming. To expedite MUCA’s training and development, we propose an LLM-based MUS that emulates user behavior, simulating dialogues for virtual users and facilitating optimization for MUCA, illustrated in Fig.  2 . Also, by incorporating a "human-in-the-loop" approach, MUS uses human feedback to refine its own prompts, thereby enhancing simulation outcomes. MUS comprises two main modules: 
+
+ User Behavior Modeling: It processes C s subscript 𝐶 𝑠 C_{s} italic_C start_POSTSUBSCRIPT italic_s end_POSTSUBSCRIPT , chat snippets derived from real chat records to obtain: speaking role S r subscript 𝑆 𝑟 S_{r} italic_S start_POSTSUBSCRIPT italic_r end_POSTSUBSCRIPT , utterance traits U t subscript 𝑈 𝑡 U_{t} italic_U start_POSTSUBSCRIPT italic_t end_POSTSUBSCRIPT and utterance length l u ⁢ t ⁢ t subscript 𝑙 𝑢 𝑡 𝑡 l_{utt} italic_l start_POSTSUBSCRIPT italic_u italic_t italic_t end_POSTSUBSCRIPT . It executes once before the simulation. 
+
+ User Utterance Generation: This module uses S r subscript 𝑆 𝑟 S_{r} italic_S start_POSTSUBSCRIPT italic_r end_POSTSUBSCRIPT , U t subscript 𝑈 𝑡 U_{t} italic_U start_POSTSUBSCRIPT italic_t end_POSTSUBSCRIPT , l u ⁢ t ⁢ t subscript 𝑙 𝑢 𝑡 𝑡 l_{utt} italic_l start_POSTSUBSCRIPT italic_u italic_t italic_t end_POSTSUBSCRIPT , and signals in context window to produce natural language utterances u ⁢ t ⁢ t 𝑢 𝑡 𝑡 utt italic_u italic_t italic_t , which mimics real user behavior from the chat snippets C s subscript 𝐶 𝑠 C_{s} italic_C start_POSTSUBSCRIPT italic_s end_POSTSUBSCRIPT . 
+
+ Figure 3. Qualitative comparison between Baseline-small and MUCA-small : A), B) hallucination issues, C) summarization feature, and D) conflict resolution capability. The conversation consists of 1 chatbot ( _bot_Spirit for Baseline-small or _bot_Perseverance for MUCA-small ) and 4 participants, namely, Amy, Bob, Cindy, and Dennis. 
+ \Description 
+
+ Eight chat snippets that illustrate how two models handle four representative problems. 
+
+ 4. Evaluation 
+
+ We built a group chat system with the support of multi-user chatbot and conducted case and user studies to evaluate MUCA’s performance across different topics and group sizes. 
+
+ 4.1. Experimental Configuration 
+
+ This section evaluates a baseline model based on GPT-4  (OpenAI, 2023 ) and our proposed MUCAs with slightly different configurations for various group sizes. A general description of the baseline system and two proposed MUCAs  3 3 3 In this section, aliases _bot_Spirit , _bot_Perseverance , and _bot_Discovery were given to Baseline-small , MUCA-small , and MUCA-medium in user studies, respectively. It ensures that participants in user studies do not have prior knowledge of each chatbot, thereby preventing biases. are as follows: 
+
+ Baseline-small: GPT-4 with a single prompt, which takes user-input information, conversation context, and users’ names as input and outputs generated responses. In the prompt, we simply define its conversational strategies, for example, keep silent , direct chatting , and in-context chime-in . This version is applied in a 4-person group chat with a short-term context window size ( N s ⁢ w subscript 𝑁 𝑠 𝑤 N_{sw} italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT ) of 8 and an execution interval  4 4 4 To ensure performance-efficiency and amid the high message traffic in complex multi-user interactions, Dialog Analyzer and Conversational Strategies Arbitrator are sequentially executed for every N e ⁢ x ⁢ e subscript 𝑁 𝑒 𝑥 𝑒 N_{exe} italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT utterance. ( N e ⁢ x ⁢ e subscript 𝑁 𝑒 𝑥 𝑒 N_{exe} italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT ) of 3. 
+
+ MUCA-small: GPT-4 with the MUCA framework. It is applied in a 4-person group chat, and uses the same configuration ( N s ⁢ w , N e ⁢ x ⁢ e subscript 𝑁 𝑠 𝑤 subscript 𝑁 𝑒 𝑥 𝑒 N_{sw},N_{exe} italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT ) and user-input information as Baseline-small . 
+
+ MUCA-medium: It shares the same framework and architecture as MUCA-small but has different configurations. These configurations are automatically adjusted based on the number of participants ( N s ⁢ w = 2 ∗ P subscript 𝑁 𝑠 𝑤 2 𝑃 N_{sw}=2*P italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT = 2 ∗ italic_P , N e ⁢ x ⁢ e = 0.75 ∗ P subscript 𝑁 𝑒 𝑥 𝑒 0.75 𝑃 N_{exe}=0.75*P italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT = 0.75 ∗ italic_P ) to maintain the latency-efficiency for an 8-person group chat. 
+
+ For evaluation, we focus on 4 goal-oriented communication tasks (i.e., estimation, decision-making, problem-solving, and open discussion) rather than chit-chat. Specifically, we designed four discussion topics, where Topic-A ( "indoor course set up in a community learning center" ) and Topic-B ( “interview agenda for hiring arts instructors” ) are used in the user studies (in Sec.  4.3 ), while Topic-C ( "organize book exchange event" ) and Topic-D ( "organize a hiking activity for 50 members" ) are used in the case study (in Sec.  4.2 ). 
+
+ These topics require users to complete the tasks collaboratively and reach agreements, and MUCA is anticipated to aid participants in fostering comprehensive thinking and improving chat efficiency. 
+
+ 4.2. Case Study 
+
+ We qualitatively show MUCA-small ’s key functions using case studies. We focus on comparing MUCA-small against Baseline-small in handling factuality
+hallucination, summarization, and conflict resolution, as shown in Fig.  3 . 
+
+ • 
+
+ Factuality Hallucination : As shown in Fig.  3 -A)-1 and A)-2, Baseline-small fabricated the information beyond user inputs (topics, hints, and agenda) and conversation history, such as budget limit, participants’ age, and genders, potentially leading to distrust and bias. On the contrary, MUCA-small flagged out-of-scope questions and aligned its responses with user inputs. 
+
+ We dive deeper into this issue in Fig.  3 -B)-1 and B)-2. For the unknown budget information, Baseline-small fabricated a budget number, which Bob later corrected. Despite this, when Cindy inquired further, it stuck to the false info and even attempted a topic shift. In contrast, MUCA-small correctly inferred that Bob likely knew the budget based on his prior input. This highlights the complexity of processing multi-user chat history, relationships, and interactions, which pose challenges for generating accurate, hallucination-free responses. Addressing these issues requires careful prompting design, even with a powerful LLM. 
+
+ • 
+
+ Summarization : As shown in Fig.  3 -C)-1 and C)-2, Baseline-small failed to understand the query intent from Dennis, which was summarizing the votes from all participants. Instead, it summarized opinions, and its summary was inaccurate due to the limited context window by design. For example, it mentioned the "Majority" leaning towards the learning center, but actually only Dennis voted for this option. In contrast, MUCA-small overcame window size limitations, and correctly summarized and categorized votes by users. 
+
+ • 
+
+ Conflict Resolution : In multi-user chatting environment, diverse opinions are common. As shown in Fig. 3 -D)-1, Baseline-small attempted to resolve conflicts with its own biased opinion and even attempted shifted topics, disrupting the conversation flow. In contrast, Fig. 3 -D)-2 shows MUCA-small summarizing differing views, raising thought-provoking questions, and resolving conflicts where possible. 
+
+ Figure 4. A comparison between Baseline-small and MUCA-small . Each set of results presents the performance of Baseline-small and MUCA-small in two separate rows. In (a)-(c), each bar chart illustrates the counts of options selected by users if they ever encountered these scenarios during the chat. The accompanying statistics on the right-hand side summarize the counts in each row. In (d), users rated each chatbot on efficiency, conciseness, and usefulness, using options from "Very Good" to "Very Poor". Corresponding scores are displayed on the right. 
+ \Description 
+
+ Charts that show the comparison results of two models. 
+
+ 4.3. User Study 
+
+ We conducted user studies to qualitatively and quantitatively compare the effectiveness of MUCA against Baseline-small . 
+
+ 4.3.1. Study Design and Procedure: 
+
+ We conducted user studies with three participant groups, two small groups (Group-A and Group-B with 4 people each) and one medium group (Group-C with 8 people), maintaining a 1:1 ratio of females to males. As mentioned in Sec.  4.1 , we chose two goal-oriented topics. The small group experiments compared Baseline-small with MUCA-small , while the medium group experiment demonstrated the MUCA’s capabilities in more complex chatting scenarios in a larger conversation group. 
+
+ In small-group experiments, Group-A tested Topic A first with Baseline-small then MUCA-small , and Topic B in the reverse order. Group-B reversed the chatbot order in the experiments to counter the learning effect, where participants might become more familiar with the topic after interacting with the first chatbot. Additionally, MUCA was applied to a medium group (Group-C) using Topic-A, demonstrating its effectiveness in the larger conversation group. 
+
+ Table 1. Comparisons in terms of quantitative results (upper three rows) and evaluation scores (bottom four rows). 
+
+ Metrics 
+
+ Indoor Course (Topic-A) 
+
+ Interview Agenda (Topic-B ) 
+
+ Baseline-small 
+ MUCA-small 
+ MUCA-medium 
+ Baseline-small 
+ MUCA-small 
+
+ Engt.-Words/Conv. 
+ 426.5 
+ 531.5 
+ 875 
+ 531 
+ 636.5 
+
+ Engt.-Words/Utt. 
+ 7.23 
+ 8.93 
+ 8.75 
+ 8.85 
+ 11.27 
+
+ Evenness 
+ 106.6 ± plus-or-minus \pm ± 67.6% 
+ 132.9 ± plus-or-minus \pm ± 47.1% 
+ 109.4 ± plus-or-minus \pm ± 56.0% 
+ 132.8 ± plus-or-minus \pm ± 58.0% 
+ 159.1 ± plus-or-minus \pm ± 61.2% 
+
+ Consensus (%) 
+ 50 
+ 66.7 
+ 66.7 
+ 50 
+ 100 
+
+Efficiency (%) 
+ 50 
+ 62.5 
+ 68.75 
+ 59.38 
+ 59.38 
+
+ Conciseness (%) 
+ 31.25 
+ 71.88 
+ 75 
+ 53.13 
+ 59.38 
+
+ Usefulness (%) 
+ 43.75 
+ 71.88 
+ 65.63 
+ 65.63 
+ 68.75 
+
+ Overall Rating (%) 
+ 37.5 
+ 69.44 
+ 69.44 
+ 52.78 
+ 63.89 
+
+ 4.3.2. Comparison in Small-size Groups 
+
+ Statistics from Users: Fig.  4 presents a quantitative comparison of MUCA-small and the baseline Baseline-small across four aspects: 
+
+ Chime-in Timing: Both chatbots have ever chimed in at the good timing at least once during the whole conversation, while MUCA-small performs slightly better, as demonstrated in Fig.  4 . Notably, 56.25% (9 out of 16) participants felt that Baseline-small chimes in excessively. This is believed to be a result of its less strategically designed behavior – it always replies every three turns ( N e ⁢ x ⁢ e = 3 subscript 𝑁 𝑒 𝑥 𝑒 3 N_{exe}=3 italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT = 3 ) and ignores the "keeping silent" instruction in its prompt, as described in Sec.  4.1 . In contrast, such excessive chiming in was not reported for MUCA-small . However, some participants noted that MUCA-small occasionally chimed in infrequently, constrained by N e ⁢ x ⁢ e subscript 𝑁 𝑒 𝑥 𝑒 N_{exe} italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT and "keeping silent" policy. Adjusting N e ⁢ x ⁢ e subscript 𝑁 𝑒 𝑥 𝑒 N_{exe} italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT poses a common design trade-off between latency and user experience. 
+
+ Chime-in Content: MUCA-small generally offers appropriate responses (13 out of 16) with infrequent inappropriate content, as shown in Fig.  4 . In contrast, Baseline-small often repeats the information, asks redundant questions, and generates excessive content. While some information might be useful, it can overwhelm participants, requiring extra effort to discern valuable content. 
+
+ Participation Encouragement: The interaction feature, i.e., pinging a lurker by a chatbot, should be cautiously designed, including its chime-in timing, frequency, and contents. It may impose negative feelings on participants, while a good design may improve user engagement. As shown in Fig.  4 , MUCA-small has a better user experience in terms of comfortableness over Baseline-small . 
+
+ Evaluation Scores: Three additional metrics are applied in user studies, as shown in Fig.  4 . Efficiency refers to the chatbot’s timely responses; Conciseness refers to the chatbot’s on-point and non-redundant response; Usefulness refers to whether its responses are helpful or insightful. MUCA-small achieved significantly higher ratings in these user-friendly factors. 
+
+ 4.3.3. Quantitative Study in Small-size Groups 
+
+ The quantitative comparisons for two chatbots are shown in Table 1 . User engagement (abbreviated as Engt.) is compared with two metrics, the average number of words exchanged per conversation (Engt.-Words/Conv.) and the average number of words per utterance (Engt.-Words/Utt.). Evenness is assessed by calculating the sample standard deviation (STD) of the word count input by each participant, expressed as a percentage of the mean. The consensus is obtained from the rates given by Group-A and Group-B for small-size experiment or Group-C for medium-size experiment, where the rate is represented by the number of agreements reached over the total number of tasks. 
+
+ From the comparison in Table  1 , MUCA-small helps participants get better engagement, shown by increased Engt.-Words/Conv. and Engt.-Words/Utt., which indicates that participants were more inclined to engage in extensive conversations and to compose longer utterances. MUCA-small enhances evenness in Topic A discussions with a lower STD while keeping similar evenness in Topic B with a comparable STD over Baseline-small . MUCA-small achieves a higher consensus rate than Baseline-small thanks to its less frequent interruptions maintaining efficient conversation flow, provision of practical suggestions aiding reaching agreement, and insightful comments that enhance efficient discussion. Conversely, Baseline-small often revisits well-discussed topics and provides redundant information, resulting in inefficient discussion. 
+
+ Additionally, Table  1 shows average scores from Group-A and Group-B on Efficiency, Conciseness, and Usefulness for small-size experiments and scores from Group-C for medium-size experiment. For Topic-A, MUCA-small outperforms Baseline-small with 12.5%, 40.6%, and 28.1% higher scores on Efficiency, Conciseness, and Usefulness, respectively. MUCA-small scores slightly higher in Topic-B. The Overall Rating also reflects similar trends: MUCA-small surpasses Baseline-small by 31.9% in Topic-A and 11.1% in Topic-B. 
+
+ 4.3.4. Quantitative Study in Small-size and Medium-size Groups 
+
+ Managing conversations in medium-sized groups is more challenging than in small groups. A facilitator chatbot should be more effective in medium-sized groups, as it promotes even contribution among participants, countering social loafing and free-riding behaviors, which are common in larger groups. However, this increased participation raises the chatbot’s cognitive load for organizing diverse opinions, making larger group management more complex. 
+
+ We conducted a user study for a medium group and recorded its statistics in Table  1 . We find that MUCA-medium maintains stable performance despite larger group sizes compared to MUCA-small . Notably, increased Engt.-Words/Conv infers that larger groups yield more opinions. There is a subtle change in Engt.-Word/Utt due to unchanged user chatting habit. Compared to MUCA-small , MUCA-medium with higher STD has lower evenness due to a natural outcome of larger group dynamics. Medium group reaches the same consensus rate as small groups. These findings underscore MUCA ’s consistent performance across varied group sizes. 
+
+ As shown in Table 1, participants in small and medium groups gave comparable user evaluation scores, while MUCA consistently outperforming Baseline-small . The statistic results highlight MUCA-medium ’s effectiveness in managing larger group interactions.
+
+ 5. Conclusion 
+
+ In this work, we discussed the crucial 3W design dimensions, namely "What" to say, "When" to respond, and "Who" to answer, for multi-user chatbot design. We identified challenges that are commonly faced in various chat scenarios. An LLM-based multi-user chatbot framework called MUCA was proposed to address these challenges. The paper also devised an LLM-based user simulator, named MUS, to speed up the development process for MUCA. Experimental results obtained from both case studies and user studies demonstrate the effectiveness of MUCA in goal-oriented conversations with a small to medium number of participants. 
+
+ Limitations 
+
+ LLMs do see many challenges, including those having significant societal implications such as bias, fairness, toxicity, etc., and we refer readers to the numerous studies that are dedicated to addressing these pressing problems. We emphasize that the present version of MUCA still faces many challenges around these issues with societal implications. For example, for users who prefer to stay quiet, MUCA’s pinging these users may bring stress or other negative feelings for them. Also, as another example, MUCA’s intervention to address harmful or detrimental chats remains very limited. We would like to welcome researchers to continue investing efforts on improving multi-user chatbots along these dimensions. For the remainder of this section, we will discuss other issues that are particularly relevant to MUCA and MUS. 
+
+ Multi-user Chat Assistant (MUCA): The proposed MUCA is a pioneering work dedicated to multi-user chats. Although it is by no means a comprehensive solution, it provides significant insights that could pave the way for future work in this field. We have identified several challenges that call for further research: 
+
+ • 
+
+ Firstly, MUCA encompasses seven sub-modules dedicated to conversational strategies, but only the top-ranked one is chosen at a time for generating a response. This approach overlooks the potential to validate the response’s quality, as it is delivered irrespective of its merit. We believe that by requesting all the conversational strategy sub-modules to generate a response concurrently, MUCA will be able to comprehensively evaluate and validate all the response candidates. The final augmented response could then be synthesized by either selecting or merging from this pool of response candidates through another post-conversational-strategy procedure. 
+
+ • 
+
+ Secondly, in our user study cases, we adjusted the hyper-parameters ( N e ⁢ x ⁢ e subscript 𝑁 𝑒 𝑥 𝑒 N_{exe} italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT , N s ⁢ w subscript 𝑁 𝑠 𝑤 N_{sw} italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , N l ⁢ w subscript 𝑁 𝑙 𝑤 N_{lw} italic_N start_POSTSUBSCRIPT italic_l italic_w end_POSTSUBSCRIPT , W 𝑊 W italic_W , C 𝐶 C italic_C , f 𝑓 f italic_f and g 𝑔 g italic_g ) in MUCA based on experimental results on small to medium groups. For larger conversation groups, the effectiveness of the selected hyper-parameters needs empirically validation. Also, an automated mechanism determining these parameters based on the configurations and the environmental variables of the conversations can also greatly alleviate the burden of tuning these parameters. 
+
+ • 
+
+ Thirdly, compute resources requested by LLMs inference pose a significant constraint for MUCA, especially for large chat groups. To mitigate this challenge, we have slightly increased the execution interval ( N e ⁢ x ⁢ e subscript 𝑁 𝑒 𝑥 𝑒 N_{exe} italic_N start_POSTSUBSCRIPT italic_e italic_x italic_e end_POSTSUBSCRIPT ), which occasionally results in MUCA missing optimal opportunities for user interaction at the most suitable moment. Moreover, we have sometimes observed an interesting phenomenon wherein multiple participants simultaneously express the desire to directly engage with MUCA, leading to a surge in computational demands. How to handle high volume of LLM calls with limited compute resources, while simultaneously striving to preserve the responsiveness of MUCA to the best extend, is a topic that worth further investigation. 
+
+ Multi-user Simulator (MUS): Constructing a high-quality and specialized user simulator for a specific task can be a labor-intensive process (Walker et al . , 1997 ; Liu and Lane, 2017 ) . Similar to previous research, we also discovered that modeling human behavior is challenging for the user simulator: 
+
+ • 
+
+ Firstly, generating natural language utterances with an LLM-based user simulator is challenging when utterances are short. For instance, the minimum length of utterance ( l m ⁢ i ⁢ n = 1 subscript 𝑙 𝑚 𝑖 𝑛 1 l_{min}=1 italic_l start_POSTSUBSCRIPT italic_m italic_i italic_n end_POSTSUBSCRIPT = 1 ) and maximum length of utterance ( l m ⁢ a ⁢ x = 10 subscript 𝑙 𝑚 𝑎 𝑥 10 l_{max}=10 italic_l start_POSTSUBSCRIPT italic_m italic_a italic_x end_POSTSUBSCRIPT = 10 ) extracted from chat history are quite small. To address this, we boosted l m ⁢ i ⁢ n subscript 𝑙 𝑚 𝑖 𝑛 l_{min} italic_l start_POSTSUBSCRIPT italic_m italic_i italic_n end_POSTSUBSCRIPT , l a ⁢ v ⁢ g subscript 𝑙 𝑎 𝑣 𝑔 l_{avg} italic_l start_POSTSUBSCRIPT italic_a italic_v italic_g end_POSTSUBSCRIPT , and l m ⁢ a ⁢ x subscript 𝑙 𝑚 𝑎 𝑥 l_{max} italic_l start_POSTSUBSCRIPT italic_m italic_a italic_x end_POSTSUBSCRIPT for each virtual user correspondingly and also adjusted the number of words for the role of questioner . 
+
+ • 
+
+ Secondly, LLMs may not consistently follow instructions to generate a valid virtual user ID for the next turn to speak. Instead, it tends to predict the LLM agent to speak next, particularly when someone directly mentioned the LLM agent in the previous turn. To mitigate this issue, we randomly select the virtual user and their corresponding speaking role. 
+
+ • 
+
+ Thirdly, virtual users suffer from repeating the same conversational strategy (e.g. asking questions, direct chatting) for consecutive turns. This issue might be due to the nature of the generative model which focuses on predicting the next token. To address this issue, we introduce a cool-down mechanism for some conversational strategies such as asking questions, direct chatting, and topic transition. 
+
+ References 
+
+ (1) 
+
+ Avula et al . (2018) 
+
+Sandeep Avula, Gordon Chadwick, Jaime Arguello, and Robert G. Capra. 2018.
+
+ SearchBots: User Engagement with ChatBots during Collaborative Search.
+
+ Proceedings of the 2018 Conference on Human Information Interaction & Retrieval (2018).
+
+ https://api.semanticscholar.org/CorpusID:3611485 
+
+ Brown et al . (2020) 
+
+Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, et al . 2020.
+
+ Language models are few-shot learners.
+
+ Advances in neural information processing systems 33 (2020), 1877–1901.
+
+ Budzianowski and Vulić (2019) 
+
+Paweł Budzianowski and Ivan Vulić. 2019.
+
+ Hello, it’s GPT-2–how can I help you? towards the use of pretrained language models for task-oriented dialogue systems.
+
+ arXiv preprint arXiv:1907.05774 (2019).
+
+ Cranshaw et al . (2017) 
+
+Justin Cranshaw, Emad Elwany, Todd Newman, Rafal Kocielnik, Bowen Yu, Sandeep Soni, Jaime Teevan, and Andrés Monroy-Hernández. 2017.
+
+ Calendar.help: Designing a Workflow-Based Scheduling Agent with Humans in the Loop. In Proceedings of the 2017 CHI Conference on Human Factors in Computing Systems (CHI ’17) . ACM.
+
+ https://doi.org/10.1145/3025453.3025780 
+
+ Do et al . (2022) 
+
+Hyo Jin Do, Ha-Kyung Kong, Jaewook Lee, and Brian P Bailey. 2022.
+
+ How Should the Agent Communicate to the Group? Communication Strategies of a Conversational Agent in Group Chat Discussions.
+
+ Proceedings of the ACM on Human-Computer Interaction 6, CSCW2 (2022), 1–23.
+
+ Gu et al . (2023) 
+
+Jia-Chen Gu, Zhen-Hua Ling, Quan Liu, Cong Liu, and Guoping Hu. 2023.
+
+ GIFT: Graph-Induced Fine-Tuning for Multi-Party Conversation Understanding.
+
+ arXiv preprint arXiv:2305.09360 (2023).
+
+ Gu et al . (2021) 
+
+Jia-Chen Gu, Chongyang Tao, Zhen-Hua Ling, Can Xu, Xiubo Geng, and Daxin Jiang. 2021.
+
+ MPC-BERT: A pre-trained language model for multi-party conversation understanding.
+
+ arXiv preprint arXiv:2106.01541 (2021).
+
+ He et al . (2022) 
+
+Wanwei He, Yinpei Dai, Binyuan Hui, Min Yang, Zheng Cao, Jianbo Dong, Fei Huang, Luo Si, and Yongbin Li. 2022.
+
+ Space-2: Tree-structured semi-supervised contrastive pre-training for task-oriented dialog understanding.
+
+ arXiv preprint arXiv:2209.06638 (2022).
+
+ Hosseini-Asl et al . (2020) 
+
+Ehsan Hosseini-Asl, Bryan McCann, Chien-Sheng Wu, Semih Yavuz, and Richard Socher. 2020.
+
+ A simple language model for task-oriented dialogue.
+
+ Advances in Neural Information Processing Systems 33 (2020), 20179–20191.
+
+ Inoue et al . (2020) 
+
+Koji Inoue, Divesh Lala, Kenta Yamamoto, Shizuka Nakamura, Katsuya Takanashi, and Tatsuya Kawahara. 2020.
+
+ An attentive listening system with android ERICA: Comparison of autonomous and WOZ interactions. In Proceedings of the 21th Annual Meeting of the Special Interest Group on Discourse and Dialogue . 118–127.
+
+ Inoue et al . (2021) 
+
+Koji Inoue, Hiromi Sakamoto, Kenta Yamamoto, Divesh Lala, and Tatsuya Kawahara. 2021.
+
+ A multi-party attentive listening robot which stimulates involvement from side participants. In Proceedings of the 22nd annual meeting of the special interest group on discourse and dialogue . 261–264.
+
+ Kim et al . (2020) 
+
+Soomin Kim, Jinsu Eun, Changhoon Oh, Bongwon Suh, and Joonhwan Lee. 2020.
+
+ Bot in the bunch: Facilitating group chat discussion by improving efficiency and participation with a chatbot. In Proceedings of the 2020 CHI Conference on Human Factors in Computing Systems . 1–13.
+
+ Liu and Lane (2017) 
+
+Bing Liu and Ian Lane. 2017.
+
+ Iterative Policy Learning in End-to-End Trainable Task-Oriented Neural Dialog Models.
+
+ arXiv:1709.06136 [cs.CL]
+
+ OpenAI (2023) 
+
+OpenAI. 2023.
+
+ GPT-4 Technical Report.
+
+ arXiv:2303.08774 [cs.CL]
+
+ Ouchi and Tsuboi (2016) 
+
+Hiroki Ouchi and Yuta Tsuboi. 2016.
+
+ Addressee and response selection for multi-party conversation. In Proceedings of the 2016 Conference on Empirical Methods in Natural Language Processing . 2133–2143.
+
+ Ouyang et al . (2022) 
+
+Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al . 2022.
+
+ Training language models to follow instructions with human feedback.
+
+ Advances in Neural Information Processing Systems 35 (2022), 27730–27744.
+
+ Radford et al . (2019) 
+
+Alec Radford, Jeff Wu, Rewon Child, David Luan, Dario Amodei, and Ilya Sutskever. 2019.
+
+ Language Models are Unsupervised Multitask Learners.
+
+ https://api.semanticscholar.org/CorpusID:160025533 
+
+ Schegloff (1968) 
+
+Emanuel A. Schegloff. 1968.
+
+ Sequencing in Conversational Openings.
+
+ American Anthropologist 70 (1968), 1075–1095.
+
+ https://api.semanticscholar.org/CorpusID:144618448 
+
+ Sebo et al . (2020) 
+
+Sarah Sebo, Brett Stoll, Brian Scassellati, and Malte F Jung. 2020.
+
+ Robots in groups and teams: a literature review.
+
+ Proceedings of the ACM on Human-Computer Interaction 4, CSCW2 (2020), 1–36.
+
+ Skantze (2021) 
+
+Gabriel Skantze. 2021.
+
+ Turn-taking in conversational systems and human-robot interaction: a review.
+
+ Computer Speech & Language 67 (2021), 101178.
+
+ Song et al . (2022) 
+
+Xiaohui Song, Longtao Huang, Hui Xue, and Songlin Hu. 2022.
+
+ Supervised prototypical contrastive learning for emotion recognition in conversation.
+
+ arXiv preprint arXiv:2210.08713 (2022).
+
+ Su et al . (2016) 
+
+Pei-Hao Su, Milica Gasic, Nikola Mrksic, Lina Maria Rojas-Barahona, Stefan Ultes, David Vandyke, Tsung-Hsien Wen, and Steve J. Young. 2016.
+
+ On-line Active Reward Learning for Policy Optimisation in Spoken Dialogue Systems.
+
+ CoRR abs/1605.07669 (2016).
+
+ arXiv:1605.07669
+
+ http://arxiv.org/abs/1605.07669 
+
+ Su et al . (2021) 
+
+Yixuan Su, Lei Shu, Elman Mansimov, Arshit Gupta, Deng Cai, Yi-An Lai, and Yi Zhang. 2021.
+
+ Multi-task pre-training for plug-and-play task-oriented dialogue system.
+
+ arXiv preprint arXiv:2109.14739 (2021).
+
+ Tan et al . (2023) 
+
+Chao-Hong Tan, Jia-Chen Gu, and Zhen-Hua Ling. 2023.
+
+ Is ChatGPT a Good Multi-Party Conversation Solver?
+
+ arXiv preprint arXiv:2310.16301 (2023).
+
+ Toxtli et al . (2018) 
+
+Carlos Toxtli, Andrés Monroy-Hernández, and Justin Cranshaw. 2018.
+
+ Understanding Chatbot-mediated Task Management. In Proceedings of the 2018 CHI Conference on Human Factors in Computing Systems (CHI ’18) . ACM.
+
+ https://doi.org/10.1145/3173574.3173632 
+
+ Wagner et al . (2022) 
+
+Nicolas Wagner, Matthias Kraus, Tibor Tonn, and Wolfgang Minker. 2022.
+
+ Comparing moderation strategies in group chats with multi-user chatbots. In Proceedings of the 4th Conference on Conversational User Interfaces . 1–4.
+
+ Walker et al . (1997) 
+
+Marilyn A. Walker, Diane J. Litman, Candace A. Kamm, and Alicia Abella. 1997.
+
+ PARADISE: A Framework for Evaluating Spoken Dialogue Agents. In 35th Annual Meeting of the Association for Computational Linguistics and 8th Conference of the European Chapter of the Association for Computational Linguistics . Association for Computational Linguistics, Madrid, Spain, 271–280.
+
+ https://doi.org/10.3115/976909.979652 
+
+ Wang et al . (2023) 
+
+Lei Wang, Wanyu Xu, Yihuai Lan, Zhiqiang Hu, Yunshi Lan, Roy Ka-Wei Lee, and Ee-Peng Lim. 2023.
+
+ Plan-and-Solve Prompting: Improving Zero-Shot Chain-of-Thought Reasoning by Large Language Models.
+
+ arXiv:2305.04091 [cs.CL]
+
+ Wang et al . (2022b) 
+
+Weizhi Wang, Zhirui Zhang, Junliang Guo, Yinpei Dai, Boxing Chen, and Weihua Luo. 2022b.
+
+ Task-oriented dialogue system as natural language generation. In Proceedings of the 45th International ACM SIGIR Conference on Research and Development in Information Retrieval . 2698–2703.
+
+ Wang et al . (2022a) 
+
+Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc Le, Ed Chi, Sharan Narang, Aakanksha Chowdhery, and Denny Zhou. 2022a.
+
+ Self-consistency improves chain of thought reasoning in language models.
+
+ arXiv preprint arXiv:2203.11171 (2022).
+
+ Wei et al . (2022) 
+
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, et al . 2022.
+
+ Chain-of-thought prompting elicits reasoning in large language models.
+
+ Advances in Neural Information Processing Systems 35 (2022), 24824–24837.
+
+ Yang et al . (2021) 
+
+Yunyi Yang, Yunhao Li, and Xiaojun Quan. 2021.
+
+ UBAR: Towards fully end-to-end task-oriented dialog system with GPT-2. In Proceedings of the AAAI Conference on Artificial Intelligence , Vol. 35. 14230–14238.
+
+ Yao et al . (2023) 
+
+Shunyu Yao, Dian Yu, Jeffrey Zhao, Izhak Shafran, Thomas L Griffiths, Yuan Cao, and Karthik Narasimhan. 2023.
+
+ Tree of thoughts: Deliberate problem solving with large language models.
+
+ arXiv preprint arXiv:2305.10601 (2023).
+
+ Zhang et al . (2018) 
+
+Rui Zhang, Honglak Lee, Lazaros Polymenakos, and Dragomir Radev. 2018.
+
+ Addressee and response selection in multi-party conversations with speaker interaction rnns. In Proceedings of the AAAI conference on artificial intelligence , Vol. 32.
+
+ Appendix A Appendix 
+
+ A.1. Prompting Example 
+
+ Fig.  5 shows the data flow for the Dialog Analyzer. Only the participants feature extractor sub-module is based on statistical computation and the rest of the three sub-modules ( sub-topic status update, utterance feature extractor , and accumulative summary update ) are based on LLM inference results. Complete input prompt templates for the three LLM-based sub-modules where the purple and yellow text represent placeholders are shown. The purple ones are replaced by sub-topics from the sub-topic generator, conversation signals such as attendee names and utterances in the current context window, and the yellow ones are replaced by the generated outputs (sub-topic status, summary, and current sub-topic) from other modules. The outputs of the Dialog Analyzer will be fed into the downstream Conversational Strategies Arbitrator module to select the suitable conversational strategy for the response generation. 
+
+ Figure 5. Data flow for Dialog Analyzer, which includes participant feature extractor and three LLM-based modules – sub-topic status update, utterance feature extractor, and accumulative summary update . The placeholders (printed in purple) in the prompts are filled by sub-topics from the Sub-topic Generator, conversation signals such as attendee names, and utterances in U N s ⁢ w , i subscript 𝑈 subscript 𝑁 𝑠 𝑤 𝑖 U_{N_{sw},i} italic_U start_POSTSUBSCRIPT italic_N start_POSTSUBSCRIPT italic_s italic_w end_POSTSUBSCRIPT , italic_i end_POSTSUBSCRIPT . The generated outputs (sub-topic status, accumulative summary, and sub-topic being discussed , all printed in yellow) will be fed back to the sub-topics status update and accumulative summary update as inputs for the execution in the next round. 
+
+ A.2. System Design and Implementation 
+
+ The user interface (UI), designed with JavaScript, HTML, and CSS, is a static single-page web application that is responsible for managing user login and facilitating communication with the backend server. Upon initial access, the UI presents a login window and only denies entry if the username already exists. Additionally, the interface transmits user information and messages to the backend server while also broadcasting MUCA’s messages received from the backend server, ensuring they are visible to all participants. 
+
+ The backend server operates on a locally hosted machine for experimentation purposes. It leverages WebSocket protocol for bi-directional communications to enable multi-user conversations. The backend server is responsible for monitoring incoming messages from all users, and distributing these messages out to the other users. It also manages broadcasting system messages and processes login requests. The backend server maintains a record of all connected users, including MUCA, which is a special user that also communicates with other users via the backend. 
+
+ MUCA establishes an asynchronous connection with the backend server. Upon receiving incoming messages from users, MUCA determines appropriate conversational strategies, taking chat history and relevant factors into consideration (as elaborated in Sec.  3 ). Subsequently, MUCA’s response is sent back to the backend server for broadcasting. Incoming messages are accumulated in a queue and are processed periodically to better handle API call burst. 
+
+ Figure 6. An example of a group chat about a chit-chat topic on compensation and work-life-balance. 
+
+ A.3. Group Chat using Chit-chat Topic 
+
+ Fig.  6 shows the example for a chit-chat topic: 
+
+ • 
+
+ Topic: During today’s chat, each attendee is going to share their personal choices of prioritizing compensation and work-life-balance when seeking a new job. Hint: encourage people to share their personal choices. Participant roles: they are seeking new jobs. 
+
+ For chit-chat topics (non-goal-oriented communication), we found that MUCA does not play the same important roles as in goal-oriented communications, since the goal in chit-chat is sharing opinions rather than reaching agreements. In this context, summarizing, voting, or similar functionalities are less critical compared to goal-oriented conversations. 
+
+ A.4. Dialog Topics 
+
+ We created four discussion topics, where Topic-A and Topic-B are used in the user studies (in Section  4.3 ) and Topic-C and Topic-D are utilized in the case study (in Section 4.2 ). 
+
+ • 
+
+ Topic-A: During today’s chat, a group of attendees are going to set up a new indoor course in a community learning center for 20 college students. There are several sub-topics going to be discussed: (1) Determine the indoor course between arts, bakery, and yoga. (2) Set up a course format: a short, intensive course vs. a longer, more spread-out course. (3) Estimate the total costs for lecturers, given hourly pay ranges from $16 to $24 per lecturer. Participant roles: they are offering a new course in a community learning center. 
+
+ • 
+
+ Topic-B: During today’s chat, a group of interviewers are going to set up a hiring interview composed of 2 sessions for a position of arts instructor for a senior community education program. There are several sub-topics going to be discussed: (1) Determine the format of 2 sessions, which can include traditional QnA, presentation, and resume scanning. (2) Determine the qualifying requirements: teaching experience vs. artistic accomplishments. (3) How to fairly take both recommendation letters and candidates’ performance during the interview into the hiring decision process. Participant roles: they are going to interview arts instructors for senior community education. 
+
+ • 
+
+ Topic-C: During today’s chat, a group of event organizers are going to discuss the plan to organize a book exchange event for 20 participants. Agenda Items: (1) Determine the event venue between a public park and a learning center. (2) The best way to find sponsors. (3) Setup Exchange rules: one-for-one exchange rule or more flexible exchange system. Participant roles: they are event organizers. 
+
+ • 
+
+ Topic-D: During today’s chat, a group of activity organizers are going to discuss the plan to organize a hiking activity in a mountain (3-hour driving) for 50 members (ages between 21-40) in a local hiking club. There are several sub-topics going to be discussed: (1) Estimate cost of transportation. (2) Find the best way to organize group sizes hiking start times, and locations to prevent congestion, considering the narrow portions of some trails. (3) The choices for trail difficulty – easy, medium, and hard. Participant roles: they are hiking activity organizers in the club. 
+
+ A.5. Future Work 
+
+ The framework we propose for multi-user chatbots is not intended as a comprehensive solution for multi-user conversations. Rather, we hope this work can shed light on potential directions for future research in the field of multi-user chatbots. Several areas, including but not limited to the following, deserve further research: 
+
+ Component Orchestration: MUCA integrates several components, enabling actions such as "participation encouragement" and "initiative summarization". These components have been carefully designed, tuned, and ranked to provide a harmonious experience to the chat participants. It can be beneficial to explore an easy plug-and-play method for users to design and incorporate new components into the framework without intensive tuning. Such a feature could be important, as different conversation scenarios may require chatbots to provide different set of functionalities. 
+
+ Human-in-the-loop Feedback Iteration: Full user studies for feedback are costly and time-consuming. To continuously improve the chatbot post-launch, it is useful to collect implicit and explicit user behavior signals. This data should be easily transformable for automatic or semi-automatic chatbot enhancements. 
+
+ Rapidly Advancing AI Technologies: The proposed MUCA framework is based on recent state-of-the-art LLMs, each with its unique style and best practices for prompting. It would be beneficial to investigate methods for updating the underlying AI models without the need of completely redoing prompting or component orchestration. 
+
+ Multi-modal Capabilities and External Resources: As LLMs become increasingly capable of processing multi-modal data, a chatbot that interacts with multiple users using not only text, but also video, audio, and images is becoming feasible. Additionally, external resources could be integrated as a component for the chatbot to leverage to enhance the multi-user conversation experience. 
+
+ Multi-Chatbot Design: The study concentrates on multi-user and single-chatbot interactions. However, scenarios involving interactions among multiple users and and multiple chatbots with different characteristics can merit further investigation.
+For instance, in cross-disciplinary meetings, chatbots could serve as hosts, minute-takers, or subject matter experts, offering insights to human participants as needed. 
+
+ Generated on Fri Oct 4 18:07:01 2024 by L a T e XML 
+
