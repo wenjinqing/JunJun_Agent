@@ -227,6 +227,7 @@ def load_builtin() -> None:
     from junjun_skills.builtin.action_skills import (
         send_message, send_poke, get_weather, query_chat_history,
     )
+    from junjun_skills.builtin.capability_skills import get_capabilities
 
     register(get_time)
     register(do_not_reply)
@@ -246,4 +247,5 @@ def load_builtin() -> None:
     register(send_poke)
     register(get_weather)
     register(query_chat_history)
+    register(get_capabilities)
     logger.info(f"内置 skill 已加载: {[t.name for t in get_tools()]}")
