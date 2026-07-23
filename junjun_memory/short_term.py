@@ -40,7 +40,7 @@ class ShortTermMemory:
             self.entries = self.entries[-self.max_size:]
 
     def render(self, limit: Optional[int] = None, *, mark_latest: bool = False,
-               include_bot: bool = True) -> str:
+               include_bot: bool = True, for_security: bool = False) -> str:
         """渲染为对话文本（供 prompt）。群聊格式 `昵称: 内容`。
 
         管理员消息带「(管理员)」系统标记——按真实 user_id 判定，聊天内容无法伪造，
@@ -49,6 +49,8 @@ class ShortTermMemory:
         mark_latest: True 时最后一条 user 消息前缀「【最新】」——帮模型聚焦。
         include_bot: True 时 bot 回复进 context（记忆效果），但前缀「你(历史):」
         明确标记为「已发生的历史输出」而非「待接续的话」（防复读关键）。
+        for_security: True 时保留（管理员）标记（安全验证用）；
+        False（默认）时管理员显示为普通群友（不影响回复意愿）。
 
         边界感知（LangChain trim_messages 语义）：永远以 user 消息开头，
         不从 bot 回复中间截断——模型不会把被截断的历史当成待续写文本。
@@ -75,7 +77,9 @@ class ShortTermMemory:
                 # 默认不进 context（include_bot=False 时）
             else:
                 prefix = f"{e.nickname or e.user_id}"
-                if is_admin(e.user_id):
+                # 管理员标记：for_security=True 才保留（安全验证用），
+                # 默认不显示——L2/L3 看到的都是普通群友，不影响回复意愿
+                if for_security and is_admin(e.user_id):
                     prefix += "(管理员)"
                 mark = " [@你]" if e.at_bot else ""
                 if mark_latest and i == last_user_idx:

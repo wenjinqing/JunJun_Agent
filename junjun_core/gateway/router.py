@@ -182,6 +182,9 @@ def _extract_text(seg: Seg) -> str:
             parts.append(_extract_text(sub))
     elif seg.type == "text" and isinstance(seg.data, str):
         parts.append(seg.data)
+    elif seg.type == "image":
+        # 图片段转占位文本——君君知道「有图但不知道内容」（VLM 识图失败时的兜底）
+        parts.append("[图片]")
     return "".join(parts)
 
 
