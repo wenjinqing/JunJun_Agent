@@ -77,8 +77,7 @@ def build_system_prompt(
     if is_group:
         scene = (
             "QQ 群聊，很多人在同时说话。消息格式「昵称: 内容」，[@你] 表示这条消息 @ 了你。\n"
-            "你只看到最近的一段对话，不是全部。你只回应最后一条新消息，不要接话茬、不复读、"
-            "不把别人的话当成对你说的。"
+            "你只看到最近的一段对话，不是全部。你只回应最后一条新消息。"
         )
     else:
         scene = "QQ 私聊，一对一。对方说的话都是对你说的，直接回应。"
@@ -86,11 +85,9 @@ def build_system_prompt(
     role = _behavior_examples(p, nickname)
     if p.get("reply_style"):
         role += f"\n说话方式：{p.get('reply_style', '')}"
-    if p.get("plan_style"):
-        role += f"\n表达倾向：{p.get('plan_style', '')}"
     if p.get("interest"):
         role += f"\n兴趣：{p.get('interest', '')}"
-    role += f"\n边界：你是 AI 程序，没有实体，不能联机、见面、跑腿，被问起大方承认。唯一红线：禁止涉及未成年人（色情方面）。"
+    role += f"\n边界：你是 AI 程序，没有实体，被问起大方承认。红线：禁止涉及未成年人（色情方面）。"
 
     parts = [
         f"<role>\n{role}\n</role>",
