@@ -117,14 +117,14 @@ class MCPManager:
         return len(self._tools)
 
     def _wrap(self, tool):
-        """加 mcp_ 前缀 + 超时 + 结果截断。
+        """加 mcp_ 前缀 + 超时 + 结果截断 + 内容提取。
 
         langchain-mcp-adapters 工具是 content_and_artifact 格式，
         coroutine 返回 (content, artifact) 二元组——包装必须保持该结构。
 
-        2026-07-22 调整（用户反馈 MCP 长结果被拆太碎）：
-        - 结果超长时不再截断，而是**拼接为合并转发格式**（forward 段）
-        - 单条超过 _FORWARD_THRESHOLD 才走合并转发，短结果仍直发
+        2026-07-24 调整（用户反馈格式难看）：
+        - content 是 [{'type': 'text', 'text': '...'}] 列表时，提取纯文本
+        - 不用 markdown 格式，纯文本输出
         """
         original_coro = tool.coroutine
         if original_coro is not None:
@@ -135,7 +135,7 @@ class MCPManager:
                     return "工具调用超时（30s），请换个方式或稍后再试。", None
 
                 content, artifact = result if isinstance(result, tuple) else (result, None)
-                text = str(content) if content is not None else ""
+                text = _extract_text(content) if content is not None else ""
                 if len(text) > _RESULT_MAX_CHARS:
                     # 超长按合并转发打包（防刷屏 + 不丢内容）
                     import json
@@ -153,11 +153,32 @@ class MCPManager:
                         "text": f"📋 {tool.name} 结果（共 {len(text)} 字）",
                         "nodes": nodes,
                     }, ensure_ascii=False), artifact
-                return content, artifact
+                return text, artifact
             tool.coroutine = guarded
         if not tool.name.startswith("mcp_"):
             tool.name = f"mcp_{tool.name}"
         return tool
+
+
+def _extract_text(content) -> str:
+    """从 MCP content 提取纯文本。
+
+    content 可能是：
+    - 字符串：直接返回
+    - [{'type': 'text', 'text': '...'}]：提取 text 字段拼接
+    - 其他对象：str() 兜底
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts) if parts else str(content)
+    return str(content)
 
     def register_all(self) -> None:
         """注入 skill registry（重名由 registry 报错）。_ADMIN_TOOLS 包权限门。"""
