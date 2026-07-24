@@ -381,7 +381,9 @@ async def comment_feed(cookies: dict, uin: str, target_qq: str, fid: str, conten
     m = re.search(r"frameElement\.callback\((.*?)\)\s*;?\s*(?:</script>)?", resp.text, re.S)
     if not m:
         raise RuntimeError(f"评论失败: 无法解析响应 {resp.text[:100]}")
-    payload = json.loads(m.group(1).replace("undefined", "null"))
+    # 评论接口也返回 JSON5（key 无引号/单引号），用 json5 解析（对齐原插件）
+    import json5
+    payload = json5.loads(m.group(1).replace("undefined", "null"))
     _check_code(payload, "评论")
     return True
 

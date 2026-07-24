@@ -23,7 +23,7 @@ env = { TAVILY_API_KEY = "${TAVILY_API_KEY}", PYTHONIOENCODING = "utf-8" }
 enable = true
 command = "uvx"
 args = ["duckduckgo-mcp-server"]
-env = { PYTHONIOENCODING = "utf-8" }
+env = { PYTHONIOENCODING = "utf-8", DUCKDUCKGO_BACKEND = "browser" }
 
 # ---------- 中文热榜（微博/知乎/B站/抖音/36氪 等 20+ 源，免 key） ----------
 [servers.trends]
