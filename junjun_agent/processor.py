@@ -186,6 +186,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     if meta.is_self:
         logger.debug(f"[{session.chat_id}] 自消息，沉默")
         return
+    addressed = True  # 私聊默认直通；群聊按 is_addressed 判定
     if session.is_group:
         from junjun_agent.funnel.rule_gate import is_addressed
         addressed = is_addressed(meta.text, cfg, meta.at_bot)
