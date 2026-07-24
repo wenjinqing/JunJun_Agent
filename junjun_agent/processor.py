@@ -182,15 +182,17 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         if expression_learner.note(session.chat_id, meta.nickname, meta.text):
             await expression_learner.learn(session.chat_id)
 
-    # ---- 决策门（0 token）：仅 @/直呼进思考，其余直接沉默（无 planner 误判）----
+    # ---- 决策门（0 token）：私聊直通，群聊仅 @/直呼进思考 ----
     if meta.is_self:
         logger.debug(f"[{session.chat_id}] 自消息，沉默")
         return
-    from junjun_agent.funnel.rule_gate import is_addressed
-    addressed = is_addressed(meta.text, cfg, meta.at_bot)
-    if not addressed:
-        logger.debug(f"[{session.chat_id}] 非 @/直呼，沉默")
-        return
+    if session.is_group:
+        from junjun_agent.funnel.rule_gate import is_addressed
+        addressed = is_addressed(meta.text, cfg, meta.at_bot)
+        if not addressed:
+            logger.debug(f"[{session.chat_id}] 非 @/直呼，沉默")
+            return
+    # 私聊：直通（对齐原 Brain 语义：私聊基本都回）
     if session.silenced_until_call:
         session.silenced_until_call = False
         logger.info(f"[{session.chat_id}] 沉默模式解除（被呼唤）")
