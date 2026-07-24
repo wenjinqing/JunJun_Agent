@@ -101,7 +101,16 @@ class MCPManager:
         if not ok_configs:
             return 0
         self._client = MultiServerMCPClient(ok_configs)
-        raw_tools = await self._client.get_tools()
+        # get_tools 可能因某个 server 的 stdio 污染/bug 抛异常——
+        # 逐 server 拉取，一个失败不影响其他（对齐 start 的降级语义）
+        raw_tools = []
+        for name in ok_configs:
+            try:
+                single = MultiServerMCPClient({name: ok_configs[name]})
+                tools = await asyncio.wait_for(single.get_tools(), timeout=_CONNECT_TIMEOUT)
+                raw_tools.extend(tools)
+            except Exception as e:
+                logger.warning(f"MCP server [{name}] 拉取工具失败（跳过）: {type(e).__name__}: {e}")
 
         # 命名空间前缀 + 结果截断包装
         self._tools = [self._wrap(t) for t in raw_tools]
