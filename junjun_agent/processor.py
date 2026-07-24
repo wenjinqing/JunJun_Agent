@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import re
 import time
 from typing import Optional
 
@@ -17,6 +18,81 @@ from junjun_core.contracts import ReplySet, ReplySegment
 from junjun_core.gateway.router import InboundMeta
 from junjun_core.gateway.session_manager import ChatSession
 from junjun_core.observability import get_logger
+
+# 搜索意图识别：用户明确要搜/查/找/问什么时候/最新信息
+_SEARCH_RE = re.compile(r"(搜|查|找|检索|搜索|什么时候|何时|最新|新闻|资讯|帮我.*[搜查找]|web_search|mcp_search)", re.I)
+
+
+def _is_search_request(text: str) -> bool:
+    """判定消息是否为搜索请求（0 token，不走 agent）。"""
+    return bool(_SEARCH_RE.search(text or ""))
+
+
+async def _handle_search_request(session: ChatSession, meta: InboundMeta) -> None:
+    """搜索请求直接调工具返回，不走 agent（方案 C：绕过 LLM 的工具调用决策）。"""
+    from junjun_core.gateway.router import get_gateway
+    gateway = get_gateway()
+
+    # 提取搜索关键词（去掉「帮我/搜/查/找/什么时候」等前缀）
+    query = re.sub(r"^(帮我|请|麻烦|君君[,，]?)\s*", "", meta.text)
+    query = re.sub(r"(搜|查|找|检索|搜索|一下|什么时候|何时|最新|新闻|资讯)$", "", query).strip()
+    if not query:
+        query = meta.text
+
+    logger.info(f"[{session.chat_id}] 搜索拦截: {query[:50]}")
+
+    # 优先 mcp_search（DuckDuckGo，免 key），失败降级 web_search（bing）
+    result = None
+    try:
+        from junjun_skills.registry import _registry
+        tool = _registry.get("mcp_search") or _registry.get("mcp_tavily_search")
+        if tool:
+            result = await tool.ainvoke({"query": query, "num_results": 5})
+    except Exception as e:
+        logger.warning(f"MCP 搜索失败，降级 web_search: {e}")
+
+    if not result:
+        try:
+            from junjun_skills.plugins.google_search.tools import web_search
+            result = web_search.invoke({"query": query, "num_results": 5})
+        except Exception as e:
+            logger.warning(f"web_search 失败: {e}")
+
+    if not result:
+        await gateway.send_reply(ReplySet(
+            platform=session.platform,
+            target_group_id=session.group_id,
+            target_user_id=meta.user_id if not session.is_group else None,
+            segments=[ReplySegment(type="text", data="搜失败了，稍后再试试吧。")],
+            should_reply=True,
+        ))
+        return
+
+    # 结果太长走合并转发，短则直发
+    text = str(result)
+    if len(text) > 2000:
+        import json
+        nodes = [{
+            "type": "node",
+            "data": {"name": "君君", "uin": "",
+                     "content": [{"type": "text", "data": {"text": text}}]},
+        }]
+        await gateway.send_reply(ReplySet(
+            platform=session.platform,
+            target_group_id=session.group_id,
+            target_user_id=meta.user_id if not session.is_group else None,
+            segments=[ReplySegment(type="text", data=f"📋 搜索结果（{query[:30]}）"),
+                      ReplySegment(type="forward", data=json.dumps(nodes, ensure_ascii=False))],
+            should_reply=True,
+        ))
+    else:
+        await gateway.send_reply(ReplySet(
+            platform=session.platform,
+            target_group_id=session.group_id,
+            target_user_id=meta.user_id if not session.is_group else None,
+            segments=[ReplySegment(type="text", data=text)],
+            should_reply=True,
+        ))
 
 from junjun_memory.short_term import ShortTermMemory
 from junjun_agent.funnel import (
@@ -142,6 +218,11 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     # ---- 命令总线（0 token，旧插件 /cmd 命令的新形态）----
     from junjun_agent.commands import dispatch as dispatch_command
     if await dispatch_command(session, meta):
+        return
+
+    # ---- 搜索拦截（0 token，方案 C：用户明确要搜时直接调工具，不走 agent）----
+    if _is_search_request(meta.text):
+        await _handle_search_request(session, meta)
         return
 
     # ---- 消息拦截器（0 token，链接自动解析类：B站/抖音/网盘）----

@@ -38,21 +38,22 @@ class EmbeddingClient:
         if self._api_key and self._base_url and self._model:
             logger.info(f"embedding 配置: {self._base_url[:40]}... / {self._model}")
             return
-        # 2. 复用 VLM 配置（多模态服务通常也提供 embedding）
+        # 2. SiliconFlow bge-m3（专用 embedding 服务，支持 embeddings endpoint）
+        sf_key = os.environ.get("SILICONFLOW_API_KEY", "")
+        if sf_key:
+            self._api_key = sf_key
+            self._base_url = "https://api.siliconflow.cn/v1"
+            self._model = "BAAI/bge-m3"
+            logger.info("embedding 配置: siliconflow / BAAI/bge-m3")
+            return
+        # 3. VLM 复用（仅当无专用 embedding 服务时；多数 VLM 服务不支持 embeddings endpoint）
         self._api_key = os.environ.get("VLM_API_KEY", "")
         self._base_url = os.environ.get("VLM_BASE_URL", "")
         self._model = os.environ.get("VLM_MODEL", "")
         if self._api_key and self._base_url and self._model:
             logger.info(f"embedding 复用 VLM 配置: {self._base_url[:40]}... / {self._model}")
             return
-        # 3. 默认 SiliconFlow bge-m3
-        self._api_key = os.environ.get("SILICONFLOW_API_KEY", "")
-        self._base_url = "https://api.siliconflow.cn/v1"
-        self._model = "BAAI/bge-m3"
-        if self._api_key:
-            logger.info("embedding 配置: siliconflow / BAAI/bge-m3")
-            return
-        logger.warning("embedding 未配置（EMBEDDING_*/VLM_*/SILICONFLOW_API_KEY 均无），向量检索禁用")
+        logger.warning("embedding 未配置（EMBEDDING_*/SILICONFLOW_API_KEY/VLM_* 均无），向量检索禁用")
 
     @property
     def available(self) -> bool:

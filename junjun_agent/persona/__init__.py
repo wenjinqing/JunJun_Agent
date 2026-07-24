@@ -110,6 +110,7 @@ def build_system_prompt(
         "直接说你要对群友说的话，不要前缀不要解释不要分析过程。",
         "不确定说什么就调 do_not_reply，不要硬编。",
         "需要事实信息（时间/天气/搜索）先调工具，不要凭记忆编。",
+        "用户说「搜」「查」「找」「什么时候」「最新」「新闻」时，必须先调 web_search 或 mcp_search，不要凭记忆回答。",
     ]
     if reaction_text:
         rules.append(reaction_text)
