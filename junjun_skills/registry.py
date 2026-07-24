@@ -162,30 +162,38 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
         recent_text = " ".join(e.text for e in session.memory.entries[-3:])
 
     # embedding 检索（不可用降级关键词）
+    # 注意：不在非主线程调 get_event_loop()——LangGraph 的 asyncio_N 线程
+    # 没有事件循环，会炸 RuntimeError。embedding 检索改为可选（有则用，无则跳过）。
     try:
         from junjun_memory.embedding import get_embedding_client
         client = get_embedding_client()
         if client.available and recent_text:
             import asyncio
-            # 同步调 embedding（registry 是同步接口）
-            loop = asyncio.get_event_loop()
-            query_vec = loop.run_until_complete(client.embed_one(recent_text))
-            if query_vec:
-                import numpy as np
-                q = np.array(query_vec)
-                q /= (np.linalg.norm(q) + 1e-9)
-                scored = []
-                for t in other_tools:
-                    desc_vec = loop.run_until_complete(client.embed_one(t.description or t.name))
-                    if desc_vec:
-                        d = np.array(desc_vec)
-                        d /= (np.linalg.norm(d) + 1e-9)
-                        score = float(np.dot(q, d))
-                    else:
-                        score = 0.0
-                    scored.append((score, t))
-                scored.sort(key=lambda x: -x[0])
-                return core_tools + [t for _, t in scored[:8]]
+            # 检查当前线程是否有事件循环（没有则跳过 embedding 检索，降级关键词）
+            try:
+                loop = asyncio.get_event_loop()
+                if not loop.is_running():
+                    raise RuntimeError("no running loop")
+            except RuntimeError:
+                loop = None
+            if loop:
+                query_vec = loop.run_until_complete(client.embed_one(recent_text))
+                if query_vec:
+                    import numpy as np
+                    q = np.array(query_vec)
+                    q /= (np.linalg.norm(q) + 1e-9)
+                    scored = []
+                    for t in other_tools:
+                        desc_vec = loop.run_until_complete(client.embed_one(t.description or t.name))
+                        if desc_vec:
+                            d = np.array(desc_vec)
+                            d /= (np.linalg.norm(d) + 1e-9)
+                            score = float(np.dot(q, d))
+                        else:
+                            score = 0.0
+                        scored.append((score, t))
+                    scored.sort(key=lambda x: -x[0])
+                    return core_tools + [t for _, t in scored[:8]]
     except Exception:
         pass
 
