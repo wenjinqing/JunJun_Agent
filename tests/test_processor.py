@@ -114,8 +114,6 @@ async def test_at_bot_replies(session, fake_gateway):
 
 
 @pytest.mark.asyncio
-async def test_not_addressed_silent(session, fake_gateway):
-@pytest.mark.asyncio
 async def test_group_not_addressed_silent(session, fake_gateway):
     """群聊非 @/直呼 -> 沉默（无 planner，直接不处理）。"""
     agent = _install_fake_agent(session)
