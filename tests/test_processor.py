@@ -102,12 +102,9 @@ async def test_self_message_silent(session, fake_gateway):
 
 
 @pytest.mark.asyncio
-async def test_at_bot_bypasses_gate_and_replies(session, fake_gateway, monkeypatch):
+async def test_at_bot_replies(session, fake_gateway):
+    """@ 君君 -> 进思考回复。"""
     agent = _install_fake_agent(session, "在呢")
-
-    async def _fail_gate(*a, **k):
-        raise AssertionError("@ 旁路不应调 L2 gate")
-    monkeypatch.setattr(proc_mod, "llm_gate", _fail_gate)
 
     await _add_and_handle(session, _meta("君君在吗", at_bot=True))
     assert len(fake_gateway.sent) == 1
@@ -117,14 +114,9 @@ async def test_at_bot_bypasses_gate_and_replies(session, fake_gateway, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_gate_no_reply_suppresses(session, fake_gateway, monkeypatch):
+async def test_not_addressed_silent(session, fake_gateway):
+    """非 @/直呼 -> 沉默（无 planner，直接不处理）。"""
     agent = _install_fake_agent(session)
-
-    from junjun_agent.funnel import GateDecision, L1Result
-    async def _gate(*a, **k):
-        return GateDecision.NO_REPLY
-    monkeypatch.setattr(proc_mod, "llm_gate", _gate)
-    monkeypatch.setattr(proc_mod, "rule_gate", lambda **k: L1Result.TO_GATE)
 
     await _add_and_handle(session, _meta("随便说说"))
     assert fake_gateway.sent == []
@@ -132,20 +124,20 @@ async def test_gate_no_reply_suppresses(session, fake_gateway, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_until_call_enters_silence_then_released_by_at(session, fake_gateway, monkeypatch):
+async def test_nickname_call_replies(session, fake_gateway):
+    """直呼名字 -> 进思考回复。"""
+    agent = _install_fake_agent(session, "叫我干嘛")
+
+    await _add_and_handle(session, _meta("君君出来玩"))
+    assert len(fake_gateway.sent) == 1
+    assert agent.called == 1
+
+
+@pytest.mark.asyncio
+async def test_silenced_until_call_released_by_at(session, fake_gateway):
+    """沉默模式中仅被呼唤解除。"""
     agent = _install_fake_agent(session, "我回来了")
-
-    from junjun_agent.funnel import GateDecision, L1Result
-    async def _gate(*a, **k):
-        return GateDecision.NO_REPLY_UNTIL_CALL
-    monkeypatch.setattr(proc_mod, "llm_gate", _gate)
-    monkeypatch.setattr(proc_mod, "rule_gate", lambda **k: L1Result.TO_GATE)
-
-    await _add_and_handle(session, _meta("君君闭嘴"))
-    assert session.silenced_until_call is True
-
-    from junjun_agent.funnel import rule_gate as real_gate
-    monkeypatch.setattr(proc_mod, "rule_gate", real_gate)
+    session.silenced_until_call = True
 
     await _add_and_handle(session, _meta("路人甲说话"))
     assert session.silenced_until_call is True
@@ -158,10 +150,9 @@ async def test_until_call_enters_silence_then_released_by_at(session, fake_gatew
 
 
 @pytest.mark.asyncio
-async def test_memory_accumulates_even_when_dropped(session, fake_gateway, monkeypatch):
+async def test_memory_accumulates_even_when_silent(session, fake_gateway):
+    """沉默时记忆照常积累（上下文完整性）。"""
     _install_fake_agent(session)
-    from junjun_agent.funnel import L1Result
-    monkeypatch.setattr(proc_mod, "rule_gate", lambda **k: L1Result.DROP)
 
     await _add_and_handle(session, _meta("消息1"))
     await _add_and_handle(session, _meta("消息2"))
