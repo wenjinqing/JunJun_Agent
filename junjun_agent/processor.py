@@ -20,9 +20,7 @@ from junjun_core.gateway.session_manager import ChatSession
 from junjun_core.observability import get_logger
 
 from junjun_memory.short_term import ShortTermMemory
-from junjun_agent.funnel import (
-    L1Config, L1Result, rule_gate, GateDecision, llm_gate,
-)
+from junjun_agent.funnel import L1Config
 from junjun_agent.funnel.frequency import frequency_control
 from junjun_agent.postprocess import process_response
 
@@ -184,18 +182,14 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         if expression_learner.note(session.chat_id, meta.nickname, meta.text):
             await expression_learner.learn(session.chat_id)
 
-    # ---- L1 规则门（0 token）----
-    l1 = rule_gate(
-        text=meta.text,
-        is_group=session.is_group,
-        at_bot=meta.at_bot,
-        is_self=meta.is_self,
-        silenced_until_call=session.silenced_until_call,
-        cfg=cfg,
-    )
-    if l1 is L1Result.DROP:
-        logger.debug(f"[{session.chat_id}] L1 拦截 (talk_value={cfg.talk_value:.2f})")
-        await _maybe_adjust_frequency(session)
+    # ---- 决策门（0 token）：仅 @/直呼进思考，其余直接沉默（无 planner 误判）----
+    if meta.is_self:
+        logger.debug(f"[{session.chat_id}] 自消息，沉默")
+        return
+    from junjun_agent.funnel.rule_gate import is_addressed
+    addressed = is_addressed(meta.text, cfg, meta.at_bot)
+    if not addressed:
+        logger.debug(f"[{session.chat_id}] 非 @/直呼，沉默")
         return
     if session.silenced_until_call:
         session.silenced_until_call = False
@@ -203,21 +197,6 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
 
     from junjun_llm import get_callbacks
     callbacks = get_callbacks()
-
-    # ---- L2 语义门（小模型，@ 旁路时跳过）----
-    if l1 is L1Result.TO_GATE:
-        decision = await llm_gate(
-            session.memory.render(limit=10), cfg.nickname, callbacks=callbacks,
-            is_group=session.is_group,
-        )
-        if decision is GateDecision.NO_REPLY:
-            logger.debug(f"[{session.chat_id}] L2 判定不回复")
-            await _maybe_adjust_frequency(session)
-            return
-        if decision is GateDecision.NO_REPLY_UNTIL_CALL:
-            session.silenced_until_call = True
-            logger.info(f"[{session.chat_id}] 进入沉默模式（直到被呼唤）")
-            return
 
     # ---- skill 上下文注入（memory skill 执行时读）----
     from junjun_skills.builtin.memory_skills import current_chat_id, current_platform
@@ -253,17 +232,16 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         name=f"agent.{session.chat_id}",
         input={"latest_text": meta.text, "context_preview": session.memory.render(limit=5, for_security=True)[:500]},
         metadata={
-            "trace_id": trace_id, "l1_result": l1.value, "at_bot": meta.at_bot,
+            "trace_id": trace_id, "addressed": addressed, "at_bot": meta.at_bot,
             "system_prompt": _prompt_snapshot[:2000],
         },
     ) as _span:
         text = await session.agent.process(
-            # 只给最近 10 条上下文 + 标记最后一条，防串台
-            # for_security=True：保留（管理员）标记供安全验证锚点（不影响回复意愿——
-            # 标记在 system prompt 安全段说明，L2/L3 看到的仍是普通群友）
-            session.memory.render(limit=10, mark_latest=True, for_security=True),
+            # 群聊 30 条上下文（提高长度）+ 标记最后一条 + 发言者画像注入
+            # for_security=True：保留（管理员）标记供安全验证锚点
+            session.memory.render(limit=30, mark_latest=True, for_security=True),
             callbacks=callbacks, latest_text=meta.text,
-            addressed=(l1 is L1Result.TO_AGENT),
+            addressed=True,  # 只有 @/直呼才走到这里
             memory_block=memory_block, relation_block=relation_block,
             mood_block=mood_block, trace_id=trace_id,
         )
