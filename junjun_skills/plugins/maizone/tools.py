@@ -382,8 +382,12 @@ async def comment_feed(cookies: dict, uin: str, target_qq: str, fid: str, conten
     if not m:
         raise RuntimeError(f"评论失败: 无法解析响应 {resp.text[:100]}")
     # 评论接口也返回 JSON5（key 无引号/单引号），用 json5 解析（对齐原插件）
+    # 响应可能被截断（大说说/网络问题），json5 解析失败降级为警告不炸
     import json5
-    payload = json5.loads(m.group(1).replace("undefined", "null"))
+    try:
+        payload = json5.loads(m.group(1).replace("undefined", "null"))
+    except ValueError as e:
+        raise RuntimeError(f"评论失败: 响应截断或格式异常 {e}")
     _check_code(payload, "评论")
     return True
 
