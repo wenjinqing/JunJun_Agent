@@ -171,6 +171,16 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
                 except Exception:
                     pass
             return  # 偷图本身就是本条消息的处理，不再进漏斗
+        elif echo.startswith("[INTERRUPT:"):
+            # 打断复读：发送固定打断语句（随机风格）
+            phrase = echo[len("[INTERRUPT:"):-1]  # 去掉前缀和结尾 ]
+            from junjun_core.gateway.router import get_gateway
+            await get_gateway().send_reply(ReplySet(
+                platform=session.platform, target_group_id=session.group_id,
+                segments=[ReplySegment(type="text", data=phrase)], should_reply=True,
+            ))
+            session.memory.add_bot(phrase)
+            return  # 打断本身就是本条消息的回应，不再进漏斗
         elif echo:
             from junjun_core.gateway.router import get_gateway
             await get_gateway().send_reply(ReplySet(
