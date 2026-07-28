@@ -9,6 +9,8 @@
      压缩（压不进限制则降级信息卡）-> 发 video 段 + 标题文本
 降级：任何失败或无 ffmpeg 时发视频信息卡（标题/UP主/简介/时长/封面 image/链接）
 限流：每会话 60 秒最小间隔（内存 dict）
+异步：解析/下载/转码走 task_manager 后台任务——命中链接立即回「开始解析」，
+  完成直发视频段；同会话占线去重，进程退出统一取消。
 """
 
 import asyncio
@@ -24,6 +26,7 @@ import httpx
 
 from junjun_agent.commands import register_command
 from junjun_agent.interceptors import register_interceptor
+from junjun_agent.tasks import task_manager
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 
@@ -121,11 +124,6 @@ def _check_rate_limit(chat_id: str) -> int:
         return int(remain) + 1
     _last_use[chat_id] = now
     return 0
-
-
-def _spawn_bg(coro):
-    """后台任务入口（独立函数便于测试替换为同步等待）。"""
-    return asyncio.create_task(coro)
 
 
 # ---------------------------------------------------------------- HTTP / WBI 签名
@@ -350,6 +348,11 @@ def _fmt_duration(seconds: int) -> str:
 
 async def _send_info_card(ctx, info: dict, page_url: str, note: str = "") -> None:
     """降级信息卡：标题/UP主/时长/简介/链接文本 + 封面 image 段。"""
+    await ctx.send(_info_card_segments(info, page_url, note))
+
+
+def _info_card_segments(info: dict, page_url: str, note: str = "") -> list:
+    """信息卡段列表（不发送，供后台任务/命令复用）。"""
     lines = [f"📺 {info['title']}"]
     if info.get("owner"):
         lines.append(f"UP主：{info['owner']}")
@@ -364,36 +367,34 @@ async def _send_info_card(ctx, info: dict, page_url: str, note: str = "") -> Non
     pic = info.get("pic") or ""
     if pic.startswith("http"):
         segs.append(ReplySegment(type="image", data=pic))
-    await ctx.send(segs)
+    return segs
 
 
 # ---------------------------------------------------------------- 主流程
 
-async def _process(ctx, url: str) -> None:
-    """解析 -> 下载 -> （必要时压缩）-> 发送；所有失败路径降级为信息卡/友好文本，绝不抛异常。"""
+async def _process_to_segments(url: str) -> list:
+    """解析 -> 下载 -> （必要时压缩）-> 组装段；所有失败路径降级为信息卡/友好文本段。"""
     touched: list[Path] = []  # 本次产生的临时文件，finally 统一清理
     try:
         bvid = await extract_bvid(url)
         if not bvid:
-            await ctx.reply("没认出这个 B 站链接，发个 bilibili.com/video/BVxxx 或 b23.tv 短链试试？")
-            return
+            return [ReplySegment(type="text",
+                                 data="没认出这个 B 站链接，发个 bilibili.com/video/BVxxx 或 b23.tv 短链试试？")]
 
         info = await _fetch_view(bvid)
         if not info or not info.get("aid") or not info.get("cid"):
-            await ctx.reply("视频信息获取失败了，可能是链接失效或被风控，稍后再试试吧。")
-            return
+            return [ReplySegment(type="text",
+                                 data="视频信息获取失败了，可能是链接失效或被风控，稍后再试试吧。")]
         page_url = f"https://www.bilibili.com/video/{info['bvid']}"
 
         # 无 ffmpeg：只发信息卡
         if _ffmpeg_path() is None:
             logger.info("无 ffmpeg，降级发送信息卡")
-            await _send_info_card(ctx, info, page_url, note="（当前环境无 ffmpeg，仅提供信息卡）")
-            return
+            return _info_card_segments(info, page_url, note="（当前环境无 ffmpeg，仅提供信息卡）")
 
         sources = await _fetch_playurl(info["aid"], info["cid"])
         if not sources:
-            await _send_info_card(ctx, info, page_url, note="（播放地址获取失败，请戳链接观看）")
-            return
+            return _info_card_segments(info, page_url, note="（播放地址获取失败，请戳链接观看）")
 
         TMP_DIR.mkdir(parents=True, exist_ok=True)
         base = TMP_DIR / f"{info['bvid']}_{int(time.time() * 1000)}"
@@ -419,8 +420,7 @@ async def _process(ctx, url: str) -> None:
                     final = out_path
 
         if final is None or not final.exists():
-            await _send_info_card(ctx, info, page_url, note="（视频下载/合并失败，请戳链接观看）")
-            return
+            return _info_card_segments(info, page_url, note="（视频下载/合并失败，请戳链接观看）")
 
         # 时长/大小限制决策：超限则尝试 ffmpeg 压缩
         size_mb = final.stat().st_size / (1024 * 1024)
@@ -436,26 +436,35 @@ async def _process(ctx, url: str) -> None:
             else:
                 reason = f"视频时长 {_fmt_duration(info['duration'])} 超过限制" if over_duration \
                     else f"视频大小 {size_mb:.0f}MB 超过限制"
-                await _send_info_card(ctx, info, page_url, note=f"（{reason}且压缩失败，请戳链接观看）")
-                return
+                return _info_card_segments(info, page_url,
+                                           note=f"（{reason}且压缩失败，请戳链接观看）")
 
-        await ctx.send([
+        logger.info(f"B站视频已发送: {info['bvid']} {info['title'][:30]}")
+        return [
             ReplySegment(type="text", data=f"📺 {info['title']}"),
             ReplySegment(type="video", data=str(final)),
-        ])
-        logger.info(f"B站视频已发送: {info['bvid']} {info['title'][:30]}")
+        ]
     except Exception as e:
         logger.error(f"B站视频处理异常: {type(e).__name__}: {e}")
-        try:
-            await ctx.reply("解析过程中出了点问题，稍后再试试吧。")
-        except Exception:
-            pass
+        return [ReplySegment(type="text", data="解析过程中出了点问题，稍后再试试吧。")]
     finally:
         for p in touched:
             try:
                 p.unlink(missing_ok=True)
             except Exception as e:
                 logger.warning(f"临时文件清理失败 {p}: {e}")
+
+
+async def _submit_process(chat_id: str, url: str) -> str:
+    """登记后台解析任务，返回 ack 话术（接受/占线）。下载+转码最坏给 10 分钟。"""
+    return await task_manager.submit(
+        kind="bilibili",
+        work=lambda: _process_to_segments(url),
+        ack_text="开始解析 B 站视频，请稍候～",
+        fail_text="解析过程中出了点问题，稍后再试试吧。",
+        timeout=600,
+        chat_id=chat_id,
+    )
 
 
 # ---------------------------------------------------------------- 命令 / 拦截器注册
@@ -476,9 +485,7 @@ async def bilibili_cmd(ctx):
         return f"B站解析太频繁啦，{remain} 秒后再试。"
 
     logger.info(f"B站解析(命令): url={url[:80]}")
-    await ctx.reply("开始解析 B 站视频，请稍候～")
-    _spawn_bg(_process(ctx, url))
-    return None
+    return await _submit_process(ctx.session.chat_id, url)
 
 
 @register_command("bili_info", aliases=["b站简介", "b站信息"], plugin="bilibili",
@@ -521,8 +528,8 @@ async def bilibili_hit(ctx) -> bool:
         return True
 
     logger.info(f"B站解析(自动): url={url[:80]}")
-    await ctx.reply("开始解析 B 站视频，请稍候～")
-    _spawn_bg(_process(ctx, url))
+    ack = await _submit_process(ctx.session.chat_id, url)
+    await ctx.reply(ack)
     return True
 
 

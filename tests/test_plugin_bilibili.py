@@ -1,11 +1,13 @@
 """bilibili 插件测试：链接正则 / 命令 / 拦截器 / 信息卡降级 / 成功路径 / 压缩决策 / 限流。"""
 
+import asyncio
 import importlib
 from types import SimpleNamespace
 
 import pytest
 
 from junjun_agent import commands, interceptors
+from junjun_agent.tasks import task_manager
 
 
 @pytest.fixture(autouse=True)
@@ -57,16 +59,11 @@ def _load():
     return bili
 
 
-def _sync_bg(monkeypatch, bili):
-    """把 _spawn_bg 替换为收集协程：测试里手动 await，避免后台任务不确定时序。"""
-    pending = []
-    monkeypatch.setattr(bili, "_spawn_bg", lambda coro: pending.append(coro))
-    return pending
-
-
-async def _drain(pending):
-    while pending:
-        await pending.pop(0)
+async def _drain():
+    """等待全部后台任务完成。"""
+    tasks = list(task_manager._running.values())
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 _VIEW = {
@@ -151,7 +148,6 @@ class TestCommand:
         """成功路径：假视频文件 -> 发 video 段 + 标题文本，临时文件发送后删除。"""
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili)
         created = []
 
@@ -163,11 +159,10 @@ class TestCommand:
         monkeypatch.setattr(bili, "_download", _dl)
 
         result = await bili.bilibili_cmd(_ctx("/bilibili https://www.bilibili.com/video/BV1xx411c7mD"))
-        assert result is None
-        assert _fake_gateway[0].segments[0].data == "开始解析 B 站视频，请稍候～"
-        await _drain(pending)
+        assert "开始解析" in result   # 提交即返回 ack
+        await _drain()                 # 后台下载完直发
 
-        segs = _fake_gateway[1].segments
+        segs = _fake_gateway[0].segments
         assert segs[0].type == "text" and "猫猫弹琴" in segs[0].data
         assert segs[1].type == "video"
         assert segs[1].data.endswith(".mp4")
@@ -179,7 +174,6 @@ class TestCommand:
         """DASH：下载音视频流后调 _ffmpeg_merge，合并成功发 video 段。"""
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili, playurl={
             "type": "dash", "video": "https://cdn.example/v.m4s", "audio": "https://cdn.example/a.m4s"})
         _fake_download(monkeypatch, bili)
@@ -192,10 +186,10 @@ class TestCommand:
 
         monkeypatch.setattr(bili, "_ffmpeg_merge", _merge)
         await bili.bilibili_cmd(_ctx("/b站 https://www.bilibili.com/video/BV1xx411c7mD"))
-        await _drain(pending)
+        await _drain()
 
         assert len(merges) == 1 and merges[0][1] is not None  # 音轨下载成功则参与合并
-        segs = _fake_gateway[1].segments
+        segs = _fake_gateway[0].segments
         assert any(s.type == "video" for s in segs)
         assert not list(tmp_path.iterdir())  # 临时目录已清空
 
@@ -204,7 +198,6 @@ class TestCommand:
         """无 ffmpeg：只发信息卡（标题/UP主/简介/时长/封面 image/链接），不下载。"""
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili, ffmpeg=None)
 
         async def _dl(url, path):  # 不应被调用
@@ -212,9 +205,9 @@ class TestCommand:
 
         monkeypatch.setattr(bili, "_download", _dl)
         await bili.bilibili_cmd(_ctx("/bilibili https://b23.tv/abc123"))
-        await _drain(pending)
+        await _drain()
 
-        segs = _fake_gateway[1].segments
+        segs = _fake_gateway[0].segments
         assert segs[0].type == "text"
         text = segs[0].data
         assert "猫猫弹琴" in text and "UP主甲" in text and "1分40秒" in text
@@ -227,7 +220,6 @@ class TestCommand:
         """超时长：触发压缩决策，压缩后大小达标则发 video 段。"""
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili, view={**_VIEW, "duration": 9999})
         _fake_download(monkeypatch, bili, size=1024)
         calls = []
@@ -239,10 +231,10 @@ class TestCommand:
 
         monkeypatch.setattr(bili, "_ffmpeg_compress", _compress)
         await bili.bilibili_cmd(_ctx("/bilibili https://www.bilibili.com/video/BV1xx411c7mD"))
-        await _drain(pending)
+        await _drain()
 
         assert len(calls) == 1  # 超时长触发了压缩
-        segs = _fake_gateway[1].segments
+        segs = _fake_gateway[0].segments
         assert any(s.type == "video" for s in segs)
         assert not list(tmp_path.iterdir())
 
@@ -251,7 +243,6 @@ class TestCommand:
         """超时长且压缩失败：降级信息卡 + 链接，不发 video 段。"""
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili, view={**_VIEW, "duration": 9999})
         _fake_download(monkeypatch, bili)
 
@@ -260,9 +251,9 @@ class TestCommand:
 
         monkeypatch.setattr(bili, "_ffmpeg_compress", _compress)
         await bili.bilibili_cmd(_ctx("/bilibili https://www.bilibili.com/video/BV1xx411c7mD"))
-        await _drain(pending)
+        await _drain()
 
-        segs = _fake_gateway[1].segments
+        segs = _fake_gateway[0].segments
         assert segs[0].type == "text" and "超过限制" in segs[0].data
         assert not any(s.type == "video" for s in segs)
         assert not list(tmp_path.iterdir())
@@ -271,7 +262,6 @@ class TestCommand:
     async def test_rate_limit(self, _fake_gateway, monkeypatch, tmp_path):
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili)
         _fake_download(monkeypatch, bili)
         calls = []
@@ -284,25 +274,24 @@ class TestCommand:
         await bili.bilibili_cmd(_ctx("/bilibili https://www.bilibili.com/video/BV1xx411c7mD"))
         result = await bili.bilibili_cmd(_ctx("/bilibili https://www.bilibili.com/video/BV1yy411c7mE"))
         assert "秒后再试" in result
-        await _drain(pending)
+        await _drain()
         assert len(calls) == 1  # 冷却内不再解析
         # 换个会话不受限
         await bili.bilibili_cmd(_ctx("/bilibili https://www.bilibili.com/video/BV1yy411c7mE", is_group=False))
-        await _drain(pending)
+        await _drain()
         assert len(calls) == 2
 
     @pytest.mark.asyncio
     async def test_view_failure_friendly_text(self, _fake_gateway, monkeypatch):
         bili = _load()
-        pending = _sync_bg(monkeypatch, bili)
 
         async def _view(bvid):
             return None
 
         monkeypatch.setattr(bili, "_fetch_view", _view)
         await bili.bilibili_cmd(_ctx("/bilibili https://www.bilibili.com/video/BV1xx411c7mD"))
-        await _drain(pending)
-        assert "失败" in _fake_gateway[1].segments[0].data
+        await _drain()
+        assert "失败" in _fake_gateway[0].segments[0].data
 
 
 class TestInterceptor:
@@ -310,21 +299,19 @@ class TestInterceptor:
     async def test_dispatch_hit_consumes(self, _fake_gateway, monkeypatch, tmp_path):
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili)
         _fake_download(monkeypatch, bili)
 
         meta = _meta("这个好看 https://www.bilibili.com/video/BV1xx411c7mD 哈哈哈")
         consumed = await interceptors.dispatch(_session(), meta)
         assert consumed is True
-        await _drain(pending)
+        await _drain()
         assert any(s.type == "video" for s in _fake_gateway[1].segments)
 
     @pytest.mark.asyncio
     async def test_dispatch_short_link_hit(self, _fake_gateway, monkeypatch, tmp_path):
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili, extract=False)  # 保留真实 extract_bvid 以验证短链重定向
         _fake_download(monkeypatch, bili)
         seen = []
@@ -336,7 +323,7 @@ class TestInterceptor:
         monkeypatch.setattr(bili, "_follow_redirect", _redirect)
         consumed = await interceptors.dispatch(_session(), _meta("https://b23.tv/abc123"))
         assert consumed is True
-        await _drain(pending)
+        await _drain()
         assert seen  # 短链走了重定向
 
     @pytest.mark.asyncio
@@ -350,12 +337,11 @@ class TestInterceptor:
     async def test_hit_rate_limited(self, _fake_gateway, monkeypatch, tmp_path):
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili)
         _fake_download(monkeypatch, bili)
 
         assert await bili.bilibili_hit(_hit_ctx("https://www.bilibili.com/video/BV1xx411c7mD")) is True
-        await _drain(pending)
+        await _drain()
         _fake_gateway.clear()
         assert await bili.bilibili_hit(_hit_ctx("https://www.bilibili.com/video/BV1yy411c7mE")) is True
         assert "秒后再试" in _fake_gateway[0].segments[0].data
@@ -365,12 +351,11 @@ class TestInterceptor:
         """playurl 失败：降级信息卡 + 链接。"""
         bili = _load()
         monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
-        pending = _sync_bg(monkeypatch, bili)
         _patch_common(monkeypatch, bili, playurl=None)
 
         consumed = await bili.bilibili_hit(_hit_ctx("https://www.bilibili.com/video/BV1xx411c7mD"))
         assert consumed is True
-        await _drain(pending)
+        await _drain()
         segs = _fake_gateway[1].segments
         assert segs[0].type == "text" and "播放地址获取失败" in segs[0].data
         assert segs[1].type == "image"

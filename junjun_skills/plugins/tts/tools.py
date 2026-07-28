@@ -29,6 +29,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 from junjun_agent.commands import register_command
+from junjun_agent.tasks import task_manager
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 from junjun_skills.builtin.memory_skills import current_chat_id
@@ -274,20 +275,6 @@ async def _synthesize_to_file(text: str, backend: str) -> Path | None:
     return path
 
 
-async def _send_voice(chat_target: tuple, path: Path) -> None:
-    """发送 voice 段。chat_target=(platform, target_id, kind)，kind=group|private。"""
-    from junjun_core.contracts import ReplySet
-    from junjun_core.gateway.router import get_gateway
-    platform, target_id, kind = chat_target
-    await get_gateway().send_reply(ReplySet(
-        platform=platform,
-        target_group_id=target_id if kind == "group" else None,
-        target_user_id=target_id if kind != "group" else None,
-        segments=[ReplySegment(type="voice", data=str(path))],
-        should_reply=True,
-    ))
-
-
 def _no_backend_text() -> str:
     return ("语音功能还没配置哦（没有任何可用后端：缺 DOUBAO_TTS_API_KEY / "
             "SILICONFLOW_API_KEY / TTS_GSV2P_TOKEN / TTS_SOVITS_REF_AUDIO），先用文字吧。")
@@ -313,13 +300,20 @@ async def tts_cmd(ctx):
     if not text:
         return "用法：/tts <文本> [后端]"
 
-    path = await _synthesize_to_file(text, backend)
-    if path is None:
-        return "语音合成失败了（所有可用后端都没成功），稍后再试试吧。"
-    await _send_voice((ctx.session.platform,
-                       ctx.session.group_id if ctx.session.is_group else ctx.meta.user_id,
-                       "group" if ctx.session.is_group else "private"), path)
-    return None
+    async def work():
+        path = await _synthesize_to_file(text, backend)
+        if path is None:
+            return None
+        return [ReplySegment(type="voice", data=str(path))]
+
+    return await task_manager.submit(
+        kind="tts",
+        work=work,
+        ack_text="在合成语音了，马上发出来。",
+        fail_text="语音合成失败了（所有可用后端都没成功），稍后再试试吧。",
+        timeout=90,
+        chat_id=ctx.session.chat_id,
+    )
 
 
 # ========== 工具：LLM 触发 ==========
@@ -327,6 +321,8 @@ async def tts_cmd(ctx):
 async def unified_tts(text: str, backend: str = "") -> str:
     """把文本合成语音发到当前聊天。用户要求"发语音""用语音说""朗读""念一下""语音回复"时使用；
     未调用本工具前禁止只用文字假装已发语音。
+
+    本工具是异步的：调用后立即返回，语音合成好会自动发到当前聊天。
 
     Args:
         text: 要读给用户听的内容（300 字内，越短效果越好）
@@ -339,29 +335,32 @@ async def unified_tts(text: str, backend: str = "") -> str:
     if not any(_backend_configured(b) for b in BACKENDS):
         return "语音功能未配置（没有任何可用后端），用文字回复吧。"
 
+    chat_id = current_chat_id.get()
+    if not chat_id:
+        return "拿不到当前会话，语音发不出去，用文字回复吧。"
+
+    remain = _check_rate_limit(chat_id)
+    if remain > 0:
+        return f"语音发得太频繁了，{remain} 秒后再试，先用文字回复吧。"
+
     use_backend = (backend or "").strip().lower()
     if use_backend not in BACKENDS:
         use_backend = _default_backend()
 
-    chat_id = current_chat_id.get()
-    if chat_id:
-        remain = _check_rate_limit(chat_id)
-        if remain > 0:
-            return f"语音发得太频繁了，{remain} 秒后再试，先用文字回复吧。"
+    async def work():
+        path = await _synthesize_to_file(text, use_backend)
+        if path is None:
+            return None
+        return [ReplySegment(type="voice", data=str(path))]
 
-    path = await _synthesize_to_file(text, use_backend)
-    if path is None:
-        return "语音合成失败了（所有可用后端都没成功），用文字回复吧。"
-
-    if not chat_id:
-        return f"语音已合成到 {path}，但拿不到当前会话，发不出去。"
-
-    # chat_id 形如 "qq:ID:group|private"
-    parts = chat_id.split(":")
-    target = (parts[0], parts[1] if len(parts) > 1 else "",
-              parts[2] if len(parts) > 2 else "private")
-    await _send_voice(target, path)
-    return f"语音已发送（{_BACKEND_NAMES.get(path.stem.split('_')[1], '')}后端）。不要再用文字重复语音内容。"
+    return await task_manager.submit(
+        kind="tts",
+        work=work,
+        ack_text="在合成语音了，马上发出来。不要再用文字重复语音内容。",
+        fail_text="语音合成失败了（所有可用后端都没成功），用文字回复吧。",
+        timeout=90,
+        chat_id=chat_id,
+    )
 
 
 def probe_available() -> bool:

@@ -24,6 +24,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 from junjun_agent.commands import register_command
+from junjun_agent.tasks import task_manager
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 from junjun_skills.builtin.memory_skills import current_chat_id
@@ -297,20 +298,6 @@ async def _synthesize_to_file(text: str, speaker: str) -> Path | None:
     return path
 
 
-async def _send_voice(chat_target: tuple, path: Path) -> None:
-    """发送 voice 段。chat_target=(platform, target_id, kind)，kind=group|private。"""
-    from junjun_core.contracts import ReplySet
-    from junjun_core.gateway.router import get_gateway
-    platform, target_id, kind = chat_target
-    await get_gateway().send_reply(ReplySet(
-        platform=platform,
-        target_group_id=target_id if kind == "group" else None,
-        target_user_id=target_id if kind != "group" else None,
-        segments=[ReplySegment(type="voice", data=str(path))],
-        should_reply=True,
-    ))
-
-
 # ========== 命令：/ja_tts /ys ==========
 @register_command("ja_tts", aliases=["ys"], plugin="ja_tts",
                   description="日语语音合成：/ja_tts <文本> [音色]")
@@ -331,19 +318,27 @@ async def ja_tts_cmd(ctx):
     if not text:
         return "用法：/ja_tts <日语文本> [音色]"
 
-    path = await _synthesize_to_file(text, speaker)
-    if path is None:
-        return "语音合成失败了，稍后再试试吧。"
-    await _send_voice((ctx.session.platform,
-                       ctx.session.group_id if ctx.session.is_group else ctx.meta.user_id,
-                       "group" if ctx.session.is_group else "private"), path)
-    return None
+    async def work():
+        path = await _synthesize_to_file(text, speaker)
+        if path is None:
+            return None
+        return [ReplySegment(type="voice", data=str(path))]
+
+    return await task_manager.submit(
+        kind="tts",
+        work=work,
+        ack_text="在合成语音了，马上发出来。",
+        fail_text="语音合成失败了，稍后再试试吧。",
+        timeout=90,
+        chat_id=ctx.session.chat_id,
+    )
 
 
 # ========== 工具：LLM 触发 ==========
 @tool("ja_tts")
 async def ja_tts_tool(text: str, speaker: str = "") -> str:
     """把日语（或中文）文本合成语音发到当前聊天。用户要求"用语音说""发日语语音""说句日语听听"时使用。
+    本工具是异步的：调用后立即返回，语音合成好会自动发到当前聊天。
 
     Args:
         text: 要合成语音的文本（300 字内，越短效果越好）
@@ -357,26 +352,30 @@ async def ja_tts_tool(text: str, speaker: str = "") -> str:
         return "语音功能未配置（缺 DOUBAO_TTS_API_KEY），用文字回复吧。"
 
     chat_id = current_chat_id.get()
-    if chat_id:
-        remain = _check_rate_limit(chat_id)
-        if remain > 0:
-            return f"语音发得太频繁了，{remain} 秒后再试，先用文字回复吧。"
+    if not chat_id:
+        return "拿不到当前会话，语音发不出去，用文字回复吧。"
+
+    remain = _check_rate_limit(chat_id)
+    if remain > 0:
+        return f"语音发得太频繁了，{remain} 秒后再试，先用文字回复吧。"
 
     speaker_id = VOICE_PRESETS.get((speaker or "").strip().lower(),
                                    VOICE_PRESETS[DEFAULT_VOICE])
-    path = await _synthesize_to_file(text, speaker_id)
-    if path is None:
-        return "语音合成失败了，用文字回复吧。"
 
-    if not chat_id:
-        return f"语音已合成到 {path}，但拿不到当前会话，发不出去。"
+    async def work():
+        path = await _synthesize_to_file(text, speaker_id)
+        if path is None:
+            return None
+        return [ReplySegment(type="voice", data=str(path))]
 
-    # chat_id 形如 "qq:ID:group|private"
-    parts = chat_id.split(":")
-    target = (parts[0], parts[1] if len(parts) > 1 else "",
-              parts[2] if len(parts) > 2 else "private")
-    await _send_voice(target, path)
-    return "语音已发送。不要再用文字重复语音内容。"
+    return await task_manager.submit(
+        kind="tts",
+        work=work,
+        ack_text="在合成语音了，马上发出来。不要再用文字重复语音内容。",
+        fail_text="语音合成失败了，用文字回复吧。",
+        timeout=90,
+        chat_id=chat_id,
+    )
 
 
 def probe_available() -> bool:
