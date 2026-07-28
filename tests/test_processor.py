@@ -66,7 +66,7 @@ def _fast_postprocess(monkeypatch):
     """测试中关掉错别字与延迟（确定性）。"""
     from junjun_agent.postprocess import OutboundMessage
 
-    def _plain(text, rand=None):
+    def _plain(text, rand=None, incoming=''):
         return [OutboundMessage(text=text, delay=0.0)]
     monkeypatch.setattr(proc_mod, "process_response", _plain)
 
@@ -177,7 +177,7 @@ async def test_multi_piece_reply_sends_multiple(session, fake_gateway, monkeypat
     _install_fake_agent(session, "第一条。第二条。")
     from junjun_agent.postprocess import OutboundMessage
 
-    def _two_pieces(text, rand=None):
+    def _two_pieces(text, rand=None, incoming=''):
         return [OutboundMessage("第一条", 0.0), OutboundMessage("第二条", 0.0)]
     monkeypatch.setattr(proc_mod, "process_response", _two_pieces)
     monkeypatch.setattr(proc_mod, "_quote_message_id", lambda s, m: "42")
