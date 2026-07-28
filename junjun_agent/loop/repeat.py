@@ -45,6 +45,10 @@ class RepeatDetector:
         if is_self or not text or not (min_len <= len(text) <= max_len):
             st.content, st.count, st.users = "", 0, set()  # 断链
             return None
+        # 占位符不算复读（[图片]/[表情]/[语音] 等媒体占位符无语义）
+        if text in ("[图片]", "[表情]", "[语音]", "[视频]", "[文件]"):
+            st.content, st.count, st.users = "", 0, set()
+            return None
 
         if text == st.content:
             st.users.add(user_id)
