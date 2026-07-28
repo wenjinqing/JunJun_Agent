@@ -174,3 +174,12 @@ max_reply_per_day = 5    # 每日自动评论上限
 [plugins]
 # 持久禁用的插件（跳过加载：工具/命令/拦截器全部不注册）
 disabled = []
+
+# ---------- 链接预览（链接正文摘要注入上下文） ----------
+[link_preview]
+enable = true
+
+# ---------- 自我反思（定期自评回复质量，私聊管理员） ----------
+[reflection]
+enable = true
+every_n = 50

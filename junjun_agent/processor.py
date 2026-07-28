@@ -279,6 +279,12 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
 
     session.memory.add_bot(text)
     _store_outbound(session, text)
+    # 自我反思计数（到阈值后台自评并私聊管理员，失败静默）
+    try:
+        from junjun_agent.loop.reflection import reflection_loop
+        reflection_loop.note_reply()
+    except Exception:
+        pass
 
     # ---- 回复后处理：分条 + 错别字 + 引用 ----
     quote_id = _quote_message_id(session, meta)  # 提前定义（image/forward 分支也要用）
@@ -372,6 +378,22 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
                 parts.append(block)
         except Exception:
             pass
+    if getattr(meta, "sticker_urls", None):
+        try:
+            from junjun_memory.vision import describe_stickers, render_sticker_block
+            block = render_sticker_block(await describe_stickers(meta.sticker_urls))
+            if block:
+                parts.append(block)
+        except Exception:
+            pass
+    # 链接内容感知：消息含网页链接时抓正文摘要注入（4s 超时，失败静默）
+    try:
+        from junjun_memory.link_preview import fetch_link_preview
+        preview = await fetch_link_preview(meta.text or "")
+        if preview:
+            parts.append(f"对方分享的链接内容：{preview}")
+    except Exception:
+        pass
     try:
         import asyncio as _aio
         import re as _re
