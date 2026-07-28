@@ -18,6 +18,10 @@ _REGRESS_AFTER = 1800.0   # 30 分钟无互动衰退
 _EVAL_COOLDOWN = 120.0    # 重评冷却
 _DEFAULT_MOOD = "平静"
 
+# 情绪 -> 行为倾向映射（情绪连贯性：不只影响措辞，也影响回复长度/工具使用意愿）
+_MOOD_NEGATIVE = ("无语", "烦", "生气", "怒", "难过", "郁闷", "累", "疲", "丧", "低落", "委屈", "emo")
+_MOOD_POSITIVE = ("开心", "兴奋", "得意", "高兴", "快乐", "期待", "满足", "甜", "惊喜")
+
 _EVAL_PROMPT = """你是 QQ 机器人"{nickname}"。根据最近对话判断你现在的情绪状态。
 {emotion_style}
 当前情绪：{current}
@@ -55,7 +59,16 @@ class MoodManager:
 
     def build_mood_block(self, chat_id: str) -> str:
         mood = self.get_mood(chat_id)
-        return f"你当前的情绪：{mood}（让回复语气自然反映这个情绪）" if mood else ""
+        if not mood:
+            return ""
+        base = f"你当前的情绪：{mood}"
+        if any(w in mood for w in _MOOD_NEGATIVE):
+            return base + "。让情绪体现在行为上：现在不太想说话，回复尽量短（一两句）；" \
+                          "不要主动发表情包、语音、画图，也不想折腾工具。"
+        if any(w in mood for w in _MOOD_POSITIVE):
+            return base + "。让情绪体现在行为上：现在很愿意聊，可以活泼一点；" \
+                          "合适时主动发表情包/语音，被夸就大方得意。"
+        return base + "（让回复语气自然反映这个情绪）"
 
     def should_evaluate(self, chat_id: str) -> bool:
         if not self._enabled():

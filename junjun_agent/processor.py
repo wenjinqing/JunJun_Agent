@@ -292,7 +292,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         from junjun_core.gateway.router import get_gateway
         gateway = get_gateway()
         if clean_text:
-            outbound = process_response(clean_text)
+            outbound = process_response(clean_text, incoming=meta.text)
             for i, msg in enumerate(outbound):
                 if msg.delay > 0:
                     await asyncio.sleep(msg.delay)
@@ -333,7 +333,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         except Exception as e:
             logger.warning(f"forward 消息解析失败，降级分条: {e}")
 
-    outbound = process_response(text)
+    outbound = process_response(text, incoming=meta.text)
     if not outbound:
         return
     quote_id = _quote_message_id(session, meta)
@@ -374,9 +374,13 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
             pass
     try:
         import asyncio as _aio
+        import re as _re
         from junjun_memory.long_term import get_long_term_memory
+        # 检索查询清洗：剥掉 [回复...]/[图片] 占位与 @昵称 前缀，避免噪声稀释相似度
+        query = _re.sub(r"\[[^\]]{0,220}\]", " ", meta.text or "")
+        query = _re.sub(r"@\S+\s*", " ", query).strip() or (meta.text or "")
         items = await _aio.wait_for(
-            get_long_term_memory().search(meta.text, top_k=3, chat_id=session.chat_id),
+            get_long_term_memory().search(query, top_k=3, chat_id=session.chat_id),
             timeout=1.5,
         )
         if items:
