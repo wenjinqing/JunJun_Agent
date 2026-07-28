@@ -7,6 +7,10 @@ API：ModelScope 异步文生图（api-inference.modelscope.cn）
   - GET  /v1/tasks/{task_id} 轮询（间隔 5s，总超时 120s）-> output_images[0]
 模型路由：描述含 动漫/二次元/anime 等词时用二次元模型，否则默认模型；
   env AI_DRAW_MODEL / AI_DRAW_MODEL_ANIME 可覆盖默认值。
+提示词工程（按模型家族定制）：
+  - 默认（Z-Image-Turbo）：中英双语自然语言细描（光照/色彩/构图/质感），原文前置保主体
+  - 二次元（WAI-illustrious-SDXL）：Danbooru 标签串 + 质量词后缀 + 负面提示词
+    （防烂手/多余肢体/水印），模型不接受 negative_prompt 时自动降级重试
 安全：描述命中「未成年词 + 性词」组合直接拒绝；未配置 MODELSCOPE_API_KEY 降级文本。
 限流：每会话 20 秒最小间隔（内存 dict）。
 异步：工具/命令均为「提交即返回」——后台轮询完成由 task_manager 直发图片，
@@ -33,11 +37,46 @@ _HTTP_TIMEOUT = 30.0
 _POLL_INTERVAL = 5.0    # 轮询间隔（秒）
 _POLL_TIMEOUT = 120.0   # 轮询总超时（秒）
 _COOLDOWN = 20.0        # 每会话最小间隔（秒）
-_EXPAND_MIN_LEN = 20    # 描述短于该长度时用 LLM 扩写
+_EXPAND_MAX_LEN = 200   # 描述长于该长度时不扩写（已经够详细，避免稀释）
 
 # 默认生图模型（取自旧插件 config.toml，可用 env 覆盖）
 _DEFAULT_MODEL = "Tongyi-MAI/Z-Image-Turbo"
 _DEFAULT_ANIME_MODEL = "QWQ114514123/WAI-illustrious-SDXL-v16"
+
+# ---------------- 提示词工程（按模型家族定制，两套风格不可混用） ----------------
+# Z-Image-Turbo：中英双语自然语言完整描述效果最好（光照/色彩/构图/质感）
+_EXPAND_PROMPT_DEFAULT = (
+    "你是顶级 AI 绘画提示词专家。把用户的画面描述扩写成一段生动细腻的英文画面描述"
+    "（供 Z-Image 文生图模型使用）。规则：\n"
+    "1. 主体绝对不丢失、不改变、不替换，放在句首；用户没说的元素不要硬加\n"
+    "2. 用自然语言完整句子（不是标签堆砌），依次补充：环境细节、光照"
+    "（如 soft rim light / golden hour / volumetric lighting）、色彩基调、"
+    "材质质感、构图与镜头感（如 close-up / wide shot / depth of field / bokeh）、氛围\n"
+    "3. 60-100 个英文单词，只输出描述本身，不要解释、不要引号、不要换行\n"
+    "用户描述：{prompt}"
+)
+# WAI-illustrious-SDXL：Illustrious/SDXL 系吃 Danbooru 标签 + 质量词
+_EXPAND_PROMPT_ANIME = (
+    "你是顶级 AI 绘画提示词专家，精通 Danbooru 标签体系（Illustrious/SDXL 系模型）。"
+    "把用户的中文画面描述转写为英文 Danbooru 标签串。规则：\n"
+    "1. 主体绝对不丢失、不改变（角色/物体翻译为准确英文标签，如 猫娘 -> catgirl, cat ears, cat tail）\n"
+    "2. 标签顺序：主体（1girl/1boy/solo 等 -> 发型发色 -> 瞳色 -> 服饰 -> 表情 -> 姿势动作）"
+    "-> 场景背景 -> 光照氛围 -> 构图视角\n"
+    "3. 全英文小写、逗号分隔、25-45 个标签；只用标签不写句子，不要序号不要解释\n"
+    "4. 不要输出 masterpiece / best quality 等质量标签（质量后缀由系统统一追加，重复会稀释权重）\n"
+    "5. 可补充提升画面完成度的标签（如 detailed background, soft lighting, depth of field），"
+    "绝不添加用户没说的 NSFW/未成年元素\n"
+    "用户描述：{prompt}"
+)
+# 质量词后缀（Illustrious 系惯例，显著提升出图质量）
+_ANIME_QUALITY_SUFFIX = "masterpiece, best quality, very aesthetic, absurdres"
+# 负面提示词（防崩坏：烂手/多余肢体/水印文字等）
+_ANIME_NEGATIVE = (
+    "worst quality, low quality, bad anatomy, bad hands, missing fingers, extra fingers, "
+    "fused fingers, extra limbs, mutated limbs, bad proportions, blurry, lowres, "
+    "jpeg artifacts, watermark, signature, text, logo, username"
+)
+_DEFAULT_NEGATIVE = "低质量，模糊，过曝，变形，错误解剖，多余手指，多余肢体，水印，文字，签名"
 
 # 内容红线：未成年词 与 性词 同时命中 -> 直接拒绝
 _MINOR_WORDS = ("萝莉", "幼女", "小学生", "儿童", "幼童", "女童", "男童", "未成年",
@@ -110,38 +149,55 @@ def apply_self_prompt(prompt: str) -> str:
     return prompt
 
 
-async def expand_prompt(prompt: str) -> str:
-    """短描述（<20 字）用 utils_small 扩写为英文生图提示词；失败降级用原文。"""
-    if len(prompt or "") >= _EXPAND_MIN_LEN:
+async def expand_prompt(prompt: str, *, anime: bool = False) -> str:
+    """按模型家族转写高质量提示词：二次元走 Danbooru 标签 + 质量词，默认走自然语言描述。
+    失败降级：原文 + 质量后缀（二次元）/ 原文（默认）。"""
+    if not prompt or len(prompt) > _EXPAND_MAX_LEN:
         return prompt
     try:
         from junjun_llm import get_chat_model
         model = get_chat_model("utils_small")
-        ask = (
-            "你是AI绘画提示词助手。把用户给的中文主体扩写成高质量英文生图提示词："
-            "绝不改变主体，只补充场景/光照/氛围/构图/画质标签（如 masterpiece, best quality），"
-            "英文逗号分隔标签，15-35 个词，只输出提示词本身，不要解释。\n"
-            f"主体：{prompt}"
-        )
-        resp = await model.ainvoke([HumanMessage(content=ask)])
-        expanded = (resp.content or "").strip()
+        template = _EXPAND_PROMPT_ANIME if anime else _EXPAND_PROMPT_DEFAULT
+        resp = await model.ainvoke([HumanMessage(content=template.format(prompt=prompt))])
+        expanded = (resp.content or "").strip().strip('"').replace("\n", " ")
         if expanded:
-            # 主体强制前置，确保主体绝不丢失/被替换
-            return f"{prompt}, {expanded[:400]}"
+            if anime:
+                # Danbooru 标签串 + 质量后缀（不混入中文原文，保持标签纯净；
+                # 防御性去重：LLM 偶尔仍会带出质量词，与后缀重复的剔除）
+                suffix_tags = {t.strip() for t in _ANIME_QUALITY_SUFFIX.split(",")}
+                tags = [t.strip() for t in expanded[:600].split(",") if t.strip()]
+                tags = [t for t in dict.fromkeys(tags) if t not in suffix_tags]
+                return ", ".join(tags) + f", {_ANIME_QUALITY_SUFFIX}"
+            # Z-Image 中英双语：中文原文前置保主体，英文细描随后
+            return f"{prompt}，{expanded[:600]}"
     except Exception as e:
-        logger.warning(f"prompt 扩写失败（降级用原文）: {type(e).__name__}: {e}")
+        logger.warning(f"prompt 扩写失败（降级）: {type(e).__name__}: {e}")
+    if anime:
+        return f"{prompt}, {_ANIME_QUALITY_SUFFIX}"
     return prompt
 
 
-async def submit_task(prompt: str, model: str) -> str | None:
-    """提交 ModelScope 异步生图任务，返回 task_id；任何失败返回 None。"""
+async def submit_task(prompt: str, model: str, negative: str = "") -> str | None:
+    """提交 ModelScope 异步生图任务，返回 task_id；任何失败返回 None。
+    negative：负面提示词；模型不支持该参数（HTTP 400）时自动去掉重试。"""
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            payload = {"model": model, "prompt": prompt}
+            if negative:
+                payload["negative_prompt"] = negative
             resp = await client.post(
                 f"{_API_BASE}/v1/images/generations",
                 headers={**_headers(), "X-ModelScope-Async-Mode": "true"},
-                json={"model": model, "prompt": prompt},
+                json=payload,
             )
+            if resp.status_code == 400 and negative:
+                logger.info("模型不接受 negative_prompt，去掉后重试")
+                payload.pop("negative_prompt")
+                resp = await client.post(
+                    f"{_API_BASE}/v1/images/generations",
+                    headers={**_headers(), "X-ModelScope-Async-Mode": "true"},
+                    json=payload,
+                )
             if resp.status_code != 200:
                 logger.warning(f"ModelScope 提交任务失败 HTTP {resp.status_code}")
                 return None
@@ -182,19 +238,22 @@ async def poll_task(task_id: str) -> str | None:
     return None
 
 
-async def generate(prompt: str, model: str) -> str | None:
+async def generate(prompt: str, model: str, negative: str = "") -> str | None:
     """完整生图链路：提交 -> 轮询 -> 图片 URL；任何失败返回 None。"""
-    task_id = await submit_task(prompt, model)
+    task_id = await submit_task(prompt, model, negative)
     if not task_id:
         return None
     return await poll_task(task_id)
 
 
 async def _draw_pipeline(prompt: str) -> tuple[str | None, str]:
-    """通用链路：人设注入 -> 扩写 -> 路由 -> 生图。返回 (图片 URL 或 None, 最终 prompt)。"""
+    """通用链路：人设注入 -> 按模型家族转写提示词 -> 生图（带负面词）。返回 (URL|None, 最终 prompt)。"""
     final_prompt = apply_self_prompt(prompt)
-    final_prompt = await expand_prompt(final_prompt)
-    url = await generate(final_prompt, route_model(final_prompt))
+    anime = is_anime(final_prompt)
+    model = route_model(final_prompt)
+    final_prompt = await expand_prompt(final_prompt, anime=anime)
+    negative = _ANIME_NEGATIVE if anime else _DEFAULT_NEGATIVE
+    url = await generate(final_prompt, model, negative)
     return url, final_prompt
 
 

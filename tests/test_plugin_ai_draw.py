@@ -57,10 +57,10 @@ def _plugin(monkeypatch):
     ad._last_use.clear()
     monkeypatch.setenv("MODELSCOPE_API_KEY", "ms-test")
 
-    async def _gen(prompt, model):
+    async def _gen(prompt, model, negative=""):
         return "http://x/draw.png"
 
-    async def _expand(p):
+    async def _expand(p, *, anime=False):
         return p
 
     monkeypatch.setattr(ad, "generate", _gen)
@@ -88,7 +88,7 @@ class TestDrawCommand:
     async def test_minor_nsfw_rejected(self, _fake_gateway, _plugin, monkeypatch):
         called = []
 
-        async def _gen(prompt, model):
+        async def _gen(prompt, model, negative=""):
             called.append(prompt)
             return "http://x/bad.png"
 
@@ -116,7 +116,7 @@ class TestDrawCommand:
 
     @pytest.mark.asyncio
     async def test_generate_failure_degrades(self, _fake_gateway, _plugin, monkeypatch):
-        async def _none(prompt, model):
+        async def _none(prompt, model, negative=""):
             return None
 
         monkeypatch.setattr(_plugin, "generate", _none)
@@ -130,33 +130,121 @@ class TestDrawCommand:
     async def test_anime_model_routing(self, _fake_gateway, _plugin, monkeypatch):
         captured = {}
 
-        async def _gen(prompt, model):
+        async def _gen(prompt, model, negative=""):
             captured["model"] = model
+            captured["negative"] = negative
             return "http://x/a.png"
 
         monkeypatch.setattr(_plugin, "generate", _gen)
         await _plugin.draw_cmd(_ctx("/draw 二次元少女"))
         await _drain()
         assert captured["model"] == _plugin._DEFAULT_ANIME_MODEL
+        assert captured["negative"] == _plugin._ANIME_NEGATIVE  # 二次元走专属负面词
 
 
 class TestExpandPrompt:
+    """真实 expand_prompt（不走 fixture 的 mock）：按模型家族转写 + 降级。"""
+
+    @staticmethod
+    def _fake_llm(monkeypatch, content="catgirl, cat ears, white hair"):
+        class _Resp:
+            pass
+
+        class _Model:
+            async def ainvoke(self, msgs):
+                r = _Resp()
+                r.content = content
+                return r
+
+        monkeypatch.setattr("junjun_llm.get_chat_model", lambda task: _Model())
+
     @pytest.mark.asyncio
-    async def test_expand_failure_falls_back_to_raw(self, _plugin, monkeypatch):
+    async def test_anime_tags_with_quality_suffix(self, monkeypatch):
+        import junjun_skills.plugins.ai_draw.tools as ad
+        self._fake_llm(monkeypatch)
+        out = await ad.expand_prompt("猫娘少女", anime=True)
+        assert out.startswith("catgirl, cat ears, white hair")
+        assert ad._ANIME_QUALITY_SUFFIX in out
+        assert "猫娘" not in out  # Danbooru 标签串不混中文原文
+
+    @pytest.mark.asyncio
+    async def test_default_natural_language_keeps_origin(self, monkeypatch):
+        import junjun_skills.plugins.ai_draw.tools as ad
+        self._fake_llm(monkeypatch, content="A cat girl under cherry blossoms, soft light")
+        out = await ad.expand_prompt("樱花下的猫娘", anime=False)
+        assert out.startswith("樱花下的猫娘，")  # 原文前置保主体
+        assert "soft light" in out
+
+    @pytest.mark.asyncio
+    async def test_expand_failure_anime_keeps_suffix(self, monkeypatch):
+        import junjun_skills.plugins.ai_draw.tools as ad
+
         def _boom(task):
             raise RuntimeError("模型槽未配置")
 
         monkeypatch.setattr("junjun_llm.get_chat_model", _boom)
-        assert await _plugin.expand_prompt("猫") == "猫"  # 降级用原文
+        out = await ad.expand_prompt("猫", anime=True)
+        assert out.startswith("猫") and ad._ANIME_QUALITY_SUFFIX in out
 
     @pytest.mark.asyncio
-    async def test_long_prompt_skips_expand(self, _plugin, monkeypatch):
+    async def test_expand_failure_default_falls_back_to_raw(self, monkeypatch):
+        import junjun_skills.plugins.ai_draw.tools as ad
+
+        def _boom(task):
+            raise RuntimeError("模型槽未配置")
+
+        monkeypatch.setattr("junjun_llm.get_chat_model", _boom)
+        assert await ad.expand_prompt("猫") == "猫"
+
+    @pytest.mark.asyncio
+    async def test_long_prompt_skips_expand(self, monkeypatch):
+        import junjun_skills.plugins.ai_draw.tools as ad
+
         def _boom(task):
             raise RuntimeError("不应被调用")
 
         monkeypatch.setattr("junjun_llm.get_chat_model", _boom)
-        long_prompt = "一只站在樱花树下的白毛猫娘少女，日系插画风格"
-        assert await _plugin.expand_prompt(long_prompt) == long_prompt
+        long_prompt = "一只站在樱花树下的白毛猫娘少女" * 20  # >200 字
+        assert await ad.expand_prompt(long_prompt) == long_prompt
+
+
+class TestSubmitTask:
+    @pytest.mark.asyncio
+    async def test_negative_prompt_400_retry(self, monkeypatch):
+        """模型拒绝 negative_prompt（HTTP 400）时自动去掉重试。"""
+        import junjun_skills.plugins.ai_draw.tools as ad
+        monkeypatch.setenv("MODELSCOPE_API_KEY", "ms-test")
+        calls = []
+
+        class _Resp:
+            def __init__(self, code, data=None):
+                self.status_code = code
+                self._data = data or {}
+
+            def json(self):
+                return self._data
+
+        class _Client:
+            def __init__(self, *a, **k):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                calls.append(dict(json))
+                if "negative_prompt" in json:
+                    return _Resp(400)
+                return _Resp(200, {"task_id": "t1"})
+
+        monkeypatch.setattr(ad.httpx, "AsyncClient", _Client)
+        task_id = await ad.submit_task("p", "m", "neg")
+        assert task_id == "t1"
+        assert len(calls) == 2
+        assert "negative_prompt" in calls[0] and "negative_prompt" not in calls[1]
 
 
 class TestSelfPrompt:
@@ -164,7 +252,7 @@ class TestSelfPrompt:
     async def test_persona_injected(self, _fake_gateway, _plugin, monkeypatch):
         captured = {}
 
-        async def _gen(prompt, model):
+        async def _gen(prompt, model, negative=""):
             captured["prompt"] = prompt
             return "http://x/me.png"
 
@@ -183,7 +271,7 @@ class TestSelfPrompt:
     async def test_no_self_word_no_persona(self, _fake_gateway, _plugin, monkeypatch):
         captured = {}
 
-        async def _gen(prompt, model):
+        async def _gen(prompt, model, negative=""):
             captured["prompt"] = prompt
             return "http://x/n.png"
 
