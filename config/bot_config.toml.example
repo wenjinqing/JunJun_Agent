@@ -170,3 +170,7 @@ monitor_enable = false   # 定时刷空间（10 分钟轮询好友动态）
 like_enable = false      # 监控自动点赞
 comment_enable = false   # 监控自动评论（LLM 写评论）
 max_reply_per_day = 5    # 每日自动评论上限
+
+[plugins]
+# 持久禁用的插件（跳过加载：工具/命令/拦截器全部不注册）
+disabled = []
