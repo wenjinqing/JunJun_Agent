@@ -32,18 +32,20 @@ def get_capabilities(query_type: str = "all") -> str:
 
     parts = []
 
-    if query_type in ("all", "plugins"):
-        parts.append("## 已启用的插件")
-        for plugin, items in sorted(by_plugin.items()):
-            if plugin != "builtin":
-                parts.append(f"- {plugin}: {len(items)} 个工具")
-
     if query_type in ("all", "skills"):
         builtin = by_plugin.get("builtin", [])
         if builtin:
             parts.append("## 内置 Skill")
             for s in builtin:
                 parts.append(f"- {s['name']}: {s['description'][:50]}")
+
+    if query_type in ("all", "plugins"):
+        # 插件工具（ai_draw/music/maizone 等）按插件分组显示
+        plugin_tools = {p: items for p, items in by_plugin.items() if p not in ("builtin", "mcp")}
+        if plugin_tools:
+            parts.append("## 插件功能")
+            for plugin, items in sorted(plugin_tools.items()):
+                parts.append(f"- {plugin}: {len(items)} 个工具")
 
     if query_type in ("all", "mcp"):
         # MCP 工具在 registry 里 plugin="mcp"，name 带 mcp_ 前缀
