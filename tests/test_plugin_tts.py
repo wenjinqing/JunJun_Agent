@@ -1,10 +1,19 @@
 """tts 插件测试：命令 / 工具 / 多后端降级 / 截断 / 限流（不连真实网络）。"""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 from junjun_agent import commands
+from junjun_agent.tasks import task_manager
+
+
+async def _drain():
+    """等待全部后台任务完成。"""
+    tasks = list(task_manager._running.values())
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +92,8 @@ class TestTTSCommand:
         tts = _plugin
         _patch_ok(monkeypatch, tts, "doubao")
         result = await tts.tts_cmd(_ctx("/tts 你好世界"))
-        assert result is None
+        assert "在合成" in result        # 提交即返回 ack
+        await _drain()                    # 后台合成完直发
         assert len(_fake_gateway) == 1
         segs = _fake_gateway[0].segments
         assert segs[0].type == "voice"
@@ -99,6 +109,7 @@ class TestTTSCommand:
         tts = _plugin
         _patch_ok(monkeypatch, tts, "siliconflow")
         await tts.tts_cmd(_ctx("/tts 你好 siliconflow"))
+        await _drain()
         from pathlib import Path
         path = Path(_fake_gateway[0].segments[0].data)
         assert path.name.startswith("tts_siliconflow_")
@@ -109,6 +120,7 @@ class TestTTSCommand:
         monkeypatch.setenv("TTS_DEFAULT_BACKEND", "gsv2p")
         _patch_ok(monkeypatch, tts, "gsv2p")
         await tts.tts_cmd(_ctx("/tts 你好世界"))
+        await _drain()
         from pathlib import Path
         path = Path(_fake_gateway[0].segments[0].data)
         assert path.name.startswith("tts_gsv2p_")
@@ -119,18 +131,21 @@ class TestTTSCommand:
         _patch_none(monkeypatch, tts, "doubao")   # 默认后端失败
         _patch_ok(monkeypatch, tts, "siliconflow")  # 降级到硅基流动
         result = await tts.tts_cmd(_ctx("/tts 你好世界"))
-        assert result is None
+        assert "在合成" in result
+        await _drain()
         from pathlib import Path
         path = Path(_fake_gateway[0].segments[0].data)
         assert path.name.startswith("tts_siliconflow_")
 
     @pytest.mark.asyncio
-    async def test_all_backends_fail_friendly_text(self, _plugin, monkeypatch):
+    async def test_all_backends_fail_friendly_text(self, _fake_gateway, _plugin, monkeypatch):
         tts = _plugin
         for b in tts.BACKENDS:
             _patch_none(monkeypatch, tts, b)
         result = await tts.tts_cmd(_ctx("/tts 你好世界"))
-        assert "失败" in result
+        assert "在合成" in result          # 先回 ack
+        await _drain()                      # 后台失败发降级文案
+        assert "失败" in _fake_gateway[0].segments[0].data
 
     @pytest.mark.asyncio
     async def test_no_backend_configured_degrades(self, _plugin, monkeypatch):
@@ -147,6 +162,7 @@ class TestTTSCommand:
         captured = []
         _patch_ok(monkeypatch, tts, "doubao", captured)
         await tts.tts_cmd(_ctx(f"/tts {'啊' * 400}"))
+        await _drain()
         assert len(captured[0]) == 300
 
     @pytest.mark.asyncio
@@ -154,8 +170,10 @@ class TestTTSCommand:
         tts = _plugin
         _patch_ok(monkeypatch, tts, "doubao")
         await tts.tts_cmd(_ctx("/tts 你好"))
+        await _drain()
         result = await tts.tts_cmd(_ctx("/tts 你好"))
         assert "秒" in result
+        await _drain()
         assert len(_fake_gateway) == 1  # 第二次没发语音
 
     @pytest.mark.asyncio
@@ -186,7 +204,8 @@ class TestUnifiedTTSTool:
             out = await tts.unified_tts.ainvoke({"text": "你好世界"})
         finally:
             current_chat_id.reset(token)
-        assert "已发送" in out
+        assert "在合成" in out       # 立即返回 ack
+        await _drain()                # 后台合成完直发
         rs = _fake_gateway[0]
         assert rs.target_group_id == "999"
         assert rs.segments[0].type == "voice"
@@ -201,7 +220,8 @@ class TestUnifiedTTSTool:
             out = await tts.unified_tts.ainvoke({"text": "你好", "backend": "sovits"})
         finally:
             current_chat_id.reset(token)
-        assert "已发送" in out
+        assert "在合成" in out
+        await _drain()
         from pathlib import Path
         path = Path(_fake_gateway[0].segments[0].data)
         assert path.name.startswith("tts_sovits_") and path.suffix == ".wav"
@@ -217,12 +237,19 @@ class TestUnifiedTTSTool:
         assert "未配置" in out
 
     @pytest.mark.asyncio
-    async def test_tool_all_fail_degrades(self, _plugin, monkeypatch):
+    async def test_tool_all_fail_degrades(self, _fake_gateway, _plugin, monkeypatch):
         tts = _plugin
         for b in tts.BACKENDS:
             _patch_none(monkeypatch, tts, b)
-        out = await tts.unified_tts.ainvoke({"text": "test"})
-        assert "失败" in out
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        token = current_chat_id.set("qq:999:group")
+        try:
+            out = await tts.unified_tts.ainvoke({"text": "test"})
+        finally:
+            current_chat_id.reset(token)
+        assert "在合成" in out           # 先回 ack
+        await _drain()                    # 后台失败发降级文案
+        assert "失败" in _fake_gateway[0].segments[0].data
 
     @pytest.mark.asyncio
     async def test_tool_rate_limit(self, _fake_gateway, _plugin, monkeypatch):
@@ -232,10 +259,12 @@ class TestUnifiedTTSTool:
         token = current_chat_id.set("qq:999:group")
         try:
             await tts.unified_tts.ainvoke({"text": "第一句"})
+            await _drain()
             out = await tts.unified_tts.ainvoke({"text": "第二句"})
         finally:
             current_chat_id.reset(token)
         assert "秒" in out
+        await _drain()
         assert len(_fake_gateway) == 1
 
     def test_tool_name_registered(self, _plugin):
