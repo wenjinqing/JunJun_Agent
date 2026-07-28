@@ -3,6 +3,8 @@
 - manifest: {"name", "version", "module", "tools_attr", "available_for"}
 - 依赖探测失败禁用该插件 WARN 不崩启动
 - available_for: 会话白名单（chat_id 列表；空=全会话）
+- bot_config.toml [plugins].disabled：持久禁用列表（跳过 import，
+  工具/命令/拦截器全部不注册；WebUI 运行时禁用不持久，配置层兜底）
 """
 
 import importlib
@@ -16,16 +18,28 @@ logger = get_logger("skills.plugins")
 PLUGINS_DIR = Path(__file__).resolve().parent / "plugins"
 
 
+def _disabled_plugins() -> set:
+    try:
+        from junjun_core.config import get_global_config
+        return set(get_global_config().raw.get("plugins", {}).get("disabled", []) or [])
+    except Exception:
+        return set()
+
+
 def load_plugins() -> int:
     """扫描并注册全部插件工具。返回注册数。"""
     from junjun_skills.registry import register
     if not PLUGINS_DIR.exists():
         return 0
+    disabled = _disabled_plugins()
     count = 0
     for manifest_path in sorted(PLUGINS_DIR.glob("*/_manifest.json")):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             name = manifest["name"]
+            if name in disabled or manifest_path.parent.name in disabled:
+                logger.info(f"插件 [{name}] 已在配置中禁用，跳过")
+                continue
             module = importlib.import_module(manifest["module"])
 
             # 依赖探测（可选钩子）
