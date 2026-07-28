@@ -119,7 +119,14 @@ class MessageHandler:
                 # 降级：用「@某人」占位（后续 processor 可替换为真实昵称）
                 segs.append(Seg(type="text", data=f"@某人 "))
             elif t == "image":
-                segs.append(Seg(type="image", data=d.get("url", "")))
+                # sub_type=1 是收藏表情/贴纸（可偷），0 是普通图片（不偷，只给 VLM 看）
+                if str(d.get("sub_type", "0")) == "1":
+                    segs.append(Seg(type="sticker", data=d.get("url", "")))
+                else:
+                    segs.append(Seg(type="image", data=d.get("url", "")))
+            elif t == "mface":
+                # 商城表情：也算表情包
+                segs.append(Seg(type="sticker", data=d.get("url", "")))
             elif t == "face":
                 segs.append(Seg(type="emoji", data=str(d.get("id", ""))))
             elif t == "reply":

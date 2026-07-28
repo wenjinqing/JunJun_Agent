@@ -148,11 +148,11 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     if await dispatch_interceptor(session, meta):
         return
 
-    # ---- 表情包偷图（fire-and-forget，失败静默）----
-    if meta.image_urls and session.is_group and not meta.is_self:
+    # ---- 表情包偷图（fire-and-forget，失败静默；只偷表情包，不偷普通图片）----
+    if meta.sticker_urls and session.is_group and not meta.is_self:
         try:
             from junjun_express.emoji import emoji_manager
-            await emoji_manager.steal(meta.image_urls)
+            await emoji_manager.steal(meta.sticker_urls)
         except Exception:
             pass
 
@@ -162,11 +162,11 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         echo = repeat_detector.note(session.chat_id, meta.user_id or "", meta.text,
                                     is_self=meta.is_self)
         if echo == "[STEAL]":
-            # 热图偷图：只保存不发送（重复出现的图片说明是热图/表情包）
-            if meta.image_urls:
+            # 热图偷图：只保存不发送（重复出现的表情包说明是热图）
+            if meta.sticker_urls:
                 try:
                     from junjun_express.emoji import emoji_manager
-                    await emoji_manager.steal(meta.image_urls)
+                    await emoji_manager.steal(meta.sticker_urls)
                     logger.info(f"[{session.chat_id}] 热图偷图成功")
                 except Exception:
                     pass

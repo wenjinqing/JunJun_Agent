@@ -34,7 +34,8 @@ class InboundMeta:
     message_id: str
     at_bot: bool
     is_self: bool
-    image_urls: list = None      # 消息中的图片/表情包 URL（偷图用）
+    image_urls: list = None      # 消息中的普通图片 URL（VLM 识图用）
+    sticker_urls: list = None    # 消息中的表情包 URL（偷图用；OneBot sub_type=1 / mface）
     has_emoji: bool = False      # 含 QQ 原生表情
 
 
@@ -132,7 +133,8 @@ class Gateway:
 
         text = _extract_text(msg.message_segment)
         image_urls = _extract_images(msg.message_segment)
-        if not text and not image_urls:
+        sticker_urls = _extract_stickers(msg.message_segment)
+        if not text and not image_urls and not sticker_urls:
             logger.debug("消息无文本/图片内容，跳过")
             return
 
@@ -152,6 +154,7 @@ class Gateway:
             at_bot=bool(add_cfg.get("at_bot")),
             is_self=bool(self.bot_user_id and str(user_id) == str(self.bot_user_id)),
             image_urls=image_urls,
+            sticker_urls=sticker_urls,
             has_emoji=_has_emoji(msg.message_segment),
         )
 
@@ -185,6 +188,8 @@ def _extract_text(seg: Seg) -> str:
     elif seg.type == "image":
         # 图片段转占位文本——君君知道「有图但不知道内容」（VLM 识图失败时的兜底）
         parts.append("[图片]")
+    elif seg.type == "sticker":
+        parts.append("[表情]")
     return "".join(parts)
 
 
@@ -198,10 +203,20 @@ def _extract_images(seg: Seg) -> list:
     return urls
 
 
+def _extract_stickers(seg: Seg) -> list:
+    urls = []
+    if seg.type == "seglist" and isinstance(seg.data, list):
+        for sub in seg.data:
+            urls.extend(_extract_stickers(sub))
+    elif seg.type == "sticker" and isinstance(seg.data, str) and seg.data:
+        urls.append(seg.data)
+    return urls
+
+
 def _has_emoji(seg: Seg) -> bool:
     if seg.type == "seglist" and isinstance(seg.data, list):
         return any(_has_emoji(sub) for sub in seg.data)
-    return seg.type == "emoji"
+    return seg.type in ("emoji", "sticker")
 
 
 _gateway: Optional[Gateway] = None
