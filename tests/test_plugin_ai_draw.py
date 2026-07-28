@@ -1,10 +1,19 @@
-"""ai_draw 插件测试：命令 /draw、红线拒绝、扩写降级、限流、tool、人设注入。"""
+"""ai_draw 插件测试：命令 /draw、红线拒绝、扩写降级、限流、tool、人设注入、异步直发。"""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
 from junjun_agent import commands
+from junjun_agent.tasks import task_manager
+
+
+async def _drain():
+    """等待全部后台任务完成。"""
+    tasks = list(task_manager._running.values())
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +73,8 @@ class TestDrawCommand:
     @pytest.mark.asyncio
     async def test_success_sends_image(self, _fake_gateway, _plugin):
         result = await _plugin.draw_cmd(_ctx("/draw 猫娘"))
-        assert result is None
+        assert "在弄了" in result       # 提交即返回 ack
+        await _drain()                   # 后台画完直发
         assert len(_fake_gateway) == 1
         segs = _fake_gateway[0].segments
         assert segs[0].type == "text" and "画好啦" in segs[0].data
@@ -85,14 +95,17 @@ class TestDrawCommand:
         monkeypatch.setattr(_plugin, "generate", _gen)
         result = await _plugin.draw_cmd(_ctx("/draw 萝莉 裸体"))
         assert "不画" in result
+        await _drain()
         assert not called           # 绝不调用生成
         assert not _fake_gateway    # 不发任何段
 
     @pytest.mark.asyncio
     async def test_rate_limit(self, _fake_gateway, _plugin):
         await _plugin.draw_cmd(_ctx("/draw 猫娘"))
+        await _drain()
         result = await _plugin.draw_cmd(_ctx("/draw 狗娘"))
         assert "秒后" in result
+        await _drain()
         assert len(_fake_gateway) == 1  # 第二次没发图
 
     @pytest.mark.asyncio
@@ -102,13 +115,16 @@ class TestDrawCommand:
         assert "MODELSCOPE_API_KEY" in result
 
     @pytest.mark.asyncio
-    async def test_generate_failure_degrades(self, _plugin, monkeypatch):
+    async def test_generate_failure_degrades(self, _fake_gateway, _plugin, monkeypatch):
         async def _none(prompt, model):
             return None
 
         monkeypatch.setattr(_plugin, "generate", _none)
         result = await _plugin.draw_cmd(_ctx("/draw 猫娘"))
-        assert "失败" in result
+        assert "在弄了" in result          # 先回 ack
+        await _drain()                      # 后台失败发降级文案
+        assert len(_fake_gateway) == 1
+        assert "失败" in _fake_gateway[0].segments[0].data
 
     @pytest.mark.asyncio
     async def test_anime_model_routing(self, _fake_gateway, _plugin, monkeypatch):
@@ -120,6 +136,7 @@ class TestDrawCommand:
 
         monkeypatch.setattr(_plugin, "generate", _gen)
         await _plugin.draw_cmd(_ctx("/draw 二次元少女"))
+        await _drain()
         assert captured["model"] == _plugin._DEFAULT_ANIME_MODEL
 
 
@@ -158,6 +175,7 @@ class TestSelfPrompt:
             raw={"personality": {"personality": "猫娘 白发 红瞳 可爱 萌"}}))
 
         await _plugin.draw_cmd(_ctx("/draw 画一张你自己"))
+        await _drain()
         assert "猫娘 白发" in captured["prompt"]
         assert "你自己" in captured["prompt"]
 
@@ -176,14 +194,35 @@ class TestSelfPrompt:
 
         monkeypatch.setattr("junjun_core.config.get_global_config", _boom)
         await _plugin.draw_cmd(_ctx("/draw 星空"))
+        await _drain()
         assert captured["prompt"] == "星空"
 
 
 class TestTool:
     @pytest.mark.asyncio
     async def test_tool_returns_url(self, _plugin):
-        out = await _plugin.ai_draw.ainvoke({"prompt": "星空下的城市"})
-        assert out == "[IMAGE:http://x/draw.png]"  # 特殊标记：processor 转 image 段
+        # 无会话路由（contextvar 显式清空）：同步降级，返回 [IMAGE:] 标记
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        token = current_chat_id.set("")
+        try:
+            out = await _plugin.ai_draw.ainvoke({"prompt": "星空下的城市"})
+        finally:
+            current_chat_id.reset(token)
+        assert out == "[IMAGE:http://x/draw.png]"
+
+    @pytest.mark.asyncio
+    async def test_tool_async_direct_send(self, _fake_gateway, _plugin):
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        token = current_chat_id.set("qq:999:group")
+        try:
+            out = await _plugin.ai_draw.ainvoke({"prompt": "星空下的城市"})
+        finally:
+            current_chat_id.reset(token)
+        assert "在弄了" in out           # 立即返回 ack，不等轮询
+        await _drain()                    # 后台画完直发图片
+        assert len(_fake_gateway) == 1
+        segs = _fake_gateway[0].segments
+        assert segs[-1].type == "image" and segs[-1].data == "http://x/draw.png"
 
     @pytest.mark.asyncio
     async def test_tool_rejects_minor_nsfw(self, _plugin):

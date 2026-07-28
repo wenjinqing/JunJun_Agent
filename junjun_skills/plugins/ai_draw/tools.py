@@ -9,6 +9,8 @@ API：ModelScope 异步文生图（api-inference.modelscope.cn）
   env AI_DRAW_MODEL / AI_DRAW_MODEL_ANIME 可覆盖默认值。
 安全：描述命中「未成年词 + 性词」组合直接拒绝；未配置 MODELSCOPE_API_KEY 降级文本。
 限流：每会话 20 秒最小间隔（内存 dict）。
+异步：工具/命令均为「提交即返回」——后台轮询完成由 task_manager 直发图片，
+  不阻塞会话，也不依赖 LLM 复述任何标记。
 """
 
 import asyncio
@@ -20,6 +22,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from junjun_agent.commands import register_command
+from junjun_agent.tasks import task_manager
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 
@@ -198,7 +201,7 @@ async def _draw_pipeline(prompt: str) -> tuple[str | None, str]:
 @register_command("draw", aliases=["绘图", "画图"], plugin="ai_draw",
                   description="AI画图：/draw <描述>，含动漫/二次元自动切换二次元模型")
 async def draw_cmd(ctx):
-    """手动画图命令；所有失败路径降级为友好中文文本，绝不抛异常。"""
+    """手动画图命令：提交即回「在画了」，后台画完直发图片，绝不抛异常。"""
     prompt = (ctx.args or "").strip()
     if not prompt:
         return "要画什么呀？用法：/draw <描述>，比如 /draw 猫娘少女"
@@ -215,13 +218,23 @@ async def draw_cmd(ctx):
         return "画图功能还没配置 ModelScope 密钥喵，让主人设置 MODELSCOPE_API_KEY 吧。"
 
     _last_use[chat_id] = now
+    ack = await task_manager.submit(
+        kind="ai_draw",
+        work=lambda: _draw_work(prompt),
+        done_text=f"画好啦！{prompt}",
+        fail_text="画图失败了，稍后再试试吧。",
+        timeout=_POLL_TIMEOUT + 60,
+        chat_id=chat_id,
+    )
+    return ack
+
+
+async def _draw_work(prompt: str) -> list | None:
+    """后台生图：成功返回 [image 段]，失败返回 None（由任务管理器发降级文案）。"""
     url, _ = await _draw_pipeline(prompt)
     if not url:
-        return "画图失败了，稍后再试试吧。"
-
-    await ctx.send([ReplySegment(type="text", data=f"画好啦！{prompt}"),
-                    ReplySegment(type="image", data=url)])
-    return None
+        return None
+    return [ReplySegment(type="image", data=url)]
 
 
 @tool
@@ -229,8 +242,8 @@ async def ai_draw(prompt: str) -> str:
     """根据描述 AI 生成图片。当用户要求画图、画个xxx、帮我画、来张图、需要配图时使用。
     prompt 为画面描述（如「猫娘少女」「星空下的城市」）。
 
-    返回图片直链 URL（http/https 开头）。调用后 agent 应把 URL 作为 image 段发送，
-    不要把 URL 当文本复述给用户。"""
+    本工具是异步的：调用后立即返回，图片画好会自动发到当前聊天，
+    不要在回复里编造图片 URL，也不要说「无法发送图片」——图片会随后发出。"""
     prompt = (prompt or "").strip()
     if not prompt:
         return "没有描述词，画不了。"
@@ -238,11 +251,17 @@ async def ai_draw(prompt: str) -> str:
         return "拒绝：描述涉及未成年人性内容，不会生成。"
     if not _api_key():
         return "画图功能未配置 MODELSCOPE_API_KEY，暂时画不了。"
-    url, _ = await _draw_pipeline(prompt)
-    if not url:
-        return "画图失败了，稍后再试。"
-    # 特殊标记：agent 识别后转 image 段发送，不复述 URL
-    return f"[IMAGE:{url}]"
+    from junjun_skills.builtin.memory_skills import current_chat_id
+    if not current_chat_id.get():
+        # 无会话路由（边缘场景）：同步生成 + [IMAGE:] 标记，由 processor 提取发图
+        url, _ = await _draw_pipeline(prompt)
+        return f"[IMAGE:{url}]" if url else "画图失败了，稍后再试。"
+    return await task_manager.submit(
+        kind="ai_draw",
+        work=lambda: _draw_work(prompt),
+        fail_text="这次画失败了，再试一次？",
+        timeout=_POLL_TIMEOUT + 60,
+    )
 
 
 TOOLS = [ai_draw]
