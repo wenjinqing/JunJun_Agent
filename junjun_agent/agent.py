@@ -182,6 +182,12 @@ class JunJunAgent:
             logger.warning(f"[{self.session.chat_id}] 未闭合 <think> 思考链泄漏，本轮沉默")
             return None
 
+        # ***REMOVED*** 工具参数格式泄漏：模型把 do_not_reply 的 XML 参数格式当文本输出
+        # （<arg_key>reason</arg_key><arg_value>...</arg_value>），不是真正调用工具
+        if "<arg_key>" in text or "</arg_key>" in text:
+            logger.warning(f"[{self.session.chat_id}] ***REMOVED*** 工具参数格式泄漏，本轮沉默")
+            return None
+
         # 推理结构检测（无 reasoning_content 字段且 text 仍含推理时的最后保险）
         if text and len(text) > 200:
             _REASONING_STARTS = ("这个问题", "让我", "我需要", "首先", "根据系统",
