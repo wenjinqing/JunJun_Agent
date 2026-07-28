@@ -45,9 +45,30 @@ class RepeatDetector:
         if is_self or not text or not (min_len <= len(text) <= max_len):
             st.content, st.count, st.users = "", 0, set()  # 断链
             return None
-        # 占位符不算复读（[图片]/[表情]/[语音] 等媒体占位符无语义）
+        # 占位符不发送复读消息，但计入偷图（图片/表情保存到表情包库）
         if text in ("[图片]", "[表情]", "[语音]", "[视频]", "[文件]"):
-            st.content, st.count, st.users = "", 0, set()
+            # 图片/表情占位符：不断链（可触发偷图），但不返回复读文本
+            if text in ("[图片]", "[表情]"):
+                # 计入计数（同一图片多人发=热图，值得偷）
+                if text == st.content:
+                    st.users.add(user_id)
+                    st.count += 1
+                else:
+                    st.content, st.count, st.users = text, 1, {user_id}
+                # 达到阈值时触发偷图（不发送复读消息）
+                threshold = int(cfg.get("threshold", 4))
+                now = now if now is not None else time.time()
+                interval = float(cfg.get("min_interval_seconds", 60))
+                if (st.count >= threshold
+                        and len(st.users) >= 2
+                        and (now - st.last_repeat_time) >= interval):
+                    st.last_repeat_time = now
+                    st.content, st.count, st.users = "", 0, set()
+                    logger.info(f"[{chat_id}] 热图偷图触发: {text}")
+                    return "[STEAL]"  # 特殊标记：processor 识别后只偷图不发消息
+            else:
+                # 语音/视频/文件：断链不处理
+                st.content, st.count, st.users = "", 0, set()
             return None
 
         if text == st.content:

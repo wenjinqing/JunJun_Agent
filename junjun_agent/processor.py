@@ -161,7 +161,17 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         from junjun_agent.loop.repeat import repeat_detector
         echo = repeat_detector.note(session.chat_id, meta.user_id or "", meta.text,
                                     is_self=meta.is_self)
-        if echo:
+        if echo == "[STEAL]":
+            # 热图偷图：只保存不发送（重复出现的图片说明是热图/表情包）
+            if meta.image_urls:
+                try:
+                    from junjun_express.emoji import emoji_manager
+                    await emoji_manager.steal(meta.image_urls)
+                    logger.info(f"[{session.chat_id}] 热图偷图成功")
+                except Exception:
+                    pass
+            return  # 偷图本身就是本条消息的处理，不再进漏斗
+        elif echo:
             from junjun_core.gateway.router import get_gateway
             await get_gateway().send_reply(ReplySet(
                 platform=session.platform, target_group_id=session.group_id,
