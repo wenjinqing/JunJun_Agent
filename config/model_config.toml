@@ -68,6 +68,13 @@ api_key_env = "LLM_API_KEY"
 # 多模态识图（图片描述/表情包注册）。未配置对应 env 时识图链路自动降级为 [图片] 占位
 temperature = 0.3
 max_tokens = 512
+# SiliconFlow Qwen3-VL-32B（支持 image_url 多模态理解）
+[[task.vlm.models]]
+base_url_env = "SF_VLM_BASE_URL"
+model_env = "SF_VLM_MODEL"
+api_key_env = "SILICONFLOW_API_KEY"
+# 降级：讯飞 MaaS（不支持 image_url 时 fallback 关键词描述）
+[[task.vlm.models]]
 base_url_env = "VLM_BASE_URL"
 model_env = "VLM_MODEL"
 api_key_env = "VLM_API_KEY"
