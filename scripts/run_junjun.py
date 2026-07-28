@@ -40,7 +40,7 @@ async def _run() -> int:
     try:
         cfg = get_global_config()
         logger.info("=" * 60)
-        logger.info("启动君君 AGENT (JunJun_Agent) [阶段 2 Agent 最小可用]")
+        logger.info("启动君君 AGENT (JunJun_Agent)")
         logger.info(f"昵称: {cfg.bot.nickname}  平台: {cfg.bot.platform}")
         logger.info(f"工作目录: {ROOT}")
         logger.info("=" * 60)
