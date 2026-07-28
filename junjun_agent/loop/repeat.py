@@ -66,35 +66,9 @@ class RepeatDetector:
             st.content, st.count, st.users = "", 0, set()  # 断链
             return None
 
-        # 占位符：图片/表情参与复读（可触发偷图或打断），语音/视频/文件断链
+        # 占位符：语音/视频/文件断链不处理；图片/表情不参与复读（用户指定取消）
         if text in ("[图片]", "[表情]", "[语音]", "[视频]", "[文件]"):
-            if text in ("[图片]", "[表情]"):
-                # 图片/表情参与复读：计入计数，可触发偷图或打断
-                if text == st.content:
-                    st.users.add(user_id)
-                    st.count += 1
-                else:
-                    st.content, st.count, st.users = text, 1, {user_id}
-
-                threshold = int(cfg.get("threshold", 4))
-                now = now if now is not None else time.time()
-                interval = float(cfg.get("min_interval_seconds", 60))
-                if (st.count >= threshold
-                        and len(st.users) >= 2
-                        and (now - st.last_repeat_time) >= interval):
-                    st.last_repeat_time = now
-                    st.content, st.count, st.users = "", 0, set()
-                    # 概率打断（30%）vs 偷图（70%）
-                    import random
-                    if random.random() < 0.3:
-                        phrase = random.choice(_INTERRUPT_PHRASES)
-                        logger.info(f"[{chat_id}] 打断复读: {phrase}")
-                        return f"[INTERRUPT:{phrase}]"
-                    logger.info(f"[{chat_id}] 热图偷图触发: {text}")
-                    return "[STEAL]"
-            else:
-                # 语音/视频/文件：断链不处理
-                st.content, st.count, st.users = "", 0, set()
+            st.content, st.count, st.users = "", 0, set()
             return None
 
         if text == st.content:
