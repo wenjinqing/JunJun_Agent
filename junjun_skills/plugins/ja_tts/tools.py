@@ -287,8 +287,11 @@ def _parse_args(args: str) -> tuple:
 
 
 async def _synthesize_to_file(text: str, speaker: str) -> Path | None:
-    """预处理（截断）-> 合成 -> 落盘 mp3，返回文件路径；失败 None。"""
-    text = text[:_MAX_TEXT_LEN]
+    """口播清洗 -> 合成 -> 落盘 mp3，返回文件路径；失败 None。"""
+    from ..tts.speakable import make_speakable
+    text = make_speakable(text, _MAX_TEXT_LEN)
+    if not text:
+        return None
     audio = await synthesize(text, speaker)
     if not audio:
         return None
@@ -339,6 +342,7 @@ async def ja_tts_cmd(ctx):
 async def ja_tts_tool(text: str, speaker: str = "") -> str:
     """把日语（或中文）文本合成语音发到当前聊天。用户要求"用语音说""发日语语音""说句日语听听"时使用。
     本工具是异步的：调用后立即返回，语音合成好会自动发到当前聊天。
+    text 写口语短句即可，不要 emoji/颜文字/链接（系统自动口播清洗）。
 
     Args:
         text: 要合成语音的文本（300 字内，越短效果越好）

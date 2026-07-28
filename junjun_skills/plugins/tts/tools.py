@@ -263,8 +263,11 @@ async def _synthesize_with_fallback(text: str, backend: str) -> tuple:
 
 
 async def _synthesize_to_file(text: str, backend: str) -> Path | None:
-    """截断 -> 合成（带降级）-> 落盘，返回文件路径；失败 None。"""
-    text = text[:_MAX_TEXT_LEN]
+    """口播清洗 -> 合成（带降级）-> 落盘，返回文件路径；失败 None。"""
+    from .speakable import make_speakable
+    text = make_speakable(text, _MAX_TEXT_LEN)
+    if not text:
+        return None
     used, audio = await _synthesize_with_fallback(text, backend)
     if not audio:
         return None
@@ -323,6 +326,9 @@ async def unified_tts(text: str, backend: str = "") -> str:
     未调用本工具前禁止只用文字假装已发语音。
 
     本工具是异步的：调用后立即返回，语音合成好会自动发到当前聊天。
+    text 写作要求（口播稿，不是聊天文本）：用口语短句，像真的在说话；
+    不要 emoji、颜文字、markdown、链接、括号动作描写——这些会被清洗掉；
+    系统会自动做口播清洗，你只负责把「要说的话」写得自然好听。
 
     Args:
         text: 要读给用户听的内容（300 字内，越短效果越好）
