@@ -153,7 +153,7 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
     """
     CORE = {"do_not_reply", "get_time", "recall_memory", "save_memory",
             "set_reminder", "list_reminders", "manage_mood", "send_message",
-            "web_search", "search_knowledge", "ai_draw"}  # 高频刚需永远保留，不参与掩码
+            "web_search", "search_knowledge", "ai_draw", "unified_tts"}  # 高频刚需永远保留，不参与掩码
     core_tools = [t for t in tools if t.name in CORE]
     other_tools = [t for t in tools if t.name not in CORE]
 
@@ -217,7 +217,8 @@ _TOPIC_KEYWORDS = {
     "query_jargon": ["黑话", "梗", "什么意思", "缩写"],
     "manage_user_profile": ["记住", "我叫", "我喜欢", "我的"],
     "vrchat_play_pose": ["动作", "跳舞", "挥手", "vrchat"],
-    "send_voice": ["语音", "说话", "念", "听"],
+    "unified_tts": ["语音", "说话", "念", "听", "声音", "唱"],
+    "ja_tts": ["日语", "日文", "语音", "声音"],
     "send_poke": ["戳", "poke"],
     "bilibili": ["b站", "bilibili", "视频", "bv"],
     "douyin": ["抖音", "douyin"],
