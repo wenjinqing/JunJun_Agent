@@ -57,6 +57,52 @@ DEFAULT_VOICE = "ja"
 # 每会话上次合成时间戳（chat_id -> ts）
 _last_use: dict = {}
 
+# ---------------- 中日混读处理（日语专用音色只认日语） ----------------
+# 日语专用音色（仅支持日语；混中文会变「大佐腔」）
+_JA_ONLY_SPEAKERS = frozenset({"ja_female_bv521_uranus_bigtts"})
+_KANA_RE = re.compile(r"[぀-ヿ]")           # 平假名/片假名
+_CJK_RE = re.compile(r"[一-鿿]")           # 汉字（中日共用）
+# 简体特征字（日文中不出现的码位；避开 学/校/音/来/会 等日语常用字）
+_ZH_ONLY_CHARS = frozenset("们这哪汉语说读课见关东门车马长问闻间风爱乐县买卖书龙鸟鱼还个现发过为对开动")
+
+_TRANSLATE_PROMPT = (
+    "把以下文本完整翻译成自然流畅的日语口语（用于语音合成朗读）。规则：\n"
+    "保留语气和情绪；输出只能有日语（假名+日语汉字），严禁残留中文；"
+    "不要解释、不要引号、不要罗马音、不要换行。\n"
+    "文本：{text}"
+)
+
+
+def needs_translation(text: str) -> bool:
+    """判断送日语专用音色前是否需要翻译。"""
+    if not text:
+        return False
+    if not _KANA_RE.search(text):
+        return bool(_CJK_RE.search(text))      # 无假名有汉字 -> 纯中文
+    return any(c in _ZH_ONLY_CHARS for c in text)  # 有假名但夹简体特征字 -> 混合
+
+
+async def ensure_japanese(text: str) -> str:
+    """日语专用音色：确保送合成的是全日语文本（中文部分 utils_small 翻译）。
+    失败降级原文（口音怪异但功能可用）。"""
+    if not needs_translation(text):
+        return text
+    try:
+        from langchain_core.messages import HumanMessage
+        from junjun_llm import get_chat_model
+        model = get_chat_model("utils_small")
+        resp = await asyncio.wait_for(
+            model.ainvoke([HumanMessage(content=_TRANSLATE_PROMPT.format(text=text))]),
+            timeout=10,
+        )
+        out = (resp.content or "").strip().strip('"').replace("\n", "")
+        if out:
+            logger.info(f"ja_tts 中文转译: {text[:20]} -> {out[:20]}")
+            return out
+    except Exception as e:
+        logger.warning(f"ja_tts 中译日失败（降级原文）: {type(e).__name__}: {e}")
+    return text
+
 
 # ========== 豆包双向 WS 二进制帧协议（按官方协议重写，仅保留所需子集） ==========
 class _MsgType(IntEnum):
@@ -286,12 +332,15 @@ def _parse_args(args: str) -> tuple:
     return args, VOICE_PRESETS[DEFAULT_VOICE]
 
 
-async def _synthesize_to_file(text: str, speaker: str) -> Path | None:
-    """口播清洗 -> 合成 -> 落盘 mp3，返回文件路径；失败 None。"""
+async def _synthesize_to_file(text: str, speaker: str, *, mix: bool = False) -> Path | None:
+    """口播清洗 -> （日语专用音色）中译日 -> 合成 -> 落盘 mp3；失败 None。
+    mix=True 允许中日混读（日语音色读中文带口音，仅在需要该效果时用）。"""
     from ..tts.speakable import make_speakable
     text = make_speakable(text, _MAX_TEXT_LEN)
     if not text:
         return None
+    if not mix and speaker in _JA_ONLY_SPEAKERS:
+        text = await ensure_japanese(text)
     audio = await synthesize(text, speaker)
     if not audio:
         return None
@@ -318,11 +367,18 @@ async def ja_tts_cmd(ctx):
         return f"语音发得太频繁啦，{remain} 秒后再试。"
 
     text, speaker = _parse_args(args)
+    # 混读开关：/ja_tts 混合 <文本>（日语音色读中文带口音，默认自动翻译成日语）
+    mix = False
+    for prefix in ("混合 ", "mix ", "混读 "):
+        if text.startswith(prefix):
+            mix = True
+            text = text[len(prefix):].strip()
+            break
     if not text:
-        return "用法：/ja_tts <日语文本> [音色]"
+        return "用法：/ja_tts <日语文本> [音色]；中文会自动翻译成日语，想保留混读加前缀「混合」"
 
     async def work():
-        path = await _synthesize_to_file(text, speaker)
+        path = await _synthesize_to_file(text, speaker, mix=mix)
         if path is None:
             return None
         return [ReplySegment(type="voice", data=str(path))]
@@ -339,14 +395,17 @@ async def ja_tts_cmd(ctx):
 
 # ========== 工具：LLM 触发 ==========
 @tool("ja_tts")
-async def ja_tts_tool(text: str, speaker: str = "") -> str:
+async def ja_tts_tool(text: str, speaker: str = "", mix: bool = False) -> str:
     """把日语（或中文）文本合成语音发到当前聊天。用户要求"用语音说""发日语语音""说句日语听听"时使用。
     本工具是异步的：调用后立即返回，语音合成好会自动发到当前聊天。
     text 写口语短句即可，不要 emoji/颜文字/链接（系统自动口播清洗）。
+    日语专用音色（ja）只认日语：中文内容会自动翻译成日语再合成；
+    mix=True 时才允许中日混读（会有口音，仅在要这种效果时用）。
 
     Args:
         text: 要合成语音的文本（300 字内，越短效果越好）
         speaker: 可选音色名，如 ja（日语女声，默认）/vv/jiaochuannv/youyoujunzi，留空用默认
+        mix: 是否允许中日混读（默认 False 自动翻译成纯日语）
     """
     text = (text or "").strip()
     if not text:
@@ -367,7 +426,7 @@ async def ja_tts_tool(text: str, speaker: str = "") -> str:
                                    VOICE_PRESETS[DEFAULT_VOICE])
 
     async def work():
-        path = await _synthesize_to_file(text, speaker_id)
+        path = await _synthesize_to_file(text, speaker_id, mix=mix)
         if path is None:
             return None
         return [ReplySegment(type="voice", data=str(path))]
