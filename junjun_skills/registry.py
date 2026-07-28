@@ -223,6 +223,8 @@ _TOPIC_KEYWORDS = {
     "bilibili": ["b站", "bilibili", "视频", "bv"],
     "douyin": ["抖音", "douyin"],
     "music": ["音乐", "歌", "点歌"],
+    "send_feed": ["说说", "空间", "qzone", "动态"],
+    "read_feed": ["说说", "空间", "qzone", "动态"],
 }
 
 
