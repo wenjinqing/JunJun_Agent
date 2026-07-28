@@ -17,7 +17,8 @@ class TestStickerDescription:
                 return R()
 
         async def _dl(url):
-            return b"\x89PNG sticker-test-unique-bytes-7f3a"  # 唯一字节防 Images 缓存跨测试命中
+            import uuid
+            return b"\x89PNG sticker-test-" + uuid.uuid4().bytes  # 每次唯一防 Images 持久缓存命中
 
         monkeypatch.setattr(vision, "_download", _dl)
         out = await vision.describe_stickers(["http://x/s.png"], model=_Model())

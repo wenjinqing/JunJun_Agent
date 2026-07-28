@@ -80,6 +80,13 @@ async def synthesize_doubao(text: str) -> bytes | None:
     if not api_key:
         return None
     speaker = _doubao_speaker_for(text)
+    if speaker == _DOUBAO_SPEAKER_JA:
+        # 日语专用音色只认日语：中文部分翻译成日语（防「大佐腔」）
+        try:
+            from junjun_skills.plugins.ja_tts.tools import ensure_japanese
+            text = await ensure_japanese(text)
+        except Exception:
+            pass
     try:
         # 懒加载避免 import 本模块时连带注册 ja_tts 命令
         from junjun_skills.plugins.ja_tts.tools import synthesize as _ja_synthesize
