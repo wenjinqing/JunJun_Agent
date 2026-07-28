@@ -124,6 +124,15 @@ class MessageHandler:
                 segs.append(Seg(type="reply", data=str(d.get("id", ""))))
             elif t == "forward":
                 segs.append(Seg(type="text", data=await self._expand_forward(d)))
+            elif t == "video":
+                # 视频段：转占位文本（VLM 暂不支持视频，让 Agent 知道有视频）
+                segs.append(Seg(type="text", data="[视频]"))
+            elif t == "record":
+                # 语音段：转占位文本
+                segs.append(Seg(type="text", data="[语音]"))
+            elif t == "file":
+                # 文件段：转占位文本
+                segs.append(Seg(type="text", data="[文件]"))
         return segs, at_bot
 
     async def _expand_forward(self, data: dict, depth: int = 1) -> str:
