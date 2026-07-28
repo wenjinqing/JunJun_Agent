@@ -11,6 +11,73 @@ from ..message_sending import message_send_instance
 
 ACCEPT_FORMAT = ["text", "image", "emoji", "reply", "voice"]
 
+# @ 昵称解析缓存：{(group_id, qq): (nickname, ts)}，TTL 1 小时
+_NICK_CACHE: dict = {}
+_NICK_TTL = 3600.0
+
+
+async def _resolve_nickname(qq: str, group_id: str) -> str:
+    """@ 目标 QQ -> 群昵称（card 优先，fallback nickname）；查不到返回「某人」。"""
+    if not group_id:
+        return "某人"
+    key = (str(group_id), str(qq))
+    hit = _NICK_CACHE.get(key)
+    if hit and time.time() - hit[1] < _NICK_TTL:
+        return hit[0]
+    try:
+        from ..send_handler.nc_sending import nc_message_sender
+        resp = await nc_message_sender.send_message_to_napcat(
+            "get_group_member_info",
+            {"group_id": int(group_id), "user_id": int(qq), "no_cache": False},
+        )
+        data = resp.get("data") or {}
+        name = (data.get("card") or data.get("nickname") or "").strip()
+        if name:
+            _NICK_CACHE[key] = (name, time.time())
+            return name
+    except Exception:
+        pass
+    return "某人"
+
+
+async def _resolve_reply(reply_id: str) -> str:
+    """引用消息 id -> 「[回复 昵称: 内容]」文本；失败降级占位。内容截断 200 字。"""
+    try:
+        from ..send_handler.nc_sending import nc_message_sender
+        resp = await nc_message_sender.send_message_to_napcat(
+            "get_msg", {"message_id": int(reply_id)})
+        data = resp.get("data") or {}
+        if not data:
+            return "[回复某条消息]"
+        nickname = ((data.get("sender") or {}).get("card")
+                    or (data.get("sender") or {}).get("nickname") or "某人")
+        text = _plain_text_of(data.get("message") or data.get("raw_message") or "")
+        if not text:
+            return f"[回复 {nickname} 的消息]"
+        if len(text) > 200:
+            text = text[:200] + "…"
+        return f"[回复 {nickname}: {text}]"
+    except Exception:
+        return "[回复某条消息]"
+
+
+def _plain_text_of(message) -> str:
+    """从 OneBot 消息（array 或 string）提取纯文本（图片/表情转占位）。"""
+    if isinstance(message, str):
+        return message.strip()
+    parts = []
+    for seg in message if isinstance(message, list) else []:
+        t, d = seg.get("type"), seg.get("data", {})
+        if t == "text":
+            parts.append(d.get("text", ""))
+        elif t == "image":
+            parts.append("[图片]")
+        elif t == "face":
+            parts.append("[表情]")
+        elif t == "at":
+            parts.append("@某人 ")
+    return "".join(parts).strip()
+
 
 class MessageHandler:
     def __init__(self):
@@ -75,6 +142,7 @@ class MessageHandler:
         seg_list, at_bot = await self._parse_message_segments(
             raw_message.get("message", []),
             self_id=str(raw_message.get("self_id", "")),
+            group_id=str(raw_message.get("group_id", "") or ""),
         )
         if not seg_list:
             return
@@ -97,11 +165,14 @@ class MessageHandler:
         )
         await message_send_instance.message_send(msg_base)
 
-    async def _parse_message_segments(self, real_message: list, self_id: str = "") -> tuple:
+    async def _parse_message_segments(self, real_message: list, self_id: str = "",
+                                      group_id: str = "") -> tuple:
         """解析 OneBot array 消息段为 Seg 列表。
 
         返回 (segs, at_bot)：at_bot 表示消息中 @ 了 bot 自己。
         合并转发（forward）经 get_forward_msg 展开为文本（递归深度限 2，截断 500 字）。
+        @ 解析为真实群昵称（缓存 1h，查不到降级 @某人）；@bot 显示为 @你。
+        引用消息经 get_msg 展开为「[回复 昵称: 内容]」（截断 200 字，失败降级占位）。
         """
         segs = []
         at_bot = False
@@ -111,13 +182,14 @@ class MessageHandler:
             if t == "text":
                 segs.append(Seg(type="text", data=d.get("text", "")))
             elif t == "at":
-                # @ 信息转成昵称提示（不用 QQ 号，防模型误判）
+                # @ 解析为真实昵称（防 QQ 号误判断，同时保留指向性）
                 qq = str(d.get("qq", ""))
                 if self_id and qq == self_id:
                     at_bot = True
-                # 尝试从消息上下文拿昵称（sender 里有 nickname，但 at 段没有）
-                # 降级：用「@某人」占位（后续 processor 可替换为真实昵称）
-                segs.append(Seg(type="text", data=f"@某人 "))
+                    segs.append(Seg(type="text", data="@你 "))
+                else:
+                    name = await _resolve_nickname(qq, group_id)
+                    segs.append(Seg(type="text", data=f"@{name} "))
             elif t == "image":
                 # sub_type=1 是收藏表情/贴纸（可偷），0 是普通图片（不偷，只给 VLM 看）
                 if str(d.get("sub_type", "0")) == "1":
@@ -130,7 +202,8 @@ class MessageHandler:
             elif t == "face":
                 segs.append(Seg(type="emoji", data=str(d.get("id", ""))))
             elif t == "reply":
-                segs.append(Seg(type="reply", data=str(d.get("id", ""))))
+                # 引用消息展开为可读文本（君君需要看到被回复的内容才能接话）
+                segs.append(Seg(type="text", data=await _resolve_reply(str(d.get("id", "")))))
             elif t == "forward":
                 segs.append(Seg(type="text", data=await self._expand_forward(d)))
             elif t == "video":

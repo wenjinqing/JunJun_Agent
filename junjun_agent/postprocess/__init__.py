@@ -41,12 +41,18 @@ def _get_typo_gen() -> ChineseTypoGenerator:
     return _typo_gen
 
 
-def process_response(text: str, *, rand: Optional[random.Random] = None) -> List[OutboundMessage]:
-    """agent 文本 -> 待发消息列表（含逐条打字延迟）。"""
+def process_response(text: str, *, rand: Optional[random.Random] = None,
+                     incoming: str = "") -> List[OutboundMessage]:
+    """agent 文本 -> 待发消息列表（含阅读延迟 + 逐条打字延迟）。
+
+    incoming：触发回复的用户消息原文——用于模拟「看完消息再打字」的阅读时间，
+    避免永远秒回的机器人感（[response_timing] 可关）。
+    """
     raw = get_global_config().raw
     pp = raw.get("response_post_process", {})
     sp = raw.get("response_splitter", {})
     typo_cfg = raw.get("chinese_typo", {})
+    timing_cfg = raw.get("response_timing", {})
     rng = rand or random
 
     text = _THINK_BLOCK_RE.sub("", text or "")
@@ -72,9 +78,17 @@ def process_response(text: str, *, rand: Optional[random.Random] = None) -> List
         gen = _get_typo_gen()
         pieces = [gen.create_typo_sentence(p, rand=rng) for p in pieces]
 
+    # 阅读延迟：首条前的「看消息」时间（字数越多看得越久，带抖动）
+    first_delay = 0.0
+    if timing_cfg.get("enable", True) and incoming:
+        first_delay = min(
+            float(timing_cfg.get("base", 0.6)) + len(incoming) * float(timing_cfg.get("per_char", 0.02)),
+            float(timing_cfg.get("cap", 4.0)),
+        ) * rng.uniform(0.7, 1.3)
+
     out: List[OutboundMessage] = []
     for i, p in enumerate(pieces):
-        # 首条小延迟起步，后续按前一条字数模拟打字
-        delay = typing_delay(pieces[i - 1], rand=rng) if i > 0 else 0.0
+        # 首条带阅读延迟，后续按前一条字数模拟打字
+        delay = first_delay if i == 0 else typing_delay(pieces[i - 1], rand=rng)
         out.append(OutboundMessage(text=p, delay=delay))
     return out
