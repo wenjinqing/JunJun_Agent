@@ -1,8 +1,8 @@
-"""MCP 客户端：连接多 server，工具转 LangChain BaseTool 注入 registry。
+﻿"""MCP 客户端：连接多个 server，工具转 LangChain BaseTool 注入 registry。
 
 - config/mcp_servers.toml 声明 server（command/args/cwd/env，stdio 传输）
 - 启动逐个连接（60s 超时），失败降级跳过不阻塞
-- 工具命名空间 mcp_<server>_<tool>，与内置 skill 冲突检测由 registry 重名报错承担
+- 工具命名空间 mcp_<server>_<tool>，与内置 skill 冲突由 registry 重名报错承担
 """
 
 import asyncio
@@ -18,26 +18,26 @@ logger = get_logger("mcp.client")
 
 # mcp SDK 的 stdout_reader 对非 JSON 行打 logger.exception——
 # 某些第三方 server（bilibili-mcp-js 等）会把数据 print 到 stdout 污染协议流。
-# 解析失败静默（数据不会丢，只是 server 自己的日志噪音），其他错误仍 WARN。
+# 解析失败静默（数据不会丢，只是 server 自己的日志喧哗），其它错误仍 WARN。
 logging.getLogger("mcp.client.stdio").setLevel(logging.CRITICAL)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MCP_CONFIG = PROJECT_ROOT / "config" / "mcp_servers.toml"
 
-_CONNECT_TIMEOUT = 60.0   # 冷启动 npx/uvx 首次解析+下载较慢（10s 实测不够）
+_CONNECT_TIMEOUT = 60.0   # 冷启动 npx/uvx 首次解析+下载较慢，60s 实测不够
 _TOOL_TIMEOUT = 30.0
 _RESULT_MAX_CHARS = 2000
 
 # 仅管理员可用的 MCP 工具（按工具原名匹配，注册时包权限门）
-# apply_relationship_penalty：惩罚是处置行为，不能交给群友触发
+# apply_relationship_penalty：惩罚处置行为，不能交给群友触发
 _ADMIN_TOOLS = {"apply_relationship_penalty"}
 
 
 def load_server_configs() -> Dict[str, dict]:
     """读 mcp_servers.toml。文件缺失返回空。
 
-    env 值支持 "${VAR}" 占位符——从进程环境变量（.env）替换，
-    密钥不落 toml（该文件入库）。
+    env 值支持 "" 占位符——从进程环境变量（.env）替换，
+    秘钥不落 toml（该文件入库）。
     """
     if not MCP_CONFIG.exists():
         return {}
@@ -82,7 +82,7 @@ class MCPManager:
             return 0
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        # 逐 server 隔离连接：一个坏不拖全部；冷启动慢，失败重试一次
+        # 逐 server 隔离连接：一个坏不拉全部；冷启动慢，失败重试一次
         ok_configs = {}
         for name, cfg in configs.items():
             for attempt in (1, 2):
@@ -116,10 +116,21 @@ class MCPManager:
         self._tools = [self._wrap(t) for t in raw_tools]
         return len(self._tools)
 
+    def register_all(self) -> None:
+        """注入 skill registry（重名由 registry 报错）。_ADMIN_TOOLS 包权限门。"""
+        from junjun_skills.registry import register
+        for t in self._tools:
+            try:
+                # t.name 已在 _wrap 加 mcp_ 前缀；匹配原始名
+                raw_name = t.name[len("mcp_"):] if t.name.startswith("mcp_") else t.name
+                register(t, plugin="mcp", admin_only=raw_name in _ADMIN_TOOLS)
+            except ValueError as e:
+                logger.warning(f"MCP 工具注册冲突（跳过）: {e}")
+
     def _wrap(self, tool):
         """加 mcp_ 前缀 + 超时 + 结果截断 + 内容提取。
 
-        langchain-mcp-adapters 工具是 content_and_artifact 格式，
+        langchain-mcp-adapters 工具是 content_and_artifact 格式：
         coroutine 返回 (content, artifact) 二元组——包装必须保持该结构。
 
         2026-07-24 调整（用户反馈格式难看）：
@@ -180,16 +191,7 @@ def _extract_text(content) -> str:
         return "\n".join(parts) if parts else str(content)
     return str(content)
 
-    def register_all(self) -> None:
-        """注入 skill registry（重名由 registry 报错）。_ADMIN_TOOLS 包权限门。"""
-        from junjun_skills.registry import register
-        for t in self._tools:
-            try:
-                # t.name 已在 _wrap 加 mcp_ 前缀；匹配原始名
-                raw_name = t.name[len("mcp_"):] if t.name.startswith("mcp_") else t.name
-                register(t, plugin="mcp", admin_only=raw_name in _ADMIN_TOOLS)
-            except ValueError as e:
-                logger.warning(f"MCP 工具注册冲突（跳过）: {e}")
-
 
 mcp_manager = MCPManager()
+
+
