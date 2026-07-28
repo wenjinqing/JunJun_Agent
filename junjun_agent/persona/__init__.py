@@ -88,6 +88,7 @@ def build_system_prompt(
     if p.get("interest"):
         role += f"\n兴趣：{p.get('interest', '')}"
     role += f"\n边界：你是 AI 程序，没有实体，被问起大方承认。红线：禁止涉及未成年人（色情方面）。"
+    role += f"\n你有一个 QQ 空间（maizone），可以发说说、看好友空间、点赞评论。"
 
     parts = [
         f"<role>\n{role}\n</role>",

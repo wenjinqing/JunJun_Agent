@@ -111,11 +111,13 @@ class MessageHandler:
             if t == "text":
                 segs.append(Seg(type="text", data=d.get("text", "")))
             elif t == "at":
-                # @ 信息转成 text 提示
+                # @ 信息转成昵称提示（不用 QQ 号，防模型误判）
                 qq = str(d.get("qq", ""))
                 if self_id and qq == self_id:
                     at_bot = True
-                segs.append(Seg(type="text", data=f"@{qq} "))
+                # 尝试从消息上下文拿昵称（sender 里有 nickname，但 at 段没有）
+                # 降级：用「@某人」占位（后续 processor 可替换为真实昵称）
+                segs.append(Seg(type="text", data=f"@某人 "))
             elif t == "image":
                 segs.append(Seg(type="image", data=d.get("url", "")))
             elif t == "face":
