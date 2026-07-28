@@ -123,6 +123,8 @@ async def _run() -> int:
             webui_task.cancel()
         from junjun_agent.loop import scheduler
         await scheduler.stop()
+        from junjun_agent.tasks import task_manager
+        await task_manager.shutdown()
         from junjun_agent.funnel.session_queue import session_queues
         await session_queues.stop_all()
         from junjun_core.database import db_writer
