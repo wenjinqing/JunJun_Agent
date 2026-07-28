@@ -1,24 +1,37 @@
-"""maizone 插件：QQ空间发说说 / 看空间 / 定时监控点赞评论。
+"""maizone 插件：QQ空间发说说 / 看空间 / 定时监控点赞评论 / 回复评论 / 定时自动发说说。
 
 迁移自旧 MaiBot maizone_plugin，仅提取其协议知识用新架构重写：
 - g_tk/bkn 哈希算法（对 p_skey 的 5381 哈希，旧代码原样提取）
 - cookie 获取链：NapCat get_cookies（qzone.qq.com / user.qzone.qq.com 多域合并
   确保拿到 p_skey）→ 本地缓存文件兜底；登录态失效时强制重取一次
 - Qzone 端点：emotion_cgi_publish_v6（发说说）、feeds3_html_more（好友说说列表）、
-  internal_dolike_app（点赞）、emotion_cgi_re_feeds（评论）
+  internal_dolike_app（点赞）、emotion_cgi_re_feeds（评论/回复评论）、
+  cgi_upload_image（说说配图上传）、emotion_cgi_msglist_v6（自己的说说+评论列表）
 - JSONP 剥壳：_Callback(...); / _preloadCallback(...) 用正则处理，不引新依赖
+
+LLM 工具（空间 = 第三聊天场景，Agent 自主决策）：
+- send_feed   发说说（可带 AI 配图；空间不支持语音/视频）
+- read_feed   看好友空间说说
 
 命令（全部 admin_only，bot 身份操作）：
 - /send_feed [主题]（/发说说）  LLM 写一条说说并发布，回执文本
 - /read_feed [数量]（/看空间）  拉好友说说列表做文本摘要
 - /qzone_status                cookie 状态 / 今日已评论数 / 各开关
 
-定时任务 maizone_monitor（10 分钟）：monitor_enable 时刷好友空间，
-对未处理说说点赞（like_enable）和/或评论（comment_enable，每日上限
-max_reply_per_day），处理记录落 data/maizone/processed_list.json。
+定时任务：
+- maizone_monitor（10 分钟）：monitor_enable 时刷好友空间，
+  对未处理说说点赞（like_enable）和/或评论（comment_enable，每日上限
+  max_reply_per_day），处理记录落 data/maizone/processed_list.json；
+  reply_comment_enable 时回复好友对自己说说的评论（首日基线不回旧评论）。
+- maizone_auto_post（1 分钟检查）：schedule_enable 时按当日波动时间表
+  自动发说说（schedule_times ± fluctuation_minutes，每日发送概率
+  schedule_probability，配图概率 schedule_image_probability），
+  与手动发共享每日上限 max_feed_per_day。
 """
 
+import base64
 import json
+import random
 import re
 import time
 from datetime import datetime
@@ -26,6 +39,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+from langchain_core.tools import tool
 
 from junjun_agent.commands import register_command
 from junjun_agent.loop.scheduler import ScheduledTask, scheduler
@@ -48,12 +62,20 @@ COMMENT_URL = ("https://user.qzone.qq.com/proxy/domain/"
                "taotao.qzone.qq.com/cgi-bin/emotion_cgi_re_feeds")
 ZONE_LIST_URL = ("https://user.qzone.qq.com/proxy/domain/"
                  "ic2.qzone.qq.com/cgi-bin/feeds/feeds3_html_more")
+# 说说配图上传 / 自己的说说列表（带评论）/ 回复评论（h5 域）
+UPLOAD_IMAGE_URL = "https://up.qzone.qq.com/cgi-bin/upload/cgi_upload_image"
+LIST_URL = ("https://user.qzone.qq.com/proxy/domain/"
+            "taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6")
+REPLY_URL = ("https://h5.qzone.qq.com/proxy/domain/"
+             "taotao.qzone.qq.com/cgi-bin/emotion_cgi_re_feeds")
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
 
 _MONITOR_INTERVAL = 600          # 刷空间间隔（秒）
 _PROCESSED_CACHE_SIZE = 200      # 已处理记录上限，防无限增长
+_REPLIED_CACHE_SIZE = 500        # 已回复评论记录上限
+_MAX_FEED_IMAGES = 3             # 单条说说配图上限
 
 
 class _AuthError(Exception):
@@ -222,8 +244,65 @@ def _html_to_text(html: str) -> str:
 # ---------------------------------------------------------------- Qzone API
 # 全部隔离为独立 async helper；签名统一 (cookies, uin, ...)，供 _with_auth_retry 注入
 
-async def publish_feed(cookies: dict, uin: str, content: str) -> str:
-    """发表纯文本说说，返回 tid。"""
+async def upload_image(cookies: dict, uin: str, image: bytes) -> tuple:
+    """上传图片到 QQ 空间（base64 表单），返回 (picbo, richval)。
+
+    响应是非标准 JSON 文本（旧插件用 eval，这里切 {...} 后 json5 解析）。
+    """
+    gtk = generate_gtk(cookies["p_skey"])
+    post_data = {
+        "filename": "filename",
+        "zzpanelkey": "",
+        "uploadtype": "1",
+        "albumtype": "7",
+        "exttype": "0",
+        "skey": cookies["skey"],
+        "zzpaneluin": uin,
+        "p_uin": uin,
+        "uin": uin,
+        "p_skey": cookies["p_skey"],
+        "output_type": "json",
+        "qzonetoken": "",
+        "refer": "shuoshuo",
+        "charset": "utf-8",
+        "output_charset": "utf-8",
+        "upload_hd": "1",
+        "hd_width": "2048",
+        "hd_height": "10000",
+        "hd_quality": "96",
+        "backUrls": ("http://upbak.photo.qzone.qq.com/cgi-bin/upload/cgi_upload_image,"
+                     "http://119.147.64.75/cgi-bin/upload/cgi_upload_image"),
+        "url": f"{UPLOAD_IMAGE_URL}?g_tk={gtk}",
+        "base64": "1",
+        "picfile": base64.b64encode(image).decode("ascii"),
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            UPLOAD_IMAGE_URL,
+            data=post_data,
+            headers={
+                "Cookie": _cookie_header(cookies),
+                "User-Agent": _UA,
+                "referer": f"https://user.qzone.qq.com/{uin}",
+                "origin": "https://user.qzone.qq.com",
+            },
+        )
+    import json5
+    text = resp.text
+    result = json5.loads(text[text.find("{"):text.rfind("}") + 1])
+    if result.get("ret") != 0:
+        raise RuntimeError(f"上传图片失败: ret={result.get('ret')}")
+    data = result["data"]
+    picbo = data["url"].split("&bo=")[1]
+    richval = ",{},{},{},{},{},{},,{},{}".format(
+        data["albumid"], data["lloc"], data["sloc"], data["type"],
+        data["height"], data["width"], data["height"], data["width"])
+    return picbo, richval
+
+
+async def publish_feed(cookies: dict, uin: str, content: str,
+                       images: Optional[list] = None) -> str:
+    """发表说说（可带图片 bytes 列表，先逐张上传），返回 tid。"""
     gtk = generate_gtk(cookies["p_skey"])
     post_data = {
         "syn_tweet_verson": "1",
@@ -239,6 +318,16 @@ async def publish_feed(cookies: dict, uin: str, content: str) -> str:
         "format": "json",
         "qzreferrer": f"https://user.qzone.qq.com/{uin}",
     }
+    images = (images or [])[:_MAX_FEED_IMAGES]
+    if images:
+        pic_bos, richvals = [], []
+        for img in images:
+            picbo, richval = await upload_image(cookies, uin, img)
+            pic_bos.append(picbo)
+            richvals.append(richval)
+        post_data["pic_bo"] = ",".join(pic_bos)
+        post_data["richtype"] = "1"
+        post_data["richval"] = "\t".join(richvals)
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
             EMOTION_PUBLISH_URL,
@@ -392,6 +481,113 @@ async def comment_feed(cookies: dict, uin: str, target_qq: str, fid: str, conten
     return True
 
 
+async def get_own_feeds(cookies: dict, uin: str, num: int = 3) -> list:
+    """拉自己的说说列表（emotion_cgi_msglist_v6，need_comment=1 带评论）。
+
+    返回 [{tid, content, created_time, comments:[{nickname, qq_account,
+    content, comment_tid, created_time, parent_tid}]}]；标准 JSON（_preloadCallback 壳）。
+    """
+    gtk = generate_gtk(cookies["p_skey"])
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(
+            LIST_URL,
+            params={
+                "g_tk": gtk,
+                "uin": uin,
+                "ftype": 0,
+                "sort": 0,
+                "pos": 0,
+                "num": num,
+                "replynum": 50,
+                "callback": "_preloadCallback",
+                "code_version": 1,
+                "format": "jsonp",
+                "need_comment": 1,
+                "need_private_comment": 1,
+            },
+            headers={
+                "Cookie": _cookie_header(cookies),
+                "User-Agent": _UA,
+                "Referer": f"https://user.qzone.qq.com/{uin}",
+            },
+        )
+    payload = json.loads(_strip_jsonp(resp.text))
+    _check_code(payload, "获取自己的说说")
+
+    feeds = []
+    for msg in (payload.get("msglist") or []):
+        tid = str(msg.get("tid", ""))
+        if not tid:
+            continue
+        ts = msg.get("created_time", 0)
+        created = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+                   if ts else str(msg.get("createTime", "")))
+        comments = []
+        for c in (msg.get("commentlist") or []):
+            comments.append({
+                "nickname": str(c.get("name", "")),
+                "qq_account": str(c.get("uin", "")),
+                "content": str(c.get("content", "")),
+                "comment_tid": str(c.get("tid", "")),
+                "created_time": str(c.get("createTime", "") or c.get("createTime2", "")),
+                "parent_tid": None,
+            })
+            for sub in (c.get("list_3") or []):
+                comments.append({
+                    "nickname": str(sub.get("name", "")),
+                    "qq_account": str(sub.get("uin", "")),
+                    "content": str(sub.get("content", "")),
+                    "comment_tid": str(sub.get("tid", "")),
+                    "created_time": str(sub.get("createTime", "") or sub.get("createTime2", "")),
+                    "parent_tid": str(c.get("tid", "")),
+                })
+        feeds.append({"tid": tid,
+                      "content": str(msg.get("content", "")),
+                      "created_time": created,
+                      "comments": comments})
+    return feeds
+
+
+async def reply_comment(cookies: dict, uin: str, fid: str,
+                        target_nickname: str, content: str) -> bool:
+    """回复自己说说下的评论（旧插件验证：子评论接口不可用，
+    用标准评论格式 + 内容里 @目标昵称 + paramstr 触发提醒）。"""
+    gtk = generate_gtk(cookies["p_skey"])
+    post_data = {
+        "topicId": f"{uin}_{fid}__1",
+        "uin": uin,
+        "hostUin": uin,
+        "content": f"回复@ {target_nickname} ：{content}",
+        "format": "fs",
+        "plat": "qzone",
+        "source": "ic",
+        "platformid": 52,
+        "ref": "feeds",
+        "richtype": "",
+        "richval": "",
+        "paramstr": f"@{target_nickname}",
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            REPLY_URL,
+            params={"g_tk": gtk},
+            data=post_data,
+            headers={
+                "Cookie": _cookie_header(cookies),
+                "User-Agent": _UA,
+                "referer": f"https://user.qzone.qq.com/{uin}",
+                "origin": "https://user.qzone.qq.com",
+            },
+        )
+    m = re.search(r"frameElement\.callback\((.*?)\)\s*;?\s*(?:</script>)?", resp.text, re.S)
+    if not m:
+        raise RuntimeError(f"回复评论失败: 无法解析响应 {resp.text[:100]}")
+    import json5
+    payload = json5.loads(m.group(1).replace("undefined", "null"))
+    _check_code(payload, "回复评论")
+    return True
+
+
 async def _with_auth_retry(fn, *args):
     """携带登录态执行 Qzone 操作；登录态失效时强制重取 cookie 重试一次。
 
@@ -436,15 +632,17 @@ def _persona() -> tuple:
     return p.get("personality", "一个 AI 助手"), p.get("reply_style", "")
 
 
-async def _generate_feed_content(topic: str) -> str:
-    """LLM 按人设写一条说说；失败降级模板文本。"""
+async def _generate_feed_content(topic: str, history: str = "") -> str:
+    """LLM 按人设写一条说说；失败降级模板文本。history 为近期说说（防重复主题）。"""
     personality, style = _persona()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     topic = (topic or "").strip()
     theme_part = f"主题是「{topic}」的" if topic else "记录日常生活的"
+    history_part = (f"\n以下是你以前发过的说说，新说说不许和它们主题重复：\n{history}\n"
+                    if history else "")
     prompt = (
         f"你是'{personality}'，现在是'{now}'，你想写一条{theme_part}说说发表在 QQ 空间上，"
-        f"{style}，不要浮夸，不要夸张修辞，可以适当使用颜文字，"
+        f"{style}，不要浮夸，不要夸张修辞，可以适当使用颜文字，{history_part}"
         "只输出一条说说正文的内容，不要输出多余内容"
         "（包括前后缀、冒号、引号、括号()、表情包、at 或 @ 等）。"
     )
@@ -469,6 +667,40 @@ async def _generate_comment(feed: dict) -> str:
     )
     text = await _ask_llm(prompt)
     return text or "写得真好呀~"
+
+
+async def _generate_comment_reply(feed: dict, comment: dict) -> str:
+    """LLM 按人设回复好友对自己说说的评论；失败降级模板文本。"""
+    personality, style = _persona()
+    prompt = (
+        f"你是'{personality}'，你在 QQ 空间发了一条说说「{feed.get('content', '')[:150]}」，"
+        f"好友'{comment.get('nickname', '好友')}'评论说「{comment.get('content', '')[:150]}」，"
+        f"你想回复这条评论，{style}，回复要短、自然、像朋友聊天，说中文，"
+        "不要浮夸，不要输出多余内容"
+        "（包括前后缀、冒号、引号、括号()、表情包、at 或 @ 等——@前缀系统会自动加）。"
+        "只输出回复内容。"
+    )
+    text = await _ask_llm(prompt)
+    return text or "嘿嘿，谢谢你的评论呀~"
+
+
+# ---------------------------------------------------------------- 配图（AI 生成 → bytes）
+
+async def _feed_image_bytes(prompt: str) -> Optional[bytes]:
+    """用 ai_draw 管线生成配图并下载为 bytes（供 upload_image）。任何失败返回 None。"""
+    try:
+        from junjun_skills.plugins.ai_draw.tools import _draw_pipeline
+        url, _model = await _draw_pipeline(prompt)
+        if not url:
+            return None
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+        if resp.status_code == 200 and len(resp.content) > 1000:
+            return resp.content
+        logger.warning(f"说说配图下载失败: HTTP {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"说说配图生成失败: {type(e).__name__}: {e}")
+    return None
 
 
 # ---------------------------------------------------------------- 监控状态
@@ -519,6 +751,123 @@ def _incr_daily_comment() -> None:
     _save_json(DATA_DIR / "processed_comments.json", state)
 
 
+def _daily_feed_count() -> int:
+    """今日已发说说数（手动 + 自动共享，跨天清零）。"""
+    state = _load_json(DATA_DIR / "feeds_sent.json", {})
+    if not isinstance(state, dict) or state.get("date") != datetime.now().strftime("%Y-%m-%d"):
+        return 0
+    return int(state.get("count", 0))
+
+
+def _incr_daily_feed() -> None:
+    """今日说说数 +1 并落盘。"""
+    state = {"date": datetime.now().strftime("%Y-%m-%d"),
+             "count": _daily_feed_count() + 1}
+    _save_json(DATA_DIR / "feeds_sent.json", state)
+
+
+def _feed_quota_ok() -> bool:
+    """今日说说额度是否还有（max_feed_per_day）。"""
+    return _daily_feed_count() < int(_cfg().get("max_feed_per_day", 4))
+
+
+def _load_replied() -> Optional[set]:
+    """已回复评论集合 {"tid:comment_tid"}；文件不存在返回 None（首日基线用）。"""
+    path = DATA_DIR / "replied_comments.json"
+    if not path.exists():
+        return None
+    data = _load_json(path, [])
+    return set(data) if isinstance(data, list) else set()
+
+
+def _save_replied(replied: set) -> None:
+    keys = list(replied)[-_REPLIED_CACHE_SIZE:]
+    _save_json(DATA_DIR / "replied_comments.json", keys)
+
+
+def _daily_reply_count() -> int:
+    """今日已回复评论数（跨天清零）。"""
+    state = _load_json(DATA_DIR / "replied_comments_daily.json", {})
+    if not isinstance(state, dict) or state.get("date") != datetime.now().strftime("%Y-%m-%d"):
+        return 0
+    return int(state.get("count", 0))
+
+
+def _incr_daily_reply() -> None:
+    state = {"date": datetime.now().strftime("%Y-%m-%d"),
+             "count": _daily_reply_count() + 1}
+    _save_json(DATA_DIR / "replied_comments_daily.json", state)
+
+
+# ---------------------------------------------------------------- LLM 工具
+# 空间 = 第三聊天场景：Agent 自主发说说/刷空间；空间不支持语音/视频（不发语音说说）
+
+@tool("send_feed")
+async def send_feed_tool(content: str, with_image: bool = False) -> str:
+    """在自己的 QQ 空间发一条说说（类似朋友圈）。想记录心情/分享见闻/用户要求发说说时用。
+    content 就是说说正文（口语自然、可适当颜文字，不要 @ 和引号包裹）。
+    空间不支持语音和视频，不要承诺发语音说说；with_image=True 会根据正文自动生成
+    一张 AI 配图一起发（较慢，适合风景/心情/二次元主题）。
+
+    Args:
+        content: 说说正文（100 字内效果最好）
+        with_image: 是否自动配一张 AI 图（默认 False 纯文字）
+    """
+    if not (_switch("enable") and _switch("send_enable")):
+        return "QQ空间发说说功能没开（config maizone enable/send_enable）。"
+    content = (content or "").strip()
+    if not content:
+        return "说说正文是空的，没发。"
+    if not _feed_quota_ok():
+        return f"今天说说已经发了 {int(_cfg().get('max_feed_per_day', 4))} 条（到上限了），明天再发吧。"
+
+    images = []
+    if with_image:
+        img = await _feed_image_bytes(content)
+        if img:
+            images.append(img)
+        else:
+            logger.info("说说配图生成失败，降级纯文字发布")
+
+    try:
+        tid = await _with_auth_retry(publish_feed, _bot_uin(), content, images)
+    except Exception as e:
+        logger.warning(f"工具发说说失败: {type(e).__name__}: {e}")
+        return "发说说失败了，空间接口暂时不给力，稍后再试吧。"
+    if tid is None:
+        return "空间登录态获取失败，发不了说说（需要管理员重新登录 NapCat）。"
+    _incr_daily_feed()
+    logger.info(f"[tool] 说说已发布 tid={tid} 配图={len(images)}: {content[:50]}")
+    return f"说说发出去了（{'带配图' if images else '纯文字'}）：{content}"
+
+
+@tool("read_feed")
+async def read_feed_tool(num: int = 5) -> str:
+    """刷一下好友的 QQ 空间，看大家最近发的说说。想了解好友动态/找聊天话题/用户让你看空间时用。
+
+    Args:
+        num: 看几条（1-20，默认 5）
+    """
+    if not (_switch("enable") and _switch("read_enable")):
+        return "QQ空间看空间功能没开（config maizone enable/read_enable）。"
+    num = max(1, min(20, int(num or 5)))
+    try:
+        feeds = await _with_auth_retry(fetch_friend_feeds, _bot_uin(), num)
+    except Exception as e:
+        logger.warning(f"工具看空间失败: {type(e).__name__}: {e}")
+        return "看空间失败了，空间接口暂时不给力，稍后再试吧。"
+    if feeds is None:
+        return "空间登录态获取失败，看不了空间（需要管理员重新登录 NapCat）。"
+    if not feeds:
+        return "好友空间最近静悄悄的，没有新说说。"
+    lines = [f"好友最近的说说（{len(feeds)} 条）："]
+    for i, f in enumerate(feeds, 1):
+        name = f.get("nickname") or f.get("target_qq", "?")
+        content = (f.get("content") or "")[:80] or "（无文字内容）"
+        lines.append(f"{i}. {name}（{f.get('created_time', '未知时间')}）：{content}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- 命令
 
 @register_command("send_feed", aliases=["发说说"], plugin="maizone",
@@ -527,6 +876,8 @@ async def send_feed_cmd(ctx) -> str:
     """/send_feed [主题]：LLM 写说说 → 发布 → 回执。"""
     if not (_switch("enable") and _switch("send_enable")):
         return "QQ空间发说说功能没开哦（config 里 maizone 的 enable / send_enable）。"
+    if not _feed_quota_ok():
+        return f"今天说说已经发了 {_daily_feed_count()} 条（到上限了），明天再发吧。"
     content = await _generate_feed_content(ctx.args)
     try:
         tid = await _with_auth_retry(publish_feed, _bot_uin(), content)
@@ -535,6 +886,7 @@ async def send_feed_cmd(ctx) -> str:
         return "发说说失败了，空间接口暂时不给力，稍后再试吧。"
     if tid is None:
         return "空间登录态获取失败，发不了说说（检查 NapCat 配置或重新登录）。"
+    _incr_daily_feed()
     logger.info(f"说说已发布 tid={tid}: {content[:50]}")
     return f"说说发出去啦：{content}"
 
@@ -572,6 +924,7 @@ async def qzone_status_cmd(ctx) -> str:
     """/qzone_status：cookie 状态 / 今日已评论数 / 各开关状态。"""
     cfg = _cfg()
     max_reply = int(cfg.get("max_reply_per_day", 5))
+    max_feed = int(cfg.get("max_feed_per_day", 4))
 
     uin = _bot_uin()
     cached = _load_cached_cookies(uin) if uin else None
@@ -587,22 +940,27 @@ async def qzone_status_cmd(ctx) -> str:
     switches = "、".join(
         f"{k}={'开' if _switch(k) else '关'}"
         for k in ("enable", "send_enable", "read_enable",
-                  "monitor_enable", "like_enable", "comment_enable"))
+                  "monitor_enable", "like_enable", "comment_enable",
+                  "schedule_enable", "reply_comment_enable"))
     return (f"QQ空间状态：\n{cookie_line}\n"
+            f"今日已发说说：{_daily_feed_count()}/{max_feed}\n"
             f"今日已评论：{_daily_comment_count()}/{max_reply}\n"
+            f"今日已回复评论：{_daily_reply_count()}/{int(cfg.get('max_comment_reply_per_day', 10))}\n"
             f"开关：{switches}")
 
 
 # ---------------------------------------------------------------- 定时监控
 
 async def maizone_monitor() -> None:
-    """定时刷好友空间：对未处理说说点赞/评论，处理记录落盘（各开关热读）。"""
+    """定时刷好友空间：对未处理说说点赞/评论，处理记录落盘（各开关热读）；
+    随后回复好友对自己说说的评论（独立开关）。"""
     cfg = _cfg()
     if not (bool(cfg.get("enable", False)) and bool(cfg.get("monitor_enable", False))):
         return
     like_on = bool(cfg.get("like_enable", False))
     comment_on = bool(cfg.get("comment_enable", False))
     if not (like_on or comment_on):
+        await _reply_own_feed_comments(cfg)
         return
     max_reply = int(cfg.get("max_reply_per_day", 5))
 
@@ -615,8 +973,10 @@ async def maizone_monitor() -> None:
             logger.debug(f"maizone 监控: Qzone 返回非标准 JSON（cookie 过期/登录态失效），跳过本轮: {e}")
         else:
             logger.warning(f"maizone 监控拉取说说失败: {err_name}: {e}")
+        await _reply_own_feed_comments(cfg)
         return
     if not feeds:
+        await _reply_own_feed_comments(cfg)
         return
 
     processed = _load_processed()
@@ -657,9 +1017,145 @@ async def maizone_monitor() -> None:
     if changed:
         _save_processed(processed)
 
+    await _reply_own_feed_comments(cfg)
+
+
+async def _reply_own_feed_comments(cfg: dict) -> None:
+    """回复好友对自己说说的评论（空间 = 聊天场景的闭环）。
+
+    首日运行只建基线（把存量评论标记为已回复），不轰炸旧评论。
+    """
+    if not (bool(cfg.get("enable", False)) and bool(cfg.get("reply_comment_enable", False))):
+        return
+    uin = _bot_uin()
+    max_reply = int(cfg.get("max_comment_reply_per_day", 10))
+
+    try:
+        feeds = await _with_auth_retry(get_own_feeds, uin, 3)
+    except Exception as e:
+        logger.warning(f"maizone 拉自己的说说失败: {type(e).__name__}: {e}")
+        return
+    if not feeds:
+        return
+
+    replied = _load_replied()
+    if replied is None:  # 首日：存量评论全部标记为已回复，不回
+        replied = {f"{f['tid']}:{c['comment_tid'] or c['nickname']}"
+                   for f in feeds for c in f["comments"]}
+        _save_replied(replied)
+        logger.info(f"maizone 评论回复基线已建立（{len(replied)} 条存量评论跳过）")
+        return
+
+    changed = False
+    for feed in feeds:
+        for c in feed["comments"]:
+            if not c.get("qq_account") or c["qq_account"] == str(uin):
+                continue  # 跳过自己的评论/回复
+            key = f"{feed['tid']}:{c['comment_tid'] or c['nickname']}"
+            if key in replied:
+                continue
+            if _daily_reply_count() >= max_reply:
+                logger.info(f"今日评论回复已达上限 {max_reply}")
+                _save_replied(replied)
+                return
+            text = await _generate_comment_reply(feed, c)
+            try:
+                ok = await _with_auth_retry(
+                    reply_comment, uin, feed["tid"], c["nickname"], text)
+                if ok:
+                    _incr_daily_reply()
+                    logger.info(f"已回复 {c['nickname']} 对说说 {feed['tid']} 的评论: {text[:30]}")
+            except Exception as e:
+                logger.warning(f"回复评论失败: {type(e).__name__}: {e}")
+            replied.add(key)  # 失败也标记，避免每 10 分钟轰炸同一条
+            changed = True
+    if changed:
+        _save_replied(replied)
+
+
+# ---------------------------------------------------------------- 定时自动发说说
+
+def _make_fluctuate_table(cfg: dict) -> list:
+    """生成当日发送时间表：schedule_times 每个点 ± fluctuation_minutes 随机波动。"""
+    times = cfg.get("schedule_times", ["09:30", "15:00", "21:00"])
+    fluct = int(cfg.get("fluctuation_minutes", 45))
+    table = []
+    for base in times:
+        try:
+            h, m = map(int, str(base).split(":"))
+        except ValueError:
+            continue
+        total = (h * 60 + m + (random.randint(-fluct, fluct) if fluct else 0)) % (24 * 60)
+        table.append(f"{total // 60:02d}:{total % 60:02d}")
+    return sorted(set(table))
+
+
+async def _send_scheduled_feed(cfg: dict) -> None:
+    """自动发一条说说：主题随机 + 历史去重 + 按概率配图。"""
+    if not _feed_quota_ok():
+        logger.info("今日说说已达上限，自动发送跳过")
+        return
+    topics = cfg.get("schedule_topics",
+                     ["日常生活", "心情分享", "有趣见闻", "天气", "动漫游戏"])
+    topic = random.choice(topics) if topics else ""
+
+    history = ""
+    try:
+        own = await _with_auth_retry(get_own_feeds, _bot_uin(), 5)
+        if own:
+            history = "\n".join(f"- {f['content'][:60]}" for f in own if f.get("content"))
+    except Exception as e:
+        logger.warning(f"拉历史说说失败（不影响发送）: {type(e).__name__}: {e}")
+
+    content = await _generate_feed_content(topic, history)
+
+    images = []
+    if random.random() < float(cfg.get("schedule_image_probability", 0.4)):
+        img = await _feed_image_bytes(topic or content[:40])
+        if img:
+            images.append(img)
+
+    try:
+        tid = await _with_auth_retry(publish_feed, _bot_uin(), content, images)
+    except Exception as e:
+        logger.warning(f"定时说说发布失败: {type(e).__name__}: {e}")
+        return
+    if tid is None:
+        logger.warning("定时说说: 登录态获取失败，跳过本次")
+        return
+    _incr_daily_feed()
+    logger.info(f"[auto] 定时说说已发布 tid={tid} 主题={topic} 配图={len(images)}: {content[:50]}")
+
+
+async def maizone_auto_post() -> None:
+    """每分钟检查：到达当日波动时间表的时间点就自动发说说（每天按概率决定发不发）。"""
+    cfg = _cfg()
+    if not (bool(cfg.get("enable", False)) and bool(cfg.get("send_enable", False))
+            and bool(cfg.get("schedule_enable", False))):
+        return
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    state = _load_json(DATA_DIR / "schedule_state.json", {})
+    if not isinstance(state, dict) or state.get("date") != today:
+        state = {
+            "date": today,
+            "times": _make_fluctuate_table(cfg),
+            "allowed": random.random() < float(cfg.get("schedule_probability", 0.75)),
+        }
+        logger.info(f"maizone 今日发送时间表: {state['times']}（{'发' if state['allowed'] else '今天休息'}）")
+
+    hhmm = now.strftime("%H:%M")
+    fired = hhmm in state.get("times", [])
+    if fired:
+        state["times"].remove(hhmm)
+    _save_json(DATA_DIR / "schedule_state.json", state)
+    if fired and state.get("allowed"):
+        await _send_scheduled_feed(cfg)
+
 
 # ---------------------------------------------------------------- 注册
 
 scheduler.add(ScheduledTask("maizone_monitor", maizone_monitor, interval=_MONITOR_INTERVAL))
+scheduler.add(ScheduledTask("maizone_auto_post", maizone_auto_post, interval=60))
 
-TOOLS = []
+TOOLS = [send_feed_tool, read_feed_tool]

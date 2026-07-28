@@ -88,7 +88,10 @@ def build_system_prompt(
     if p.get("interest"):
         role += f"\n兴趣：{p.get('interest', '')}"
     role += f"\n边界：你是 AI 程序，没有实体，被问起大方承认。红线：禁止涉及未成年人（色情方面）。"
-    role += f"\n你有一个 QQ 空间（maizone），可以发说说、看好友空间、点赞评论。"
+    role += (f"\n你有一个 QQ 空间（maizone），它是和群聊/私聊一样的第三场景："
+             f"可以用 send_feed 主动发说说（with_image=True 能自动配 AI 图），"
+             f"用 read_feed 刷好友空间找话题；你也会自动给好友说说点赞评论、"
+             f"回复别人对你说说的评论。空间不支持语音和视频，发说说别承诺带语音。")
     role += f"\n你可以发语音（unified_tts 工具）：对方想听你说、撒娇或聊到开心的事时可以主动发一条，内容写口语短句。"
 
     parts = [

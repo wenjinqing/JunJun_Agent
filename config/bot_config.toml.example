@@ -170,6 +170,15 @@ monitor_enable = false   # 定时刷空间（10 分钟轮询好友动态）
 like_enable = false      # 监控自动点赞
 comment_enable = false   # 监控自动评论（LLM 写评论）
 max_reply_per_day = 5    # 每日自动评论上限
+max_feed_per_day = 4     # 每日说说上限（手动 + 自动共享）
+schedule_enable = false         # 自动发说说开关
+schedule_times = ["09:30", "15:00", "21:00"]  # 基准发送时间点
+fluctuation_minutes = 45        # 每个时间点 ± 随机波动
+schedule_probability = 0.75     # 每天决定「今天发不发」的概率
+schedule_image_probability = 0.4  # 每条自动说说带 AI 配图的概率
+schedule_topics = ["日常生活", "心情分享", "有趣见闻", "天气", "动漫游戏"]
+reply_comment_enable = false    # 回复好友对自己说说的评论
+max_comment_reply_per_day = 10
 
 [plugins]
 # 持久禁用的插件（跳过加载：工具/命令/拦截器全部不注册）
