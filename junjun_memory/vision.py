@@ -17,6 +17,7 @@ from junjun_core.observability import get_logger
 logger = get_logger("memory.vision")
 
 _DESCRIBE_PROMPT = "用一句中文口语描述这张图片的内容（20字以内，像跟朋友转述一样）。"
+_STICKER_PROMPT = "这是一张 QQ 聊天表情包。用一句中文口语描述画面和它表达的情绪（20字以内，如「猫咪竖大拇指表示赞同」）。"
 _TIMEOUT = 15.0
 
 
@@ -40,14 +41,14 @@ async def _download(url: str) -> Optional[bytes]:
         return None
 
 
-async def _describe(data: bytes, *, model) -> Optional[str]:
+async def _describe(data: bytes, *, model, prompt: str = _DESCRIBE_PROMPT) -> Optional[str]:
     import asyncio
     from langchain_core.messages import HumanMessage
     b64 = base64.b64encode(data).decode()
     try:
         resp = await asyncio.wait_for(
             model.ainvoke([HumanMessage(content=[
-                {"type": "text", "text": _DESCRIBE_PROMPT},
+                {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
             ])]),
             timeout=_TIMEOUT,
@@ -58,31 +59,46 @@ async def _describe(data: bytes, *, model) -> Optional[str]:
         return None
 
 
+async def _describe_one(url: str, *, model, prompt: str, placeholder: str) -> str:
+    """单张图：下载 -> md5 查缓存 -> VLM -> 入库。失败返回占位。"""
+    data = await _download(url)
+    if data is None:
+        return placeholder
+    h = hashlib.md5(data).hexdigest()
+    from junjun_core.database import Images
+    row = Images.get_or_none(Images.image_hash == h)
+    if row is not None and row.description:
+        return row.description
+    if model is None:
+        return placeholder
+    desc = await _describe(data, model=model, prompt=prompt)
+    if desc:
+        try:
+            Images.create(image_hash=h, description=desc, timestamp=time.time())
+        except Exception as e:
+            logger.debug(f"图片描述入库失败（忽略）: {e}")
+    return desc or placeholder
+
+
 async def describe_images(image_urls: List[str], *, model=None) -> Dict[str, str]:
     """批量识图：url -> 描述。失败/未配置时该 url 映射为 "[图片]" 占位。"""
-    out: Dict[str, str] = {}
     if not image_urls:
-        return out
+        return {}
     if model is None:
         model = _get_vlm()
-    from junjun_core.database import Images
-    for url in image_urls:
-        desc: Optional[str] = None
-        data = await _download(url)
-        if data is not None:
-            h = hashlib.md5(data).hexdigest()
-            row = Images.get_or_none(Images.image_hash == h)
-            if row is not None:
-                desc = row.description or None
-            elif model is not None:
-                desc = await _describe(data, model=model)
-                if desc:
-                    try:
-                        Images.create(image_hash=h, description=desc, timestamp=time.time())
-                    except Exception as e:
-                        logger.debug(f"图片描述入库失败（忽略）: {e}")
-        out[url] = desc or "[图片]"
-    return out
+    return {url: await _describe_one(url, model=model, prompt=_DESCRIBE_PROMPT,
+                                     placeholder="[图片]") for url in image_urls}
+
+
+async def describe_stickers(sticker_urls: List[str], *, model=None) -> Dict[str, str]:
+    """批量识表情包：url -> 「画面+情绪」描述。与普通图片共用 Images hash 缓存
+    （同一张表情包只花一次 VLM 调用）。失败映射为 "[表情]" 占位。"""
+    if not sticker_urls:
+        return {}
+    if model is None:
+        model = _get_vlm()
+    return {url: await _describe_one(url, model=model, prompt=_STICKER_PROMPT,
+                                     placeholder="[表情]") for url in sticker_urls}
 
 
 def render_image_block(descriptions: Dict[str, str]) -> str:
@@ -93,3 +109,13 @@ def render_image_block(descriptions: Dict[str, str]) -> str:
     if len(descs) == 1:
         return f"对方发了一张图片：{descs[0]}"
     return "对方发了图片：\n" + "\n".join(f"- {d}" for d in descs)
+
+
+def render_sticker_block(descriptions: Dict[str, str]) -> str:
+    """渲染进上下文：对方发了一个表情包：画面+情绪。"""
+    descs = [d for d in descriptions.values() if d and d != "[表情]"]
+    if not descs:
+        return ""
+    if len(descs) == 1:
+        return f"对方发了一个表情包：{descs[0]}"
+    return "对方发了表情包：\n" + "\n".join(f"- {d}" for d in descs)
