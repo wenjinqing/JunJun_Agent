@@ -8,6 +8,8 @@ API：星知阁 https://api.xingzhige.com/API/douyin/（GET/POST，参数 url=�
 发送：摘要文本（标题/作者/点赞/评论/收藏/分享）+ 图集 image 段（上限 9 张）；
      视频默认只发直链文本（QQ 对第三方视频 URL 直发成功率低，与旧插件默认一致）
 限流：每会话 30 秒最小间隔（内存 dict）
+异步：解析走 task_manager 后台任务——命中链接立即回「在解析了」，结果出来直发，
+  不阻塞会话队列（解析 API 超时 60s，同步会堵住该会话后续消息）。
 """
 
 import os
@@ -18,6 +20,7 @@ import httpx
 
 from junjun_agent.commands import register_command
 from junjun_agent.interceptors import register_interceptor
+from junjun_agent.tasks import task_manager
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 
@@ -214,43 +217,50 @@ def _check_rate_limit(chat_id: str) -> int:
     return 0
 
 
-async def _parse_and_reply(ctx, share_url: str) -> None:
-    """解析并发送结果；所有失败路径降级为友好中文文本，绝不抛异常。"""
+async def _parse_to_segments(share_url: str) -> list:
+    """解析链接并组装待发送段；所有失败路径返回友好文本段，绝不抛异常。"""
     raw = await _fetch_parse(share_url)
     if raw is None:
-        await ctx.reply("抖音解析接口暂时没响应，稍后再试试吧。")
-        return
+        return [ReplySegment(type="text", data="抖音解析接口暂时没响应，稍后再试试吧。")]
 
     inner = _unwrap_payload(raw)
     stat, item = _resolve_item_stat(inner)
     if not _api_success(raw) and not _has_sendable_media(item):
         msg = raw.get("msg") or raw.get("message") or "未知原因"
-        await ctx.reply(f"抖音解析失败了：{msg}")
-        return
+        return [ReplySegment(type="text", data=f"抖音解析失败了：{msg}")]
     if not _has_sendable_media(item):
-        await ctx.reply("解析成功了，但没有拿到可发送的视频或图集。")
-        return
+        return [ReplySegment(type="text", data="解析成功了，但没有拿到可发送的视频或图集。")]
 
     summary = _build_summary(stat, item)
     video_url = item.get("url")
     if isinstance(video_url, str) and video_url.startswith("http"):
         # QQ/NapCat 的 video 段通常不接受抖音 CDN 直链，默认改为正文发直链
-        await ctx.reply(f"{summary}\n📎 视频：{video_url}")
-        return
+        return [ReplySegment(type="text", data=f"{summary}\n📎 视频：{video_url}")]
 
     images = _image_urls_from_item(item)[:_MAX_GALLERY]
     if images:
         segs = [ReplySegment(type="text", data=summary)]
         segs += [ReplySegment(type="image", data=img) for img in images]
-        await ctx.send(segs)
-    else:
-        await ctx.reply(summary)
+        return segs
+    return [ReplySegment(type="text", data=summary)]
+
+
+async def _submit_parse(chat_id: str, url: str) -> str:
+    """登记后台解析任务，返回 ack 话术（接受/占线）。"""
+    return await task_manager.submit(
+        kind="douyin",
+        work=lambda: _parse_to_segments(url),
+        ack_text="在解析了，稍等~",
+        fail_text="抖音解析出错了，稍后再试试吧。",
+        timeout=_TIMEOUT + 30,
+        chat_id=chat_id,
+    )
 
 
 @register_command("douyin", aliases=["抖音解析"], plugin="douyin",
                   description="解析抖音分享链接（视频直链/图集）")
 async def douyin_cmd(ctx):
-    """手动解析：/douyin <链接> 或 /抖音解析 <链接>。"""
+    """手动解析：/douyin <链接> 或 /抖音解析 <链接>。后台解析完成直发，不阻塞会话。"""
     url = (ctx.args or "").strip()
     if not url:
         return "用法：/douyin <抖音链接>  或  /抖音解析 <链接>"
@@ -262,8 +272,7 @@ async def douyin_cmd(ctx):
         return f"解析太频繁啦，{remain} 秒后再试。"
 
     logger.info(f"抖音解析(命令): url={url[:80]}")
-    await _parse_and_reply(ctx, url)
-    return None
+    return await _submit_parse(ctx.session.chat_id, url)
 
 
 @register_interceptor(DOUYIN_URL_RE.pattern, name="douyin_link", plugin="douyin")
@@ -279,7 +288,8 @@ async def douyin_hit(ctx) -> bool:
         return True
 
     logger.info(f"抖音解析(自动): url={url[:80]}")
-    await _parse_and_reply(ctx, url)
+    ack = await _submit_parse(ctx.session.chat_id, url)
+    await ctx.reply(ack)
     return True
 
 

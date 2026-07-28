@@ -1,11 +1,20 @@
-"""douyin 插件测试：链接正则 / 命令 / 拦截器 / 解析降级 / 限流。"""
+"""douyin 插件测试：链接正则 / 命令 / 拦截器 / 解析降级 / 限流 / 异步直发。"""
 
+import asyncio
 import importlib
 from types import SimpleNamespace
 
 import pytest
 
 from junjun_agent import commands, interceptors
+from junjun_agent.tasks import task_manager
+
+
+async def _drain():
+    """等待全部后台任务完成。"""
+    tasks = list(task_manager._running.values())
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.fixture(autouse=True)
@@ -107,7 +116,8 @@ class TestCommand:
 
         monkeypatch.setattr(dy, "_fetch_parse", _fetch)
         result = await dy.douyin_cmd(_ctx("/douyin https://v.douyin.com/abc/"))
-        assert result is None
+        assert "在解析了" in result        # 提交即返回 ack
+        await _drain()                     # 后台解析完直发
         segs = _fake_gateway[0].segments
         assert segs[0].type == "text"
         assert "猫猫视频" in segs[0].data and "铲屎官" in segs[0].data
@@ -123,6 +133,7 @@ class TestCommand:
 
         monkeypatch.setattr(dy, "_fetch_parse", _fetch)
         await dy.douyin_cmd(_ctx("/抖音解析 https://www.douyin.com/note/abc123"))
+        await _drain()
         segs = _fake_gateway[0].segments
         assert segs[0].type == "text" and "美景图集" in segs[0].data
         images = [s for s in segs if s.type == "image"]
@@ -141,11 +152,12 @@ class TestCommand:
 
         monkeypatch.setattr(dy, "_fetch_parse", _fetch)
         await dy.douyin_cmd(_ctx("/douyin https://v.douyin.com/abc/"))
+        await _drain()
         data = _fake_gateway[0].segments[0].data
         assert "嵌套" in data and "http://x/v.mp4" in data
 
     @pytest.mark.asyncio
-    async def test_fetch_failure_degrades(self, monkeypatch):
+    async def test_fetch_failure_degrades(self, _fake_gateway, monkeypatch):
         dy = _load()
 
         async def _none(url):
@@ -153,8 +165,10 @@ class TestCommand:
 
         monkeypatch.setattr(dy, "_fetch_parse", _none)
         result = await dy.douyin_cmd(_ctx("/douyin https://v.douyin.com/abc/"))
-        assert result is None or "用法" not in (result or "")
-        # 失败走 ctx.reply 友好文本（无 gateway 时不抛异常即降级成功）
+        assert "在解析了" in result
+        await _drain()
+        # 接口无响应 -> 后台发友好降级文本
+        assert "稍后再试" in _fake_gateway[0].segments[0].data
 
     @pytest.mark.asyncio
     async def test_api_failure_msg(self, _fake_gateway, monkeypatch):
@@ -165,6 +179,7 @@ class TestCommand:
 
         monkeypatch.setattr(dy, "_fetch_parse", _fetch)
         await dy.douyin_cmd(_ctx("/douyin https://v.douyin.com/abc/"))
+        await _drain()
         assert "解析失败" in _fake_gateway[0].segments[0].data
 
     @pytest.mark.asyncio
@@ -180,10 +195,12 @@ class TestCommand:
         await dy.douyin_cmd(_ctx("/douyin https://v.douyin.com/abc/"))
         result = await dy.douyin_cmd(_ctx("/douyin https://v.douyin.com/def/"))
         assert "秒后再试" in result
+        await _drain()
         assert len(calls) == 1  # 冷却内不再请求接口
         # 换个会话不受限
         ctx = _ctx("/douyin https://v.douyin.com/def/", is_group=False)
         await dy.douyin_cmd(ctx)
+        await _drain()
         assert len(calls) == 2
 
 
@@ -199,7 +216,9 @@ class TestInterceptor:
         meta = _meta("这个好看 https://v.douyin.com/UW8-u_REUP8/ 哈哈哈")
         consumed = await interceptors.dispatch(_session(), meta)
         assert consumed is True
-        assert "猫猫视频" in _fake_gateway[0].segments[0].data
+        assert "在解析了" in _fake_gateway[0].segments[0].data  # 先回 ack
+        await _drain()                                          # 后台结果直发
+        assert "猫猫视频" in _fake_gateway[-1].segments[0].data
 
     @pytest.mark.asyncio
     async def test_dispatch_miss_passes(self, _fake_gateway):
@@ -218,7 +237,8 @@ class TestInterceptor:
         monkeypatch.setattr(dy, "_fetch_parse", _none)
         consumed = await dy.douyin_hit(_hit_ctx("https://v.douyin.com/abc/"))
         assert consumed is True
-        assert "稍后再试" in _fake_gateway[0].segments[0].data
+        await _drain()
+        assert "稍后再试" in _fake_gateway[-1].segments[0].data
 
     @pytest.mark.asyncio
     async def test_hit_rate_limited(self, _fake_gateway, monkeypatch):
@@ -229,6 +249,7 @@ class TestInterceptor:
 
         monkeypatch.setattr(dy, "_fetch_parse", _fetch)
         assert await dy.douyin_hit(_hit_ctx("https://v.douyin.com/abc/")) is True
+        await _drain()
         _fake_gateway.clear()
         assert await dy.douyin_hit(_hit_ctx("https://v.douyin.com/def/")) is True
         assert "秒后再试" in _fake_gateway[0].segments[0].data
