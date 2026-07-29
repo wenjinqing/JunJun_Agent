@@ -64,15 +64,28 @@ async def get_group_member_info(group_id: str, user_id: str) -> Optional[dict]:
         "group_id": int(group_id), "user_id": int(user_id), "no_cache": True})
 
 
+def _file_param(file_path: str) -> str:
+    """本地路径转绝对路径（http/file URI 原样透传）。
+
+    NapCat 是独立进程（cwd 在 NapCat 目录），相对路径在它那边找不到文件
+    ——2026-07-29 pixiv_novel upload_private_file retcode=200 就是
+    传了 data\\pixiv_novel\\xxx.txt 相对路径。
+    """
+    if file_path.startswith(("http://", "https://", "file://", "base64://")):
+        return file_path
+    from pathlib import Path
+    return str(Path(file_path).resolve())
+
+
 async def upload_group_file(group_id: str, file_path: str, name: str = "") -> bool:
     """上传群文件（本地路径或 http URL）。成功 True。"""
-    params = {"group_id": int(group_id), "file": file_path, "name": name or file_path.rsplit("/", 1)[-1]}
+    params = {"group_id": int(group_id), "file": _file_param(file_path), "name": name or file_path.rsplit("/", 1)[-1]}
     data = await call("upload_group_file", params, timeout=120.0)
     return data is not None
 
 
 async def upload_private_file(user_id: str, file_path: str, name: str = "") -> bool:
-    params = {"user_id": int(user_id), "file": file_path, "name": name or file_path.rsplit("/", 1)[-1]}
+    params = {"user_id": int(user_id), "file": _file_param(file_path), "name": name or file_path.rsplit("/", 1)[-1]}
     data = await call("upload_private_file", params, timeout=120.0)
     return data is not None
 
