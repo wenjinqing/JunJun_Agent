@@ -32,19 +32,35 @@ message_queue = asyncio.Queue()
 
 
 async def message_recv(server_connection: Server.ServerConnection):
+    """NapCat 连接生命周期：连入 -> 收发 -> 断开。
+
+    断线韧性（2026-07-29）：NapCat 重启/网络抖动会断开 WS，
+    websockets 对未捕获的 ConnectionClosed 打 "connection handler failed"
+    全栈 traceback。这里显式捕获：正常断连打 INFO、异常断连打 WARN，
+    并清空发送器连接（外发消息在断线窗口期等待重连而不是写死连接）。
+    """
     await message_handler.set_server_connection(server_connection)
     await nc_message_sender.set_server_connection(server_connection)
-    async for raw_message in server_connection:
-        try:
-            decoded = json.loads(raw_message)
-        except Exception as e:
-            logger.warning(f"消息 JSON 解析失败: {e}")
-            continue
-        post_type = decoded.get("post_type")
-        if post_type in ["meta_event", "message", "notice"]:
-            await message_queue.put(decoded)
-        elif post_type is None:
-            await put_response(decoded)
+    logger.info("NapCat 已连入 Adapter")
+    try:
+        async for raw_message in server_connection:
+            try:
+                decoded = json.loads(raw_message)
+            except Exception as e:
+                logger.warning(f"消息 JSON 解析失败: {e}")
+                continue
+            post_type = decoded.get("post_type")
+            if post_type in ["meta_event", "message", "notice"]:
+                await message_queue.put(decoded)
+            elif post_type is None:
+                await put_response(decoded)
+    except Server.exceptions.ConnectionClosedOK:
+        logger.info("NapCat 正常断开连接，等待重连...")
+    except Server.exceptions.ConnectionClosedError as e:
+        logger.warning(f"NapCat 连接异常断开（等待重连）: {type(e).__name__}: {e}")
+    finally:
+        nc_message_sender.clear_server_connection()
+        await message_handler.set_server_connection(None)
 
 
 async def message_process():
