@@ -506,3 +506,96 @@ class TestRobustness:
         core_block = src[src.index("CORE = {"):src.index("}", src.index("CORE = {"))]
         assert '"send_feed"' in core_block and '"read_feed"' in core_block
 
+
+
+# ---------------- 删说说 ----------------
+
+class TestDeleteFeed:
+    @pytest.mark.asyncio
+    async def test_delete_feed_parse_json(self, _env, monkeypatch):
+        """标准 JSON 响应：code=0 通过。"""
+        captured = {}
+
+        class _Resp:
+            text = json.dumps({"code": 0, "message": ""})
+
+        class _Client:
+            def __init__(self, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def post(self, url, params=None, data=None, headers=None):
+                captured["data"] = data
+                return _Resp()
+
+        monkeypatch.setattr(mz.httpx, "AsyncClient", _Client)
+        ok = await mz.delete_feed(_env, "123456", "TID1")
+        assert ok is True
+        assert captured["data"]["tid"] == "TID1"
+        assert captured["data"]["hostuin"] == "123456"
+
+    @pytest.mark.asyncio
+    async def test_delete_feed_parse_frame_callback(self, _env, monkeypatch):
+        """frameElement.callback HTML 壳也兼容。"""
+        class _Resp:
+            text = "<html><script>frameElement.callback({code:0, message:''});</script></html>"
+
+        class _Client:
+            def __init__(self, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def post(self, url, params=None, data=None, headers=None):
+                return _Resp()
+
+        monkeypatch.setattr(mz.httpx, "AsyncClient", _Client)
+        assert await mz.delete_feed(_env, "123456", "TID1") is True
+
+    @pytest.mark.asyncio
+    async def test_tool_delete_latest_when_tid_empty(self, _env, monkeypatch):
+        """tid 留空 -> 删自己最新一条。"""
+        deleted = []
+        monkeypatch.setattr(mz, "get_own_feeds", _async([
+            {"tid": "T1", "content": "最新的说说", "created_time": "今天", "comments": []},
+            {"tid": "T2", "content": "旧说说", "created_time": "昨天", "comments": []},
+        ]))
+
+        async def _delete(cookies, uin, tid):
+            deleted.append(tid)
+            return True
+
+        monkeypatch.setattr(mz, "delete_feed", _delete)
+        out = await mz.delete_feed_tool.ainvoke({"tid": ""})
+        assert deleted == ["T1"]
+        assert "最新的说说" in out
+
+    @pytest.mark.asyncio
+    async def test_tool_delete_by_tid(self, _env, monkeypatch):
+        deleted = []
+        monkeypatch.setattr(mz, "get_own_feeds", _async([
+            {"tid": "T1", "content": "一", "created_time": "", "comments": []},
+            {"tid": "T2", "content": "二", "created_time": "", "comments": []},
+        ]))
+
+        async def _delete(cookies, uin, tid):
+            deleted.append(tid)
+            return True
+
+        monkeypatch.setattr(mz, "delete_feed", _delete)
+        out = await mz.delete_feed_tool.ainvoke({"tid": "T2"})
+        assert deleted == ["T2"]
+        assert "删掉了" in out
+
+    @pytest.mark.asyncio
+    async def test_tool_rejects_unknown_tid(self, _env, monkeypatch):
+        """tid 不在自己最近说说里 -> 拒绝（防删错/删别人的）。"""
+        monkeypatch.setattr(mz, "get_own_feeds", _async([
+            {"tid": "T1", "content": "一", "created_time": "", "comments": []},
+        ]))
+        monkeypatch.setattr(mz, "delete_feed", _async(True))
+        out = await mz.delete_feed_tool.ainvoke({"tid": "T999"})
+        assert "只能删自己" in out
+
+    @pytest.mark.asyncio
+    async def test_tool_no_feeds(self, _env, monkeypatch):
+        monkeypatch.setattr(mz, "get_own_feeds", _async([]))
+        out = await mz.delete_feed_tool.ainvoke({"tid": ""})
+        assert "没有发过说说" in out

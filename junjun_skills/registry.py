@@ -155,7 +155,7 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
     CORE = {"do_not_reply", "get_time", "recall_memory", "save_memory",
             "set_reminder", "list_reminders", "manage_mood", "send_message",
             "web_search", "search_knowledge", "ai_draw", "unified_tts", "ja_tts",
-            "send_feed", "read_feed", "find_user_id"}  # 高频刚需永远保留，不参与掩码（空间=第三场景）
+            "send_feed", "read_feed", "delete_feed", "find_user_id"}  # 高频刚需永远保留，不参与掩码（空间=第三场景）
     core_tools = [t for t in tools if t.name in CORE]
     other_tools = [t for t in tools if t.name not in CORE]
 
@@ -227,6 +227,7 @@ _TOPIC_KEYWORDS = {
     "music": ["音乐", "歌", "点歌"],
     "send_feed": ["说说", "空间", "qzone", "动态"],
     "read_feed": ["说说", "空间", "qzone", "动态"],
+    "delete_feed": ["删说说", "删除说说", "删掉说说", "空间"],
     "answer_book": ["答案之书", "该不该", "要不要", "会不会"],
     "fun_quote": ["毒鸡汤", "鸡汤", "丧"],
     "draw_lot": ["抽签", "灵签", "观音", "文昌", "求签"],
