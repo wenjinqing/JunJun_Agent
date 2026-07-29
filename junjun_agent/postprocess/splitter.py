@@ -7,10 +7,11 @@
 - 颜文字保护（可关）
 - 去除包裹中文的括号内容（舞台说明）
 
-2026-07-22 调整（用户反馈拆太碎 + 符号丢失）：
-- 分隔符**保留**在句子尾部（不再 strip 掉，保留原文标点）
-- 逗号合并概率上调（短 0.8/中 0.5/长 0.25），句子自然变长
-- max_sentence_num 默认 5（原 10，防刷屏）
+2026-07-29 调整（用户反馈）：
+- 切分点落在逗号/句号（，,。.）时，发出的气泡**不带**该标点
+  （连续气泡自带停顿感，句尾逗号/句号显得机器人）；！？；、—— 等保留
+- 省略号 ... 与数字小数点不误伤（只丢句尾单个 .）
+- overflow 整发时保留原文标点（一整段完整的话）
 """
 
 import random
@@ -25,6 +26,7 @@ _KAOMOJI_RE = re.compile(
 _CN_PAREN_RE = re.compile(r"[(\[（](?=[^)\]）]*[一-鿿])[^)\]）]*[)\]）]")
 _SPLIT_RE = re.compile(r"([，,。;；！!？?——\n])")
 _HARD_STOPS = frozenset("。！!？?——\n")
+_STRIP_TAIL_CHARS = "，,。"  # 切分点丢弃的标点（英文 . 单独处理，防误伤 ...）
 
 
 def _protect_kaomoji(text: str):
@@ -53,10 +55,21 @@ def _strip_stage_directions(text: str, protect_kaomoji: bool) -> str:
     return _CN_PAREN_RE.sub("", text)
 
 
-def _split_sentences(text: str, rng) -> List[str]:
+def _strip_tail_punct(s: str, strip_punct: bool) -> str:
+    """丢句尾的逗号/句号（切分点标点）；省略号 ... 与小数点不误伤。"""
+    if not strip_punct:
+        return s
+    while s and s[-1] in _STRIP_TAIL_CHARS:
+        s = s[:-1]
+    if s.endswith(".") and not s.endswith(".."):
+        s = s[:-1]
+    return s
+
+
+def _split_sentences(text: str, rng, strip_punct: bool = True) -> List[str]:
     """按标点切句：句末标点必切，逗号/分号概率性合并（短文本更倾向合并）。
 
-    分隔符保留在句子尾部（不 strip），原文标点完整保留。
+    切分点的逗号/句号不随气泡发出（strip_punct），其余标点保留。
     """
     parts = _SPLIT_RE.split(text)
     merge_p = 0.8 if len(text) < 60 else (0.5 if len(text) < 150 else 0.25)
@@ -71,22 +84,22 @@ def _split_sentences(text: str, rng) -> List[str]:
         if not buf:
             continue
         if sep in _HARD_STOPS or not sep:
-            # 句末标点保留在句尾（不再 strip）
-            sentences.append(buf + (sep if sep else ""))
+            # 硬切：句末标点随句（句号会被 strip，！？保留）
+            sentences.append(_strip_tail_punct(buf + (sep if sep else ""), strip_punct))
             buf = ""
         elif rng.random() > merge_p:
-            # 逗号处切开：分隔符保留（不丢符号）
-            sentences.append(buf + sep)
+            # 逗号处切开：逗号不随气泡发出
+            sentences.append(_strip_tail_punct(buf + sep, strip_punct))
             buf = ""
         else:
-            # 合并：逗号连接，不重复加
+            # 合并：逗号在句中，保留不动
             buf += sep if sep else "，"
     if buf:
-        sentences.append(buf)
+        sentences.append(_strip_tail_punct(buf, strip_punct))
     return [s for s in (x.strip() for x in sentences) if s]
 
 
-def _hard_wrap(sentence: str, max_chars: int) -> List[str]:
+def _hard_wrap(sentence: str, max_chars: int, strip_punct: bool = True) -> List[str]:
     """超长强拆：优先在换行/标点处断，找不到才按字数硬切。"""
     out: List[str] = []
     rest = sentence
@@ -96,10 +109,10 @@ def _hard_wrap(sentence: str, max_chars: int) -> List[str]:
         cut = max((window.rfind(c) for c in break_chars), default=-1)
         if cut < max_chars // 3:  # 断点太靠前等于没断，硬切
             cut = max_chars - 1
-        out.append(rest[:cut + 1].strip())
+        out.append(_strip_tail_punct(rest[:cut + 1].strip(), strip_punct))
         rest = rest[cut + 1:].strip()
     if rest:
-        out.append(rest)
+        out.append(_strip_tail_punct(rest, strip_punct))
     return [p for p in out if p]
 
 
@@ -111,6 +124,7 @@ def split_response(
     max_chars_per_message: int = 120,
     enable_kaomoji_protection: bool = False,
     enable_overflow_return_all: bool = True,
+    strip_split_punct: bool = True,
     rand: Optional[random.Random] = None,
 ) -> List[str]:
     """拆分回复为多条消息。返回非空字符串列表（输入为空时返回空列表）。"""
@@ -124,20 +138,20 @@ def split_response(
     if not enable:
         return [text]
 
-    sentences = _split_sentences(text, rand or random)
+    sentences = _split_sentences(text, rand or random, strip_punct=strip_split_punct)
     if not sentences:
         return []
 
     if len(sentences) > max_sentence_num:
         if enable_overflow_return_all:
-            sentences = [text]  # 一次性整发（原语义：不轰炸群，整段发出）
+            sentences = [text]  # 一次性整发（保留原文标点：一整段完整的话）
         else:
             sentences = sentences[:max_sentence_num]
 
     out: List[str] = []
     for s in sentences:
         if len(s) > max_chars_per_message:
-            out.extend(_hard_wrap(s, max_chars_per_message))
+            out.extend(_hard_wrap(s, max_chars_per_message, strip_punct=strip_split_punct))
         else:
             out.append(s)
     return out

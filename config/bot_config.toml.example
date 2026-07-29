@@ -65,6 +65,7 @@ keyword_rules = [
 # ---------- 回复后处理总开关 ----------
 [response_post_process]
 enable_response_post_process = true  # false 时跳过分条/错别字流水线，原文直发
+clean_markdown = true  # 去掉 LLM 吐出的 markdown 标记（**粗体**、# 标题、`代码`）
 
 # ---------- 回复分条（拟人化：长回复拆多条气泡） ----------
 [response_splitter]
@@ -73,6 +74,7 @@ max_sentence_num = 10          # 最多拆几条气泡
 max_chars_per_message = 120    # 单条气泡字数硬上限
 enable_kaomoji_protection = false  # 颜文字保护：true 时不在颜文字中间断句
 enable_overflow_return_all = true  # 超 max_sentence_num 时：true=一次全发 / false=截断丢弃
+strip_split_punct = true       # 逗号/句号切分点发出的气泡不带该标点（！？；等保留）
 
 # ---------- 中文错别字（拟人化：按概率打错字） ----------
 [chinese_typo]
