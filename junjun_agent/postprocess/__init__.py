@@ -1,6 +1,6 @@
 """回复后处理流水线：agent 原始文本 -> 多条待发消息。
 
-顺序：去 <think> 残留 -> 分割多条 -> 错别字 -> （引用决策在 processor 层）。
+顺序：去 <think> 残留 -> 去 markdown 标记 -> 分割多条 -> 错别字 -> （引用决策在 processor 层）。
 纯函数，配置从 bot_config [response_post_process]/[response_splitter]/[chinese_typo] 读取。
 """
 
@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from junjun_core.config import get_global_config
+from junjun_agent.postprocess.cleaner import clean_markdown
 from junjun_agent.postprocess.splitter import split_response, typing_delay
 from junjun_agent.postprocess.typo import ChineseTypoGenerator
 
@@ -58,6 +59,8 @@ def process_response(text: str, *, rand: Optional[random.Random] = None,
     text = _THINK_BLOCK_RE.sub("", text or "")
     text = _THINK_TAIL_RE.sub("", text)
     text = _NICKNAME_PREFIX_RE.sub("", text.strip())
+    if pp.get("clean_markdown", True):
+        text = clean_markdown(text)
     if not text:
         return []
 
@@ -71,6 +74,7 @@ def process_response(text: str, *, rand: Optional[random.Random] = None,
         max_chars_per_message=int(sp.get("max_chars_per_message", 120)),
         enable_kaomoji_protection=bool(sp.get("enable_kaomoji_protection", False)),
         enable_overflow_return_all=bool(sp.get("enable_overflow_return_all", True)),
+        strip_split_punct=bool(sp.get("strip_split_punct", True)),
         rand=rng,
     )
 
