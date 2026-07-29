@@ -62,6 +62,8 @@ COMMENT_URL = ("https://user.qzone.qq.com/proxy/domain/"
                "taotao.qzone.qq.com/cgi-bin/emotion_cgi_re_feeds")
 ZONE_LIST_URL = ("https://user.qzone.qq.com/proxy/domain/"
                  "ic2.qzone.qq.com/cgi-bin/feeds/feeds3_html_more")
+DELETE_FEED_URL = ("https://user.qzone.qq.com/proxy/domain/"
+                   "taotao.qq.com/cgi-bin/emotion_cgi_delete_v6")
 # 说说配图上传 / 自己的说说列表（带评论）/ 回复评论（h5 域）
 UPLOAD_IMAGE_URL = "https://up.qzone.qq.com/cgi-bin/upload/cgi_upload_image"
 LIST_URL = ("https://user.qzone.qq.com/proxy/domain/"
@@ -552,6 +554,46 @@ async def get_own_feeds(cookies: dict, uin: str, num: int = 3) -> list:
     return feeds
 
 
+async def delete_feed(cookies: dict, uin: str, tid: str) -> bool:
+    """删除自己的一条说说（emotion_cgi_delete_v6）。
+
+    format=fs 时响应是 frameElement.callback(...) HTML 壳；请求 format=json
+    拿标准 JSON，两种壳都兼容解析。
+    """
+    gtk = generate_gtk(cookies["p_skey"])
+    post_data = {
+        "hostuin": uin,
+        "tid": tid,
+        "t1_source": "1",
+        "code_version": "1",
+        "format": "json",
+        "qzreferrer": f"https://user.qzone.qq.com/{uin}",
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            DELETE_FEED_URL,
+            params={"g_tk": gtk},
+            data=post_data,
+            headers={
+                "Cookie": _cookie_header(cookies),
+                "User-Agent": _UA,
+                "referer": f"https://user.qzone.qq.com/{uin}",
+                "origin": "https://user.qzone.qq.com",
+            },
+        )
+    m = re.search(r"frameElement\.callback\((.*?)\)\s*;?", resp.text, re.S)
+    if m:
+        import json5
+        payload = json5.loads(m.group(1).replace("undefined", "null"))
+    else:
+        try:
+            payload = json.loads(_strip_jsonp(resp.text))
+        except ValueError as e:
+            raise _AuthError(f"删除说说返回非 JSON（疑似登录态失效）: {e}")
+    _check_code(payload, "删除说说")
+    return True
+
+
 async def reply_comment(cookies: dict, uin: str, fid: str,
                         target_nickname: str, content: str) -> bool:
     """回复自己说说下的评论（旧插件验证：子评论接口不可用，
@@ -931,6 +973,47 @@ async def read_feed_tool(num: int = 5) -> str:
     return "\n".join(lines)
 
 
+@tool("delete_feed")
+async def delete_feed_tool(tid: str = "") -> str:
+    """删除自己 QQ 空间已经发出去的说说。发错了/内容不妥/用户或管理员要求删说说时用。
+    只能删自己发的说说；不知道 tid 就留空（默认删自己最新一条），
+    或先 read_feed 查看最近说说的 tid。
+
+    Args:
+        tid: 要删的说说 ID（留空删自己最新一条）
+    """
+    if not (_switch("enable") and _switch("send_enable")):
+        return "QQ空间功能没开（config maizone enable/send_enable）。"
+    tid = (tid or "").strip()
+    uin = _bot_uin()
+    try:
+        feeds = await _with_auth_retry(get_own_feeds, uin, 10)
+    except Exception as e:
+        logger.warning(f"工具删说说前查询失败: {type(e).__name__}: {e}")
+        return "查自己的说说失败了，空间接口暂时不给力，稍后再试吧。"
+    if feeds is None:
+        return "空间登录态获取失败，删不了说说（需要管理员重新登录 NapCat）。"
+    if not feeds:
+        return "你还没有发过说说，没什么好删的。"
+    if tid:
+        target = next((f for f in feeds if f["tid"] == tid), None)
+        if target is None:
+            return (f"最近 10 条说说里没有 tid={tid}，只能删自己发的说说。"
+                    "先 read_feed 确认一下 tid 吧。")
+    else:
+        target = feeds[0]
+    try:
+        ok = await _with_auth_retry(delete_feed, uin, target["tid"])
+    except Exception as e:
+        logger.warning(f"工具删说说失败: {type(e).__name__}: {e}")
+        return "删说说失败了，空间接口暂时不给力，稍后再试吧。"
+    if ok is None:
+        return "空间登录态获取失败，删不了说说（需要管理员重新登录 NapCat）。"
+    preview = (target.get("content") or "")[:30]
+    logger.info(f"[tool] 说说已删除 tid={target['tid']}: {preview}")
+    return f"说说删掉了（{target.get('created_time', '')} 发的那条）：{preview}"
+
+
 # ---------------------------------------------------------------- 命令
 
 @register_command("send_feed", aliases=["发说说"], plugin="maizone",
@@ -1227,4 +1310,4 @@ async def maizone_auto_post() -> None:
 scheduler.add(ScheduledTask("maizone_monitor", maizone_monitor, interval=_MONITOR_INTERVAL))
 scheduler.add(ScheduledTask("maizone_auto_post", maizone_auto_post, interval=60))
 
-TOOLS = [send_feed_tool, read_feed_tool]
+TOOLS = [send_feed_tool, read_feed_tool, delete_feed_tool]
