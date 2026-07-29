@@ -7,7 +7,7 @@ allow_qq_list = ["你的QQ号"]
 
 [features]
 # 每用户命令冷却（秒）
-cooldown_seconds = 60
+cooldown_seconds = 5
 # Pixiv AJAX 请求超时（秒）
 api_timeout = 30
 # 抓取系列时最多下载的章节数

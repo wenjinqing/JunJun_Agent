@@ -107,9 +107,9 @@ def _allow_qq_list() -> list:
 
 def _cooldown_seconds() -> float:
     try:
-        return float(_cfg_section("features").get("cooldown_seconds", 60))
+        return float(_cfg_section("features").get("cooldown_seconds", 5))
     except (TypeError, ValueError):
-        return 60.0
+        return 5.0
 
 
 def _api_timeout() -> float:
