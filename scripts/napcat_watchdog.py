@@ -13,15 +13,18 @@
   调 OneBot get_status：data.online == false 即被踢下线
 
 用法：
-    scripts\\napcat_watchdog.bat                    # 双击（最小化常驻）
-    python scripts/napcat_watchdog.py               # 前台跑
-    start /min pythonw scripts/napcat_watchdog.py   # 后台静默跑
+    双击 scripts/napcat_watchdog.py     # 前台窗口（输出全写日志文件）
+    pythonw scripts/napcat_watchdog.py  # 无窗口后台跑
+
+所有输出写入 data/napcat_watchdog.log（控制台不再打印）。
+单实例：已有一个看门狗在跑时，新实例直接退出（PID 文件锁）。
 
 注意：taskkill 会杀掉本机所有 QQ.exe（本机 QQ 专供 bot 使用）。
 """
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -43,10 +46,30 @@ LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout),
-              logging.FileHandler(LOG_FILE, encoding="utf-8")],
+    handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8")],  # 输出全进日志
 )
 log = logging.getLogger("napcat_watchdog")
+
+_PID_FILE = LOG_FILE.parent / "napcat_watchdog.pid"
+
+
+def _pid_alive(pid: int) -> bool:
+    out = subprocess.run(["tasklist", "/fi", f"PID eq {pid}", "/nh"],
+                         capture_output=True, text=True).stdout
+    return str(pid) in out
+
+
+def _ensure_single_instance() -> None:
+    """PID 文件锁：已有看门狗在跑则退出，防多实例重复 taskkill/重启。"""
+    if _PID_FILE.exists():
+        try:
+            old = int(_PID_FILE.read_text().strip())
+        except ValueError:
+            old = 0
+        if old and old != os.getpid() and _pid_alive(old):
+            log.warning(f"已有看门狗在运行 (PID {old})，本实例退出")
+            sys.exit(0)
+    _PID_FILE.write_text(str(os.getpid()))
 
 
 # ---------------------------------------------------------------- 健康检查
@@ -121,6 +144,7 @@ def restart() -> None:
 # ---------------------------------------------------------------- 主循环
 
 def main() -> None:
+    _ensure_single_instance()
     log.info(f"看门狗启动：监控君君（QQ {QQ}），每 {CHECK_INTERVAL}s 检测一次")
     # 一体化：启动时 NapCat 没跑就先拉起
     if not qq_process_alive():
