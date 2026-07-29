@@ -599,3 +599,30 @@ class TestDeleteFeed:
         monkeypatch.setattr(mz, "get_own_feeds", _async([]))
         out = await mz.delete_feed_tool.ainvoke({"tid": ""})
         assert "没有发过说说" in out
+
+
+class TestFrameCallbackParse:
+    @pytest.mark.asyncio
+    async def test_reply_comment_payload_with_inner_parens(self, _env, monkeypatch):
+        """payload 内含英文括号（说说 HTML 数据）时不再截断误报失败。
+
+        复现 2026-07-29 假警告：非贪婪正则截断 -> 'Unexpected end of input'，
+        评论其实已正常发出。
+        """
+        big_html = '<div class="x">(￣▽￣)表情(测试)' + "a(b)c" * 3000 + "</div>"
+        payload = "{code:0, message:'', data:{html:'" + big_html + "'}}"
+        text = f"<html><script>frameElement.callback({payload});</script></html>"
+
+        class _Resp:
+            pass
+        _Resp.text = text
+
+        class _Client:
+            def __init__(self, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def post(self, url, params=None, data=None, headers=None):
+                return _Resp()
+
+        monkeypatch.setattr(mz.httpx, "AsyncClient", _Client)
+        assert await mz.reply_comment(_env, "123456", "FID", "某人", "收到") is True
