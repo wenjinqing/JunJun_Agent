@@ -74,14 +74,19 @@ async def _run() -> int:
         load_plugins()
     except Exception as e:
         logger.error(f"插件加载失败（内置 skill 不受影响）: {e}")
-    try:
-        from junjun_mcp_client.client import mcp_manager
-        n = await mcp_manager.start()
-        if n:
-            mcp_manager.register_all()
-            logger.info(f"MCP 工具已注入 registry: {n} 个")
-    except Exception as e:
-        logger.error(f"MCP 客户端启动失败（降级无 MCP）: {e}")
+    # MCP 客户端：后台并发连接，不阻塞 Agent 启动（2026-07-29 用户反馈启动等待）
+    # 连上后工具自动注册进 registry——注册前创建的会话用内置工具，
+    # 之后新建的会话自动带 MCP 工具（会话 Agent 构建时快照工具列表）。
+    async def _mcp_bootstrap():
+        try:
+            from junjun_mcp_client.client import mcp_manager
+            n = await mcp_manager.start()
+            if n:
+                mcp_manager.register_all()
+                logger.info(f"MCP 工具已注入 registry: {n} 个")
+        except Exception as e:
+            logger.error(f"MCP 客户端启动失败（降级无 MCP）: {e}")
+    asyncio.create_task(_mcp_bootstrap())
 
     # 定时任务：记忆遗忘 + 摘要兜底
     try:
