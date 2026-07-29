@@ -43,6 +43,8 @@ _AJAX_NOVEL = _BASE_URL + "/ajax/novel/{}"
 _AJAX_SERIES = _BASE_URL + "/ajax/novel/series/{}"
 _AJAX_SERIES_CONTENT = _BASE_URL + "/ajax/novel/series_content/{}"
 _AJAX_SEARCH = _BASE_URL + "/ajax/search/novels/{}"
+_AJAX_USER_PROFILE = _BASE_URL + "/ajax/user/{}/profile/all"
+_AJAX_USER_NOVELS = _BASE_URL + "/ajax/user/{}/profile/novels"
 
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
@@ -50,12 +52,16 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 _SERIES_PAGE_LIMIT = 30        # 系列目录单页条数（旧插件同款）
 _SEARCH_CACHE_TTL = 600        # 搜索结果缓存 10 分钟
 _SEARCH_RESULT_MAX = 10        # 搜索展示条数
+_AUTHOR_SERIES_MAX = 10        # 作者页展示系列条数
+_AUTHOR_NOVELS_MAX = 10        # 作者页展示单篇条数
+_AUTHOR_FETCH_IDS = 20         # 作者页抓取的最新单篇 ID 数（过滤系列内章节前的候选）
 _CHAPTER_DELAY = 1.0           # 逐章抓取间隔（秒，礼貌爬取；测试中可调 0）
 
 # URL / ID 识别（旧插件同款正则）
 _SERIES_URL_RE = re.compile(r"pixiv\.net/novel/series/(?P<id>\d+)", re.IGNORECASE)
 _NOVEL_URL_RE = re.compile(r"pixiv\.net/novel/show\.php\?id=(?P<id>\d+)", re.IGNORECASE)
 _NOVEL_SHORT_RE = re.compile(r"pixiv\.net/n/(?P<id>\d+)", re.IGNORECASE)
+_USER_URL_RE = re.compile(r"pixiv\.net/users/(?P<id>\d+)", re.IGNORECASE)
 _ILLEGAL_FILENAME_RE = re.compile(r'[\\/:*?"<>|]')
 
 # 群聊统一拒绝（对齐旧插件：小说文件涉及内容风险，仅私聊可用）
@@ -69,11 +75,13 @@ _HELP = """Pixiv 小说下载用法：
 /novel read <单篇URL或ID> - 抓取单篇小说发 txt
 /novel list <系列URL或ID> - 只列出系列章节目录
 /novel search <关键词> - 搜索小说，返回编号列表
-/novel dl <编号> - 下载搜索结果中对应编号的小说
+/novel author <作者URL或UID> - 列出该作者的系列和单篇
+/novel dl <编号> - 下载搜索/作者列表中对应编号的小说
 示例：
   /novel 14998441
   /novel read 12345678
   /novel search 異世界転生
+  /novel author https://www.pixiv.net/users/16689973
   /novel dl 3"""
 
 # 每用户冷却时间戳（user_id -> ts）
@@ -275,6 +283,71 @@ async def _search_novels(keyword: str, page: int = 1) -> dict:
     return await _fetch_json(url, _BASE_URL + "/tags/")
 
 
+async def _fetch_author_works(uid: str) -> dict:
+    """作者作品总览：系列列表（带标题）+ 最新单篇（过滤掉系列内章节）。
+
+    返回 {"author": 昵称, "series": [...], "novels": [...]}；失败 {"error": ...}。
+    端点：/ajax/user/{uid}/profile/all（novelSeries 带标题，novels 只有 ID 表）
+    -> /ajax/user/{uid}/profile/novels?ids[]=... 批量取标题/seriesId 去重。
+    """
+    uid = str(uid)
+    profile = await _fetch_json(_AJAX_USER_PROFILE.format(uid),
+                                _BASE_URL + f"/users/{uid}")
+    if profile.get("error"):
+        return profile
+
+    series_items = []
+    for s in (profile.get("novelSeries") or [])[:_AUTHOR_SERIES_MAX]:
+        try:
+            r18 = bool(int(s.get("xRestrict") or 0) >= 1)
+        except (TypeError, ValueError):
+            r18 = False
+        series_items.append({
+            "series_id": str(s.get("id") or ""),
+            "title": s.get("title") or "(无标题)",
+            "author": s.get("userName") or "",
+            "chapters": s.get("displaySeriesContentCount") or s.get("total") or 0,
+            "r18": r18,
+        })
+
+    novels_map = profile.get("novels") or {}
+    ids = list(novels_map.keys()) if isinstance(novels_map, dict) else list(novels_map)
+    ids = sorted((str(i) for i in ids if str(i).isdigit()), key=int, reverse=True)
+    ids = ids[:_AUTHOR_FETCH_IDS]
+
+    novel_items = []
+    author = series_items[0]["author"] if series_items else ""
+    if ids:
+        query = "&".join(f"ids[]={i}" for i in ids)
+        works_resp = await _fetch_json(_AJAX_USER_NOVELS.format(uid) + "?" + query,
+                                       _BASE_URL + f"/users/{uid}/novels")
+        if works_resp.get("error"):
+            return works_resp
+        works = works_resp.get("works") or {}
+        for nid in ids:  # 保持最新在前
+            w = works.get(nid)
+            if not w:
+                continue
+            if w.get("seriesId"):  # 系列内章节不单列（系列已在上）
+                continue
+            if not author:
+                author = w.get("userName") or ""
+            try:
+                r18 = bool(int(w.get("xRestrict") or 0) >= 1)
+            except (TypeError, ValueError):
+                r18 = False
+            novel_items.append({
+                "id": nid,
+                "title": w.get("title") or "(无标题)",
+                "author": w.get("userName") or author,
+                "r18": r18,
+            })
+            if len(novel_items) >= _AUTHOR_NOVELS_MAX:
+                break
+
+    return {"author": author, "series": series_items, "novels": novel_items}
+
+
 # ------------------------------------------------------------------ 工具函数
 
 def _extract_id(target: str) -> tuple:
@@ -293,6 +366,15 @@ def _extract_id(target: str) -> tuple:
     if digits:
         return "series", digits
     return "", ""
+
+
+def _extract_user_id(target: str) -> str:
+    """从作者 URL（pixiv.net/users/<uid>）或纯数字提取 UID；提取不到返回 ''。"""
+    target = (target or "").strip()
+    m = _USER_URL_RE.search(target)
+    if m:
+        return m.group("id")
+    return re.sub(r"\D", "", target)
 
 
 def _safe_filename(title: str, nid: str) -> str:
@@ -402,6 +484,38 @@ async def _do_search(keyword: str, user_id: str) -> str:
     return "\n".join(lines)
 
 
+async def _do_author(target: str, user_id: str) -> str:
+    """列出作者的系列 + 最新单篇，缓存后复用 /novel dl 下载。"""
+    uid = _extract_user_id(target)
+    if not uid:
+        return "没识别到作者 UID，用法：/novel author <作者URL或UID>"
+    works = await _fetch_author_works(uid)
+    if works.get("error"):
+        return f"获取作者作品失败：{works['error']}，稍后再试试吧。"
+    if not works["series"] and not works["novels"]:
+        return f"这位作者（uid:{uid}）还没有公开的小说作品（或主页不可见）。"
+
+    items = []
+    for s in works["series"]:
+        items.append({"id": "", "series_id": s["series_id"], "series_title": s["title"],
+                      "title": s["title"], "display_title": s["title"],
+                      "chapter_title": None, "author": s["author"], "r18": s["r18"]})
+    for n in works["novels"]:
+        items.append({"id": n["id"], "series_id": None, "series_title": None,
+                      "title": n["title"], "display_title": n["title"],
+                      "chapter_title": None, "author": n["author"], "r18": n["r18"]})
+    _search_cache[user_id] = {"ts": time.time(), "items": items}
+
+    name = works["author"] or f"uid:{uid}"
+    lines = [f"作者「{name}」的作品（系列 {len(works['series'])} / 单篇 {len(works['novels'])}）："]
+    for i, it in enumerate(items, 1):
+        mark = " [R18]" if it["r18"] else ""
+        kind = "系列" if it["series_id"] else "单篇"
+        lines.append(f"{i}. {it['display_title']}{mark} [{kind}]")
+    lines.append("输入 /novel dl <编号> 下载对应小说（系列下载整部）")
+    return "\n".join(lines)
+
+
 async def _do_download_by_number(ctx, number_text: str) -> str:
     """按搜索缓存编号下载。"""
     user_id = str(ctx.meta.user_id or "")
@@ -502,7 +616,7 @@ async def _do_list(series_id: str) -> str:
 # ------------------------------------------------------------------ 命令入口
 
 @register_command("novel", plugin="pixiv_novel",
-                  description="Pixiv 小说下载：/novel <系列ID> | read <单篇ID> | list <系列ID> | search <关键词> | dl <编号>")
+                  description="Pixiv 小说下载：/novel <系列ID> | read <单篇ID> | list <系列ID> | search <关键词> | author <作者URL或UID> | dl <编号>")
 async def novel_cmd(ctx):
     """/novel 命令总入口：群聊拒绝 -> 白名单 -> 帮助 -> Cookie -> 冷却 -> 子命令。"""
     # 群聊统一拒绝（对齐旧插件：小说文件涉及内容风险）
@@ -536,6 +650,8 @@ async def novel_cmd(ctx):
         sub, target = "list", " ".join(tokens[1:]).strip()
     elif first in ("search", "搜索", "搜", "find"):
         sub, target = "search", " ".join(tokens[1:]).strip()
+    elif first in ("author", "作者"):
+        sub, target = "author", " ".join(tokens[1:]).strip()
     elif first in ("dl", "download", "下载", "下"):
         sub, target = "dl", " ".join(tokens[1:]).strip()
 
@@ -545,6 +661,10 @@ async def novel_cmd(ctx):
         if not target:
             return "请输入搜索关键词，用法：/novel search <关键词>"
         return await _do_search(target, user_id)
+    if sub == "author":
+        if not target:
+            return "请输入作者 URL 或 UID，用法：/novel author <作者URL或UID>"
+        return await _do_author(target, user_id)
     if sub == "dl":
         return await _do_download_by_number(ctx, target)
 
