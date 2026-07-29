@@ -114,7 +114,8 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     # 权限激活位：管理员本人 +（@bot 或私聊）才激活；
     # 管理员平时=普通群友（走正常漏斗，不直通、不特殊）
     from junjun_core.security import set_caller
-    set_caller(meta.user_id, at_bot=meta.at_bot, is_group=session.is_group)
+    set_caller(meta.user_id, at_bot=meta.at_bot, is_group=session.is_group,
+               nickname=meta.nickname)
 
     # ---- 好感度累计（0 token，异步入库；@/直呼加权）----
     if not meta.is_self and meta.user_id:

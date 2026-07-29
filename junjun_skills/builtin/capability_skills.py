@@ -1,8 +1,55 @@
-"""能力查询 skill：get_capabilities（对齐原 capabilities 插件语义）。"""
+"""能力查询 skill：get_capabilities（对齐原 capabilities 插件语义）。
+用户身份解析 skill：find_user_id（昵称 -> QQ 号，关系/画像类工具的前置）。"""
 
 from langchain_core.tools import tool
 
 from junjun_skills.builtin.memory_skills import current_chat_id
+
+
+@tool
+def find_user_id(nickname: str) -> str:
+    """按昵称查一个人的 QQ 号。要惩罚/查画像/记称呼的对象只知道昵称时，先调这个拿到 QQ 号。
+    当前会话的发言人优先，其次全库历史消息；支持模糊匹配，多人同名会列出候选。
+
+    Args:
+        nickname: 对方在群里的昵称（或名片），如「白菜兔」
+    """
+    from junjun_core.database import Messages
+    nick = (nickname or "").strip()
+    if not nick:
+        return "昵称是空的，查不了。"
+    if nick.isdigit():
+        return f"{nick} 本身就是 QQ 号，直接用。"
+    try:
+        rows = list(Messages.select()
+                    .where((Messages.user_nickname.contains(nick))
+                           & (Messages.is_bot == False)  # noqa: E712
+                           & (Messages.user_id != ""))
+                    .order_by(Messages.time.desc()).limit(50))
+    except Exception as e:
+        return f"查询失败（{type(e).__name__}），稍后再试。"
+    if not rows:
+        return (f"没找到昵称含「{nick}」的人（ta 最近可能没说过话）。"
+                f"可以让对方说句话，或直接问管理员要 QQ 号。")
+    chat_id = current_chat_id.get()
+    # 去重保序：精确匹配优先，当前会话优先，时间近优先
+    seen, candidates = set(), []
+    for r in sorted(rows, key=lambda r: (r.user_nickname != nick,
+                                         bool(chat_id) and r.chat_id != chat_id)):
+        if r.user_id in seen:
+            continue
+        seen.add(r.user_id)
+        candidates.append(r)
+        if len(candidates) >= 3:
+            break
+    if len(candidates) == 1:
+        r = candidates[0]
+        where = "当前会话" if r.chat_id == chat_id else "历史消息"
+        return f"「{r.user_nickname}」的 QQ 号是 {r.user_id}（{where}）。"
+    lines = [f"昵称含「{nick}」的有 {len(candidates)} 个人，确认是哪一个："]
+    for r in candidates:
+        lines.append(f"- {r.user_nickname}：QQ {r.user_id}")
+    return "\n".join(lines)
 
 
 @tool
