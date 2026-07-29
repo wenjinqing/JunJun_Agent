@@ -243,6 +243,29 @@ def _html_to_text(html: str) -> str:
     return re.sub(r"\s+", " ", txt).strip()
 
 
+def _parse_frame_callback(text: str, action: str) -> dict:
+    """解析 frameElement.callback({...}) 响应。
+
+    re_feeds/delete_v6 的 payload 可长达上万字符且内含大量英文括号
+    （说说 HTML 数据），非贪婪正则 (.*?) 会在第一个 ) 处截断导致
+    "Unexpected end of input"（评论其实已发出，纯解析假报警——2026-07-29）。
+    从 callback( 起取到全文最后一个 ) 为止。
+    """
+    import json5
+    marker = "frameElement.callback("
+    start = text.find(marker)
+    if start == -1:
+        raise RuntimeError(f"{action}失败: 无法解析响应 {text[:100]}")
+    inner = text[start + len(marker):]
+    end = inner.rfind(")")
+    if end <= 0:
+        raise RuntimeError(f"{action}失败: 响应不完整 {text[:100]}")
+    try:
+        return json5.loads(inner[:end].replace("undefined", "null"))
+    except ValueError as e:
+        raise RuntimeError(f"{action}失败: 响应解析异常 {e}")
+
+
 # ---------------------------------------------------------------- Qzone API
 # 全部隔离为独立 async helper；签名统一 (cookies, uin, ...)，供 _with_auth_retry 注入
 
@@ -581,10 +604,9 @@ async def delete_feed(cookies: dict, uin: str, tid: str) -> bool:
                 "origin": "https://user.qzone.qq.com",
             },
         )
-    m = re.search(r"frameElement\.callback\((.*?)\)\s*;?", resp.text, re.S)
+    m = re.search(r"frameElement\.callback\(", resp.text)
     if m:
-        import json5
-        payload = json5.loads(m.group(1).replace("undefined", "null"))
+        payload = _parse_frame_callback(resp.text, "删除说说")
     else:
         try:
             payload = json.loads(_strip_jsonp(resp.text))
@@ -625,14 +647,7 @@ async def reply_comment(cookies: dict, uin: str, fid: str,
                 "origin": "https://user.qzone.qq.com",
             },
         )
-    m = re.search(r"frameElement\.callback\((.*?)\)\s*;?\s*(?:</script>)?", resp.text, re.S)
-    if not m:
-        raise RuntimeError(f"回复评论失败: 无法解析响应 {resp.text[:100]}")
-    import json5
-    try:
-        payload = json5.loads(m.group(1).replace("undefined", "null"))
-    except ValueError as e:
-        raise RuntimeError(f"回复评论失败: 响应截断或格式异常 {e}")
+    payload = _parse_frame_callback(resp.text, "回复评论")
     _check_code(payload, "回复评论")
     return True
 
