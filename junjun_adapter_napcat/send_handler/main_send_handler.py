@@ -34,19 +34,25 @@ class SendHandler:
             else:
                 logger.warning(f"合并转发发送失败: {f_resp}")
 
-        # poke 不是消息段，走独立 OneBot action（send_group_poke/send_private_poke）
+        # poke 不是消息段，走独立 OneBot action
+        # 新 NapCat 只有统一 send_poke（{user_id, group_id?}），
+        # 旧版是 send_group_poke/send_private_poke——先新后旧兜底
         seg, pokes = self._extract_pokes(seg)
         for target in pokes:
             if group_info:
-                p_action, p_params = "send_group_poke", {
-                    "group_id": int(group_info.group_id), "user_id": int(target)}
+                actions = [("send_poke", {"user_id": int(target),
+                                          "group_id": int(group_info.group_id)}),
+                           ("send_group_poke", {"group_id": int(group_info.group_id),
+                                                "user_id": int(target)})]
             else:
-                p_action, p_params = "send_private_poke", {"user_id": int(target)}
-            p_resp = await nc_message_sender.send_message_to_napcat(p_action, p_params)
-            if p_resp.get("status") == "ok":
-                logger.info(f"戳一戳已发 [{p_action} target={target}]")
-            else:
-                logger.warning(f"戳一戳发送失败: {p_resp}")
+                actions = [("send_poke", {"user_id": int(target)}),
+                           ("send_private_poke", {"user_id": int(target)})]
+            for p_action, p_params in actions:
+                p_resp = await nc_message_sender.send_message_to_napcat(p_action, p_params)
+                if p_resp.get("status") == "ok":
+                    logger.info(f"戳一戳已发 [{p_action} target={target}]")
+                    break
+                logger.warning(f"戳一戳 [{p_action}] 失败: {p_resp}")
 
         processed = await self._process_seg(seg)
         if not processed:

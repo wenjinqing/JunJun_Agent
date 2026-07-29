@@ -170,22 +170,42 @@ def _headers(referer: str = "") -> dict:
 
 
 async def _fetch_json(url: str, referer: str = "") -> dict:
-    """请求 Pixiv AJAX JSON。成功返回 body 字典；任何失败返回 {"error": ...}，绝不抛异常。"""
-    proxy = _proxy()
-    try:
-        async with httpx.AsyncClient(timeout=_api_timeout(),
-                                     proxy=proxy or None) as client:
-            resp = await client.get(url, headers=_headers(referer))
-            if resp.status_code != 200:
-                logger.warning(f"Pixiv 请求失败 HTTP {resp.status_code}: {url}")
-                return {"error": f"HTTP {resp.status_code}"}
-            data = resp.json()
-    except Exception as e:
-        logger.warning(f"Pixiv 请求异常: {type(e).__name__}: {e} ({url})")
-        return {"error": f"网络请求失败（{type(e).__name__}）"}
-    if data.get("error"):
-        return {"error": str(data.get("message") or "Pixiv 返回错误")}
-    return data.get("body", {}) or {}
+    """请求 Pixiv AJAX JSON。成功返回 body 字典；任何失败返回 {"error": ...}，绝不抛异常。
+
+    2026-07-29 反爬修复：Pixiv 上了 Cloudflare TLS 指纹检测，httpx 裸请求
+    一律 403（"Just a moment..." 挑战页，带不带 cookie 都一样）。
+    改 curl_cffi Chrome 指纹伪装（实测 200）；未安装 curl_cffi 回退 httpx。
+    403/429/5xx 重试 3 次（Cloudflare 抖动常见）。
+    """
+    proxy = _proxy() or None
+    timeout = _api_timeout()
+    last_status = 0
+    for attempt in (1, 2, 3):
+        try:
+            try:
+                from curl_cffi.requests import AsyncSession
+                async with AsyncSession(impersonate="chrome", proxy=proxy) as s:
+                    resp = await s.get(url, headers=_headers(referer), timeout=timeout)
+            except ImportError:
+                async with httpx.AsyncClient(timeout=timeout, proxy=proxy) as client:
+                    resp = await client.get(url, headers=_headers(referer))
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("error"):
+                    return {"error": str(data.get("message") or "Pixiv 返回错误")}
+                return data.get("body", {}) or {}
+            last_status = resp.status_code
+            if resp.status_code not in (403, 429, 500, 502, 503):
+                break  # 4xx 确定性错误不重试
+        except Exception as e:
+            logger.warning(f"Pixiv 请求异常（第 {attempt} 次）: {type(e).__name__}: {e}")
+            last_status = 0
+        if attempt < 3:
+            import asyncio
+            await asyncio.sleep(1.0 * attempt)
+    tip = "（Cloudflare 反爬挑战页，检查代理或稍后再试）" if last_status == 403 else ""
+    logger.warning(f"Pixiv 请求失败 HTTP {last_status}{tip}: {url}")
+    return {"error": f"HTTP {last_status}" if last_status else "网络请求失败"}
 
 
 async def _fetch_novel_full(novel_id: str) -> dict:
