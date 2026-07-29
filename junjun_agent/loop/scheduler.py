@@ -60,8 +60,16 @@ class Scheduler:
 
     def start(self) -> None:
         if self._runner is None or self._runner.done():
+            # 启动错峰：interval 任务首轮按 20s 间隔错开（_last_run=0 会让
+            # 全部任务在启动瞬间同时到期，LLM 调用洪峰直接打满端点限流——
+            # 2026-07-29 启动卡死排查：/chat/completions 被十几个首轮任务打爆）
+            now = time.time()
+            interval_tasks = [t for t in self._tasks.values() if t.interval is not None]
+            for i, t in enumerate(interval_tasks):
+                stagger = min(i * 20.0, t.interval * 0.5)
+                t._last_run = now - t.interval + stagger
             self._runner = asyncio.create_task(self._loop(), name="scheduler")
-            logger.info(f"调度器已启动（{len(self._tasks)} 个任务）")
+            logger.info(f"调度器已启动（{len(self._tasks)} 个任务，首轮错峰 20s/个）")
 
     async def stop(self) -> None:
         if self._runner is not None:
