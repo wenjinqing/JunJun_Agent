@@ -82,10 +82,10 @@ class MCPManager:
             return 0
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        # 逐 server 隔离连接：一个坏不拉全部；冷启动慢，失败重试一次
+        # 逐 server 隔离连接：一个坏不拉全部；冷启动慢，失败重试 3 次
         ok_configs = {}
         for name, cfg in configs.items():
-            for attempt in (1, 2):
+            for attempt in (1, 2, 3):
                 try:
                     probe = MultiServerMCPClient({name: cfg})
                     tools = await asyncio.wait_for(probe.get_tools(), timeout=_CONNECT_TIMEOUT)
@@ -93,10 +93,10 @@ class MCPManager:
                     logger.info(f"MCP server [{name}] 连接成功: {len(tools)} 个工具")
                     break
                 except Exception as e:
-                    if attempt == 2:
-                        logger.warning(f"MCP server [{name}] 连接失败（降级跳过）: {type(e).__name__}: {e}")
+                    if attempt == 3:
+                        logger.warning(f"MCP server [{name}] 重试 3 次均失败（降级跳过）: {type(e).__name__}: {e}")
                     else:
-                        logger.info(f"MCP server [{name}] 首次连接失败，重试: {type(e).__name__}")
+                        logger.info(f"MCP server [{name}] 第 {attempt} 次连接失败，重试: {type(e).__name__}")
 
         if not ok_configs:
             return 0
@@ -140,14 +140,21 @@ class MCPManager:
         original_coro = tool.coroutine
         if original_coro is not None:
             async def guarded(*args, _orig=original_coro, **kwargs):
+                from junjun_core.retry import retry_async
+
+                async def _call():
+                    return await asyncio.wait_for(_orig(*args, **kwargs), timeout=_TOOL_TIMEOUT)
+
                 try:
-                    result = await asyncio.wait_for(_orig(*args, **kwargs), timeout=_TOOL_TIMEOUT)
+                    # 瞬态失败（网络抖动/限流/ECONNRESET）重试 3 次再降级
+                    result = await retry_async(_call, attempts=3, base_delay=1.0,
+                                               label=tool.name)
                 except asyncio.TimeoutError:
                     return "工具调用超时（30s），请换个方式或稍后再试。", None
                 except Exception as e:
-                    # 任何 MCP 失败（网络/协议/server 崩溃）降级为工具结果文本，
+                    # 重试 3 次仍失败：降级为工具结果文本，
                     # 绝不外抛——ToolException 会炸掉整个 agent 轮次导致沉默
-                    logger.warning(f"MCP 工具 {tool.name} 调用失败（降级为错误文本）: "
+                    logger.warning(f"MCP 工具 {tool.name} 重试 3 次均失败（降级为错误文本）: "
                                    f"{type(e).__name__}: {e}")
                     return (f"这个工具调用失败了（{type(e).__name__}: {str(e)[:150]}），"
                             f"换其他方式回答，或直接告诉用户暂时查不了。"), None

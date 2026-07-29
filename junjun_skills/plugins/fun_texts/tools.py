@@ -40,8 +40,10 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # ---------------------------------------------------------------- HTTP helpers
 
 async def _get_json(path: str, params: dict | None = None) -> dict | None:
-    """GET xxapi 返回 JSON dict；失败 None。"""
-    try:
+    """GET xxapi 返回 JSON dict；瞬态失败重试 3 次，最终失败 None。"""
+    from junjun_core.retry import retry_async
+
+    async def _once():
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get(f"{_API}/{path}", params=params,
                                     headers={"User-Agent": _UA})
@@ -49,24 +51,33 @@ async def _get_json(path: str, params: dict | None = None) -> dict | None:
             logger.warning(f"xxapi {path} HTTP {resp.status_code}")
             return None
         return resp.json()
+
+    try:
+        return await retry_async(_once, attempts=3, base_delay=0.8, label=f"xxapi.{path}")
     except Exception as e:
-        logger.warning(f"xxapi {path} 请求失败: {type(e).__name__}: {e}")
+        logger.warning(f"xxapi {path} 重试 3 次均失败: {type(e).__name__}: {e}")
         return None
 
 
 async def _get_redirect_url(path: str, params: dict | None = None) -> str | None:
-    """GET return=302 类接口：取 302 Location（图片直链）；失败 None。"""
-    try:
+    """GET return=302 类接口：取 302 Location（图片直链）；瞬态失败重试 3 次，最终失败 None。"""
+    from junjun_core.retry import retry_async
+
+    async def _once():
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
             resp = await client.get(f"{_API}/{path}", params=params,
                                     headers={"User-Agent": _UA})
         if resp.status_code in (301, 302, 303, 307, 308):
             url = resp.headers.get("Location", "").strip()
-            return url or None
-        logger.warning(f"xxapi {path} 预期 302 实际 {resp.status_code}")
+            if url:
+                return url
+        raise RuntimeError(f"预期 302 实际 {resp.status_code}")
+
+    try:
+        return await retry_async(_once, attempts=3, base_delay=0.8, label=f"xxapi.{path}")
     except Exception as e:
-        logger.warning(f"xxapi {path} 请求失败: {type(e).__name__}: {e}")
-    return None
+        logger.warning(f"xxapi {path} 重试 3 次均失败: {type(e).__name__}: {e}")
+        return None
 
 
 def _extract_text(payload) -> str:
