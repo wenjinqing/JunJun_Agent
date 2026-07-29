@@ -67,7 +67,7 @@ def load_server_configs() -> Dict[str, dict]:
 
 class MCPManager:
     def __init__(self):
-        self._client = None
+        self._clients: Dict[str, object] = {}   # server 名 -> client（保活，工具调用经它建会话）
         self._tools: List = []
 
     @property
@@ -75,46 +75,37 @@ class MCPManager:
         return self._tools
 
     async def start(self) -> int:
-        """连接全部 server 并拉工具。返回可用工具数；全失败返回 0 不抛。"""
+        """并发连接全部 server 并拉工具。返回可用工具数；全失败返回 0 不抛。
+
+        2026-07-29：串行 -> 并发（9 个 server 启动时间从求和变取最大值）。
+        """
         configs = load_server_configs()
         if not configs:
             logger.info("无 MCP server 配置，跳过")
             return 0
-        from langchain_mcp_adapters.client import MultiServerMCPClient
-
-        # 逐 server 隔离连接：一个坏不拉全部；冷启动慢，失败重试 3 次
-        ok_configs = {}
-        for name, cfg in configs.items():
-            for attempt in (1, 2, 3):
-                try:
-                    probe = MultiServerMCPClient({name: cfg})
-                    tools = await asyncio.wait_for(probe.get_tools(), timeout=_CONNECT_TIMEOUT)
-                    ok_configs[name] = cfg
-                    logger.info(f"MCP server [{name}] 连接成功: {len(tools)} 个工具")
-                    break
-                except Exception as e:
-                    if attempt == 3:
-                        logger.warning(f"MCP server [{name}] 重试 3 次均失败（降级跳过）: {type(e).__name__}: {e}")
-                    else:
-                        logger.info(f"MCP server [{name}] 第 {attempt} 次连接失败，重试: {type(e).__name__}")
-
-        if not ok_configs:
-            return 0
-        self._client = MultiServerMCPClient(ok_configs)
-        # get_tools 可能因某个 server 的 stdio 污染/bug 抛异常——
-        # 逐 server 拉取，一个失败不影响其他（对齐 start 的降级语义）
-        raw_tools = []
-        for name in ok_configs:
-            try:
-                single = MultiServerMCPClient({name: ok_configs[name]})
-                tools = await asyncio.wait_for(single.get_tools(), timeout=_CONNECT_TIMEOUT)
-                raw_tools.extend(tools)
-            except Exception as e:
-                logger.warning(f"MCP server [{name}] 拉取工具失败（跳过）: {type(e).__name__}: {e}")
-
+        results = await asyncio.gather(
+            *[self._connect_one(name, cfg) for name, cfg in configs.items()])
+        raw_tools = [t for tools in results for t in tools]
         # 命名空间前缀 + 结果截断包装
         self._tools = [self._wrap(t) for t in raw_tools]
         return len(self._tools)
+
+    async def _connect_one(self, name: str, cfg: dict) -> List:
+        """单 server：连接（重试 3 次）+ 拉工具。失败返回空列表不影响其他。"""
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+        for attempt in (1, 2, 3):
+            try:
+                client = MultiServerMCPClient({name: cfg})
+                tools = await asyncio.wait_for(client.get_tools(), timeout=_CONNECT_TIMEOUT)
+                self._clients[name] = client  # 保活：工具每次调用经 client 建会话
+                logger.info(f"MCP server [{name}] 连接成功: {len(tools)} 个工具")
+                return tools
+            except Exception as e:
+                if attempt == 3:
+                    logger.warning(f"MCP server [{name}] 重试 3 次均失败（降级跳过）: {type(e).__name__}: {e}")
+                else:
+                    logger.info(f"MCP server [{name}] 第 {attempt} 次连接失败，重试: {type(e).__name__}")
+        return []
 
     def register_all(self) -> None:
         """注入 skill registry（重名由 registry 报错）。_ADMIN_TOOLS 包权限门。"""
