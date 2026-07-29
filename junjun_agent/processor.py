@@ -203,6 +203,16 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         if expression_learner.note(session.chat_id, meta.nickname, meta.text):
             await expression_learner.learn(session.chat_id)
 
+    # ---- 图片预热识图（不管是否 @bot）：发图 -> 再 @君君看 的场景，
+    # 等 Agent 被叫到时 VLM 描述已就绪/在途，不再「看不到图」----
+    if not meta.is_self and (meta.image_urls or getattr(meta, "sticker_urls", None)):
+        try:
+            from junjun_memory.vision import prewarm_images
+            prewarm_images(session.chat_id, meta.image_urls,
+                           getattr(meta, "sticker_urls", None))
+        except Exception:
+            pass
+
     # ---- 决策门（0 token）：私聊直通，群聊仅 @/直呼进思考 ----
     if meta.is_self:
         logger.debug(f"[{session.chat_id}] 自消息，沉默")
@@ -387,6 +397,21 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
                 parts.append(block)
         except Exception:
             pass
+    # 近期图片补充：图是前几条消息发的（当时没 @bot），被 @ 时把最近 10 分钟
+    # 群里的图片描述也注入（预热任务已就续则秒回；在途则 await 同一任务）
+    try:
+        from junjun_memory.vision import describe_images, recent_image_urls
+        current = set(meta.image_urls or []) | set(getattr(meta, "sticker_urls", None) or [])
+        older = [(k, u) for k, u in recent_image_urls(session.chat_id) if u not in current]
+        if older:
+            img_urls = [u for k, u in older if k == "image"]
+            if img_urls:
+                descs = await describe_images(img_urls)
+                lines = [f"- {d}" for d in descs.values() if d and d != "[图片]"]
+                if lines:
+                    parts.append("群里最近发的图片：\n" + "\n".join(lines))
+    except Exception:
+        pass
     # 链接内容感知：消息含网页链接时抓正文摘要注入（4s 超时，失败静默）
     try:
         from junjun_memory.link_preview import fetch_link_preview

@@ -3,13 +3,21 @@
 对齐原 utils_image.py 语义：
 - 图片下载 -> md5 查 Images 表，命中直接用缓存描述（省 VLM 调用）
 - 未命中调 task.vlm 槽模型描述，结果入库
-- 15s 超时 + 失败降级 "[图片]"，不阻塞回复
+- 下载 20s / 描述 30s 超时 + 失败降级 "[图片]"，不阻塞回复
 - task.vlm 未配置（VLM_* env 缺）时全链路静默降级
+
+2026-07-29 竞态修复（用户反馈「图还没识别 Agent 就回复了」）：
+- prewarm_images：消息入站（不管是否 @bot）即后台启动识图，
+  回复路径命中缓存/共享在途任务——「发图 → 再 @君君看」场景不再看不到图
+- describe_image_shared：同一 url 的 in-flight 任务全局共享，不重复调 VLM
+- 多张图并行识图（原串行）；VLM 调用并发限流（semaphore 3）
 """
 
+import asyncio
 import base64
 import hashlib
 import time
+from collections import deque
 from typing import Dict, List, Optional
 
 from junjun_core.observability import get_logger
@@ -18,7 +26,18 @@ logger = get_logger("memory.vision")
 
 _DESCRIBE_PROMPT = "用一句中文口语描述这张图片的内容（20字以内，像跟朋友转述一样）。"
 _STICKER_PROMPT = "这是一张 QQ 聊天表情包。用一句中文口语描述画面和它表达的情绪（20字以内，如「猫咪竖大拇指表示赞同」）。"
-_TIMEOUT = 15.0
+_DOWNLOAD_TIMEOUT = 20.0
+_DESCRIBE_TIMEOUT = 30.0
+
+# 同一 url 的 in-flight 识图任务（预热与回复路径共享，防重复 VLM 调用）
+_PENDING: Dict[str, asyncio.Task] = {}
+# VLM 并发限流（群图密集时防打爆槽位）
+_VLM_SEM: Optional[asyncio.Semaphore] = None
+
+# 每会话最近收到的图片（chat_id -> deque[(ts, kind, url)]）：回复时补充描述
+_RECENT: Dict[str, deque] = {}
+_RECENT_TTL = 600.0     # 最近 10 分钟内的图才算「刚发的」
+_RECENT_MAX = 5         # 注入上限（防上下文膨胀）
 
 
 def _get_vlm():
@@ -32,7 +51,7 @@ def _get_vlm():
 async def _download(url: str) -> Optional[bytes]:
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             return resp.content
@@ -41,18 +60,25 @@ async def _download(url: str) -> Optional[bytes]:
         return None
 
 
+def _vlm_sem() -> asyncio.Semaphore:
+    global _VLM_SEM
+    if _VLM_SEM is None:
+        _VLM_SEM = asyncio.Semaphore(3)
+    return _VLM_SEM
+
+
 async def _describe(data: bytes, *, model, prompt: str = _DESCRIBE_PROMPT) -> Optional[str]:
-    import asyncio
     from langchain_core.messages import HumanMessage
     b64 = base64.b64encode(data).decode()
     try:
-        resp = await asyncio.wait_for(
-            model.ainvoke([HumanMessage(content=[
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-            ])]),
-            timeout=_TIMEOUT,
-        )
+        async with _vlm_sem():
+            resp = await asyncio.wait_for(
+                model.ainvoke([HumanMessage(content=[
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ])]),
+                timeout=_DESCRIBE_TIMEOUT,
+            )
         return str(resp.content).strip() or None
     except Exception as e:
         logger.warning(f"VLM 识图失败（降级占位）: {e}")
@@ -80,25 +106,72 @@ async def _describe_one(url: str, *, model, prompt: str, placeholder: str) -> st
     return desc or placeholder
 
 
+def describe_image_shared(url: str, *, model, prompt: str, placeholder: str) -> asyncio.Task:
+    """同一 url 的 in-flight 识图任务全局共享：预热和回复路径只算一次。"""
+    task = _PENDING.get(url)
+    if task is None or task.done():
+        task = asyncio.create_task(
+            _describe_one(url, model=model, prompt=prompt, placeholder=placeholder))
+        _PENDING[url] = task
+        task.add_done_callback(lambda _t, u=url: _PENDING.pop(u, None))
+    return task
+
+
+def prewarm_images(chat_id: str, image_urls: List[str], sticker_urls: List[str]) -> None:
+    """消息入站即后台识图（不管是否 @bot）：「发图 -> 再 @君君看」场景
+    等 Agent 被叫到时描述已就绪（或至少已在途，回复路径 await 同一任务）。"""
+    urls = [(u, "image") for u in (image_urls or [])] + \
+           [(u, "sticker") for u in (sticker_urls or [])]
+    if not urls:
+        return
+    try:
+        model = _get_vlm()
+        dq = _RECENT.setdefault(chat_id, deque(maxlen=_RECENT_MAX * 4))
+        now = time.time()
+        for url, kind in urls:
+            dq.append((now, kind, url))
+            try:
+                describe_image_shared(
+                    url, model=model,
+                    prompt=_STICKER_PROMPT if kind == "sticker" else _DESCRIBE_PROMPT,
+                    placeholder="[表情]" if kind == "sticker" else "[图片]")
+            except Exception as e:  # 无事件循环等场景：记录已入队，单张失败不影响其他
+                logger.debug(f"图片预热任务创建失败（忽略）: {e}")
+    except Exception as e:
+        logger.debug(f"图片预热失败（忽略）: {e}")
+
+
+def recent_image_urls(chat_id: str, ttl: float = _RECENT_TTL) -> List[tuple]:
+    """该会话最近 ttl 秒内收到过的图片 [(kind, url)]，新在前，上限 _RECENT_MAX。"""
+    now = time.time()
+    out = [(kind, u) for ts, kind, u in _RECENT.get(chat_id, ()) if now - ts <= ttl]
+    out.reverse()
+    return out[:_RECENT_MAX]
+
+
 async def describe_images(image_urls: List[str], *, model=None) -> Dict[str, str]:
-    """批量识图：url -> 描述。失败/未配置时该 url 映射为 "[图片]" 占位。"""
+    """批量识图（并行 + 在途共享）：url -> 描述。失败/未配置映射为 "[图片]" 占位。"""
     if not image_urls:
         return {}
     if model is None:
         model = _get_vlm()
-    return {url: await _describe_one(url, model=model, prompt=_DESCRIBE_PROMPT,
-                                     placeholder="[图片]") for url in image_urls}
+    tasks = [describe_image_shared(u, model=model, prompt=_DESCRIBE_PROMPT,
+                                   placeholder="[图片]") for u in image_urls]
+    results = await asyncio.gather(*tasks)
+    return dict(zip(image_urls, results))
 
 
 async def describe_stickers(sticker_urls: List[str], *, model=None) -> Dict[str, str]:
-    """批量识表情包：url -> 「画面+情绪」描述。与普通图片共用 Images hash 缓存
-    （同一张表情包只花一次 VLM 调用）。失败映射为 "[表情]" 占位。"""
+    """批量识表情包（并行 + 在途共享）：url -> 「画面+情绪」描述。
+    与普通图片共用 Images hash 缓存（同一张表情包只花一次 VLM 调用）。"""
     if not sticker_urls:
         return {}
     if model is None:
         model = _get_vlm()
-    return {url: await _describe_one(url, model=model, prompt=_STICKER_PROMPT,
-                                     placeholder="[表情]") for url in sticker_urls}
+    tasks = [describe_image_shared(u, model=model, prompt=_STICKER_PROMPT,
+                                   placeholder="[表情]") for u in sticker_urls]
+    results = await asyncio.gather(*tasks)
+    return dict(zip(sticker_urls, results))
 
 
 def render_image_block(descriptions: Dict[str, str]) -> str:
