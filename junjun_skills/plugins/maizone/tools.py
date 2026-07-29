@@ -511,7 +511,11 @@ async def get_own_feeds(cookies: dict, uin: str, num: int = 3) -> list:
                 "Referer": f"https://user.qzone.qq.com/{uin}",
             },
         )
-    payload = json.loads(_strip_jsonp(resp.text))
+    try:
+        payload = json.loads(_strip_jsonp(resp.text))
+    except ValueError as e:
+        # 空响应/HTML 错误页：多为登录态失效，抛 _AuthError 触发 cookie 刷新重试
+        raise _AuthError(f"获取自己的说说返回非 JSON（疑似登录态失效）: {e}")
     _check_code(payload, "获取自己的说说")
 
     feeds = []
@@ -583,7 +587,10 @@ async def reply_comment(cookies: dict, uin: str, fid: str,
     if not m:
         raise RuntimeError(f"回复评论失败: 无法解析响应 {resp.text[:100]}")
     import json5
-    payload = json5.loads(m.group(1).replace("undefined", "null"))
+    try:
+        payload = json5.loads(m.group(1).replace("undefined", "null"))
+    except ValueError as e:
+        raise RuntimeError(f"回复评论失败: 响应截断或格式异常 {e}")
     _check_code(payload, "回复评论")
     return True
 
@@ -650,6 +657,58 @@ async def _generate_feed_content(topic: str, history: str = "") -> str:
     if text:
         return text
     return f"今天也想记录一下：{topic}。" if topic else "今天也要好好生活呀。"
+
+
+async def _generate_diary_feed(chat_log: str, history: str) -> str:
+    """日记体说说：把最近几天的聊天写成日记（素材已匿名化）。失败降级模板。"""
+    personality, style = _persona()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    history_part = (f"\n以下是你以前发过的说说，新说说不许和它们内容重复：\n{history}\n"
+                    if history else "")
+    prompt = (
+        f"你是'{personality}'，现在是'{now}'。以下是你这几天在群聊/私聊里的聊天记录"
+        f"（已匿名，「某人A」「某人B」是不同的人，「我」是你自己）：\n{chat_log}\n"
+        "把这几天的生活写成一条日记风的说说发在 QQ 空间：记录和谁聊了什么、"
+        "发生了什么有趣的事、还有你自己的想法和心情。"
+        f"{style}，第一人称，像真的日记，不要浮夸，可以适当使用颜文字。"
+        "隐私红线：绝不出现真实昵称、QQ 号、群号，一律沿用「某人A」这样的代称；"
+        "不要复述聊天里的隐私信息（地址、电话、账号、密码等）。"
+        f"{history_part}"
+        "只输出说说正文，不要输出多余内容（包括前后缀、冒号、引号、括号()、表情包、at 或 @ 等）。"
+    )
+    text = await _ask_llm(prompt)
+    return text or "今天也在好好生活呀。"
+
+
+def _recent_chat_log(limit: int = 120) -> str:
+    """最近聊天记录渲染为匿名化日记素材：昵称→某人A/B/C，去 QQ 号/@，bot→我。"""
+    try:
+        from junjun_core.database import Messages
+        rows = list(Messages.select()
+                    .where(Messages.processed_plain_text != "")
+                    .order_by(Messages.time.desc()).limit(limit))
+        rows.reverse()
+        alias: dict = {}
+        lines = []
+        for r in rows:
+            text = (r.processed_plain_text or "").replace("\n", " ")
+            text = re.sub(r"@\S+", "", text)
+            text = re.sub(r"\d{5,}", "", text).strip()[:120]
+            if not text:
+                continue
+            if r.is_bot:
+                name = "我"
+            else:
+                nick = r.user_nickname or "群友"
+                if nick not in alias:
+                    alias[nick] = (f"某人{chr(65 + len(alias))}" if len(alias) < 26
+                                   else f"某人{len(alias) + 1}")
+                name = alias[nick]
+            lines.append(f"{name}: {text}")
+        return "\n".join(lines)[-3000:]
+    except Exception as e:
+        logger.debug(f"拉取日记素材失败: {e}")
+        return ""
 
 
 async def _generate_comment(feed: dict) -> str:
@@ -1091,13 +1150,10 @@ def _make_fluctuate_table(cfg: dict) -> list:
 
 
 async def _send_scheduled_feed(cfg: dict) -> None:
-    """自动发一条说说：主题随机 + 历史去重 + 按概率配图。"""
+    """自动发一条说说：日记体（最近聊天记录匿名化）+ 历史去重 + 按概率配图。"""
     if not _feed_quota_ok():
         logger.info("今日说说已达上限，自动发送跳过")
         return
-    topics = cfg.get("schedule_topics",
-                     ["日常生活", "心情分享", "有趣见闻", "天气", "动漫游戏"])
-    topic = random.choice(topics) if topics else ""
 
     history = ""
     try:
@@ -1107,7 +1163,15 @@ async def _send_scheduled_feed(cfg: dict) -> None:
     except Exception as e:
         logger.warning(f"拉历史说说失败（不影响发送）: {type(e).__name__}: {e}")
 
-    content = await _generate_feed_content(topic, history)
+    chat_log = _recent_chat_log()
+    topic = ""
+    if chat_log:
+        content = await _generate_diary_feed(chat_log, history)
+    else:  # 没有聊天素材（刚启动/冷场）退回主题模式
+        topics = cfg.get("schedule_topics",
+                         ["日常生活", "心情分享", "有趣见闻", "天气", "动漫游戏"])
+        topic = random.choice(topics) if topics else ""
+        content = await _generate_feed_content(topic, history)
 
     images = []
     if random.random() < float(cfg.get("schedule_image_probability", 0.4)):
@@ -1124,7 +1188,8 @@ async def _send_scheduled_feed(cfg: dict) -> None:
         logger.warning("定时说说: 登录态获取失败，跳过本次")
         return
     _incr_daily_feed()
-    logger.info(f"[auto] 定时说说已发布 tid={tid} 主题={topic} 配图={len(images)}: {content[:50]}")
+    mode = "日记" if chat_log else f"主题={topic}"
+    logger.info(f"[auto] 定时说说已发布 tid={tid} {mode} 配图={len(images)}: {content[:50]}")
 
 
 async def maizone_auto_post() -> None:

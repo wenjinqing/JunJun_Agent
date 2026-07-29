@@ -153,7 +153,8 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
     """
     CORE = {"do_not_reply", "get_time", "recall_memory", "save_memory",
             "set_reminder", "list_reminders", "manage_mood", "send_message",
-            "web_search", "search_knowledge", "ai_draw", "unified_tts", "ja_tts"}  # 高频刚需永远保留，不参与掩码
+            "web_search", "search_knowledge", "ai_draw", "unified_tts", "ja_tts",
+            "send_feed", "read_feed"}  # 高频刚需永远保留，不参与掩码（空间=第三场景）
     core_tools = [t for t in tools if t.name in CORE]
     other_tools = [t for t in tools if t.name not in CORE]
 
