@@ -17,24 +17,34 @@ _NICK_TTL = 3600.0
 
 
 async def _resolve_nickname(qq: str, group_id: str) -> str:
-    """@ 目标 QQ -> 群昵称（card 优先，fallback nickname）；查不到返回「某人」。"""
-    if not group_id:
-        return "某人"
+    """@ 目标 QQ -> 昵称。群成员 API（card 优先，缓存 1h）-> Messages 历史昵称 -> 某人。"""
     key = (str(group_id), str(qq))
     hit = _NICK_CACHE.get(key)
     if hit and time.time() - hit[1] < _NICK_TTL:
         return hit[0]
+    if group_id:
+        try:
+            from ..send_handler.nc_sending import nc_message_sender
+            resp = await nc_message_sender.send_message_to_napcat(
+                "get_group_member_info",
+                {"group_id": int(group_id), "user_id": int(qq), "no_cache": False},
+            )
+            data = resp.get("data") or {}
+            name = (data.get("card") or data.get("nickname") or "").strip()
+            if name:
+                _NICK_CACHE[key] = (name, time.time())
+                return name
+        except Exception:
+            pass
+    # 降级：历史消息里见过的昵称（跨群转发/私聊/API 失败兜底）
     try:
-        from ..send_handler.nc_sending import nc_message_sender
-        resp = await nc_message_sender.send_message_to_napcat(
-            "get_group_member_info",
-            {"group_id": int(group_id), "user_id": int(qq), "no_cache": False},
-        )
-        data = resp.get("data") or {}
-        name = (data.get("card") or data.get("nickname") or "").strip()
-        if name:
-            _NICK_CACHE[key] = (name, time.time())
-            return name
+        from junjun_core.database import Messages
+        row = (Messages.select(Messages.user_nickname)
+               .where((Messages.user_id == str(qq)) & (Messages.user_nickname != ""))
+               .order_by(Messages.time.desc()).first())
+        if row and row.user_nickname:
+            _NICK_CACHE[key] = (row.user_nickname, time.time())
+            return row.user_nickname
     except Exception:
         pass
     return "某人"
@@ -51,7 +61,8 @@ async def _resolve_reply(reply_id: str) -> str:
             return "[回复某条消息]"
         nickname = ((data.get("sender") or {}).get("card")
                     or (data.get("sender") or {}).get("nickname") or "某人")
-        text = _plain_text_of(data.get("message") or data.get("raw_message") or "")
+        text = await _plain_text_of(data.get("message") or data.get("raw_message") or "",
+                                    group_id=str(data.get("group_id") or ""))
         if not text:
             return f"[回复 {nickname} 的消息]"
         if len(text) > 200:
@@ -61,8 +72,8 @@ async def _resolve_reply(reply_id: str) -> str:
         return "[回复某条消息]"
 
 
-def _plain_text_of(message) -> str:
-    """从 OneBot 消息（array 或 string）提取纯文本（图片/表情转占位）。"""
+async def _plain_text_of(message, group_id: str = "") -> str:
+    """从 OneBot 消息（array 或 string）提取纯文本（图片/表情转占位，@ 解析昵称）。"""
     if isinstance(message, str):
         return message.strip()
     parts = []
@@ -75,7 +86,8 @@ def _plain_text_of(message) -> str:
         elif t == "face":
             parts.append("[表情]")
         elif t == "at":
-            parts.append("@某人 ")
+            name = await _resolve_nickname(str(d.get("qq", "")), group_id)
+            parts.append(f"@{name} ")
     return "".join(parts).strip()
 
 
@@ -241,6 +253,9 @@ class MessageHandler:
                         texts.append(sd.get("text", ""))
                     elif st == "image":
                         texts.append("[图片]")
+                    elif st == "at":
+                        name = await _resolve_nickname(str(sd.get("qq", "")), "")
+                        texts.append(f"@{name} ")
                     elif st == "forward":
                         texts.append(await self._expand_forward(sd, depth + 1))
                 line = f"{nickname}: {''.join(texts).strip()}"
