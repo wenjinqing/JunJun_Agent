@@ -55,7 +55,9 @@ env = { AMAP_MAPS_API_KEY = "${AMAP_MAPS_API_KEY}" }
 [servers.fetch]
 enable = true
 command = "uvx"
-args = ["mcp-server-fetch"]
+# --with mcp==1.8.0：mcp-server-fetch 旧代码 import mcp.shared.exceptions.McpError，
+# 新版 mcp SDK 已移除，锁 1.8.0（2026-07-29 实测可用）
+args = ["--from", "mcp-server-fetch", "--with", "mcp==1.8.0", "mcp-server-fetch"]
 env = { PYTHONIOENCODING = "utf-8" }
 
 # ---------- 时间/时区（官方参考实现） ----------
@@ -76,5 +78,7 @@ env = { PYTHONIOENCODING = "utf-8" }
 [servers.douyin_extract]
 enable = true
 command = "uvx"
-args = ["douyin-mcp-server"]
+# --with mcp==1.8.0：douyin-mcp-server 依赖 mcp.server.fastmcp，
+# 新版 mcp SDK 已移除该路径，锁 1.8.0（2026-07-29 实测可用）
+args = ["--from", "douyin-mcp-server", "--with", "mcp==1.8.0", "douyin-mcp-server"]
 env = { API_KEY = "${SILICONFLOW_API_KEY}", PYTHONIOENCODING = "utf-8" }
