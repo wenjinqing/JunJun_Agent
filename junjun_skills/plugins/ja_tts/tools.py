@@ -33,6 +33,7 @@ logger = get_logger("plugin.ja_tts")
 
 _WS_URL = "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
 _RESOURCE_ID = "seed-tts-2.0"
+_SAMPLE_RATE = 16000       # 采样率（16000 文件更小，NapCat 发送不易超时）
 _TIMEOUT = 30.0            # 整体合成超时（秒）
 _MAX_TEXT_LEN = 300        # 文本长度上限（超出截断）
 _MIN_INTERVAL = 15.0       # 每会话最小间隔（秒）
@@ -234,7 +235,7 @@ async def _synthesize_ws(text: str, api_key: str, speaker: str) -> bytes:
         "speaker": speaker,
         "audio_params": {
             "format": "mp3",
-            "sample_rate": 24000,
+            "sample_rate": _SAMPLE_RATE,
             "speech_rate": 0,
             "loudness_rate": 0,
         },

@@ -348,3 +348,161 @@ class TestTools:
         monkeypatch.setattr(mz, "_cfg", lambda: cfg)
         out = await mz.send_feed_tool.ainvoke({"content": "x"})
         assert "没开" in out
+
+
+# ---------------- 日记体说说 ----------------
+
+def _fake_messages(rows):
+    """伪装 Messages 表查询链：select().where().order_by().limit()。"""
+    class _Field:
+        def __ne__(self, other): return True
+        def desc(self): return self
+
+    class _Q:
+        def where(self, *a): return self
+        def order_by(self, *a): return self
+        def limit(self, n): return list(rows)[-n:]
+
+    class _M:
+        processed_plain_text = _Field()
+        time = _Field()
+
+        @staticmethod
+        def select(): return _Q()
+
+    return _M
+
+
+class _Row:
+    def __init__(self, is_bot, nickname, text):
+        self.is_bot = is_bot
+        self.user_nickname = nickname
+        self.processed_plain_text = text
+
+
+class TestDiaryFeed:
+    def test_chat_log_anonymized(self, monkeypatch):
+        """昵称→某人A/B、QQ 号和 @ 抹除、bot→我。"""
+        import junjun_core.database as db
+        rows = [
+            _Row(False, "白菜兔", "今晚开黑吗 @君君 我 QQ 123456789"),
+            _Row(True, None, "来呀来呀"),
+            _Row(False, "阿黄", "带我一个"),
+            _Row(False, "白菜兔", "那八点集合"),
+        ]
+        monkeypatch.setattr(db, "Messages", _fake_messages(rows))
+        log = mz._recent_chat_log()
+        assert "白菜兔" not in log and "阿黄" not in log
+        assert "123456789" not in log and "@君君" not in log
+        assert "某人A" in log and "某人B" in log
+        assert "我: 来呀来呀" in log
+        # 同一昵称映射稳定
+        assert log.count("某人A") == 2
+
+    @pytest.mark.asyncio
+    async def test_diary_prompt_privacy(self, _env, monkeypatch):
+        prompts = []
+
+        async def _llm(prompt):
+            prompts.append(prompt)
+            return "今天和某人A聊了游戏，开心"
+
+        monkeypatch.setattr(mz, "_ask_llm", _llm)
+        out = await mz._generate_diary_feed("某人A: 开黑吗\n我: 来呀", "- 旧说说")
+        assert out == "今天和某人A聊了游戏，开心"
+        p = prompts[0]
+        assert "日记" in p and "隐私" in p
+        assert "某人A: 开黑吗" in p and "旧说说" in p
+
+    @pytest.mark.asyncio
+    async def test_scheduled_feed_uses_diary(self, _env, monkeypatch):
+        """有聊天素材时走日记路径，不用主题模式。"""
+        monkeypatch.setattr(mz, "_recent_chat_log", lambda: "某人A: 开黑吗\n我: 来")
+        monkeypatch.setattr(mz, "get_own_feeds", _async([]))
+        used = {}
+
+        async def _diary(log, history):
+            used["mode"] = "diary"
+            return "日记内容"
+
+        async def _topic(topic, history=""):
+            used["mode"] = "topic"
+            return "主题内容"
+
+        monkeypatch.setattr(mz, "_generate_diary_feed", _diary)
+        monkeypatch.setattr(mz, "_generate_feed_content", _topic)
+        monkeypatch.setattr(mz, "random", type("R", (), {
+            "choice": staticmethod(lambda x: x[0]),
+            "random": staticmethod(lambda: 1.0),  # 不配图
+        }))
+        published = []
+
+        async def _publish(cookies, uin, content, images=None):
+            published.append(content)
+            return "TID"
+
+        monkeypatch.setattr(mz, "publish_feed", _publish)
+        await mz._send_scheduled_feed(mz._cfg())
+        assert used["mode"] == "diary" and published == ["日记内容"]
+
+    @pytest.mark.asyncio
+    async def test_scheduled_feed_topic_fallback(self, _env, monkeypatch):
+        """无聊天素材退回主题模式。"""
+        monkeypatch.setattr(mz, "_recent_chat_log", lambda: "")
+        monkeypatch.setattr(mz, "get_own_feeds", _async([]))
+        used = {}
+
+        async def _diary(log, history):
+            used["mode"] = "diary"
+            return "x"
+
+        async def _topic(topic, history=""):
+            used["mode"] = "topic"
+            return "主题内容"
+
+        monkeypatch.setattr(mz, "_generate_diary_feed", _diary)
+        monkeypatch.setattr(mz, "_generate_feed_content", _topic)
+        monkeypatch.setattr(mz, "random", type("R", (), {
+            "choice": staticmethod(lambda x: x[0]),
+            "random": staticmethod(lambda: 1.0),
+        }))
+
+        async def _publish(cookies, uin, content, images=None):
+            return "TID"
+
+        monkeypatch.setattr(mz, "publish_feed", _publish)
+        await mz._send_scheduled_feed(mz._cfg())
+        assert used["mode"] == "topic"
+
+
+# ---------------- 健壮性 ----------------
+
+class TestRobustness:
+    @pytest.mark.asyncio
+    async def test_own_feeds_non_json_raises_auth(self, _env, monkeypatch):
+        """HTML/空响应 -> _AuthError（触发 _with_auth_retry 刷新 cookie）。"""
+        class _Resp:
+            text = "<html>登录过期</html>"
+
+        class _Client:
+            def __init__(self, **kw): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            async def get(self, *a, **kw): return _Resp()
+
+        monkeypatch.setattr(mz.httpx, "AsyncClient", _Client)
+        with pytest.raises(mz._AuthError):
+            await mz.get_own_feeds(_env, "123456", 3)
+
+    def test_sample_rate_lowered(self):
+        """TTS 采样率 16000（减小语音文件，防 NapCat 发送超时）。"""
+        from junjun_skills.plugins.ja_tts import tools as ja
+        assert ja._SAMPLE_RATE == 16000
+
+    def test_qzone_tools_in_core(self):
+        """空间 = 第三场景：send_feed/read_feed 进 CORE 永不掩码。"""
+        from junjun_skills import registry
+        src = open(registry.__file__, encoding="utf-8").read()
+        core_block = src[src.index("CORE = {"):src.index("}", src.index("CORE = {"))]
+        assert '"send_feed"' in core_block and '"read_feed"' in core_block
+
