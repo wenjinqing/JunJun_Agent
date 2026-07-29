@@ -19,16 +19,20 @@ logger = get_logger("security")
 
 # processor 在每轮决策前设置；skill/persona 执行时读取（真实发送者 QQ，不可伪造）
 current_user_id: ContextVar[str] = ContextVar("junjun_user_id", default="")
+# 当前消息发送者昵称（告警/日志展示用，由 processor 每轮设置）
+current_nickname: ContextVar[str] = ContextVar("junjun_nickname", default="")
 # 管理员权限激活位：管理员本人 +（@bot 或私聊）才置 True。
 # 语义（用户指定 2026-07-22）：管理员平时就是普通群友/好朋友，
 # 只有 @机器人 给出明确指令（或私聊直接说）时才触发管理员权限——非上下级关系。
 admin_privileged: ContextVar[bool] = ContextVar("junjun_admin_privileged", default=False)
 
 
-def set_caller(user_id: str | None, *, at_bot: bool, is_group: bool) -> None:
+def set_caller(user_id: str | None, *, at_bot: bool, is_group: bool,
+               nickname: str = "") -> None:
     """processor 每轮设置调用者身份与权限激活位。"""
     uid = (user_id or "").strip()
     current_user_id.set(uid)
+    current_nickname.set((nickname or "").strip())
     admin_privileged.set(is_admin(uid) and (at_bot or not is_group))
 
 

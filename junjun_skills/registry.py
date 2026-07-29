@@ -39,10 +39,11 @@ def register(skill: BaseTool, available_for: Optional[Callable] = None,
 
 
 def _admin_refusal(tool_name: str, args: tuple, kwargs: dict) -> str:
-    from junjun_core.security import current_user_id, report_violation
+    from junjun_core.security import current_nickname, current_user_id, report_violation
     from junjun_skills.builtin.memory_skills import current_chat_id
     detail = " ".join(str(a) for a in (*args, *kwargs.values()))[:80]
-    report_violation(f"管理员工具 {tool_name}", current_user_id.get(), "",
+    report_violation(f"管理员工具 {tool_name}", current_user_id.get(),
+                     current_nickname.get(),
                      current_chat_id.get(), detail)
     return "（权限不足：这个操作只有管理员能做，已通知管理员）"
 
@@ -154,7 +155,7 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
     CORE = {"do_not_reply", "get_time", "recall_memory", "save_memory",
             "set_reminder", "list_reminders", "manage_mood", "send_message",
             "web_search", "search_knowledge", "ai_draw", "unified_tts", "ja_tts",
-            "send_feed", "read_feed"}  # 高频刚需永远保留，不参与掩码（空间=第三场景）
+            "send_feed", "read_feed", "find_user_id"}  # 高频刚需永远保留，不参与掩码（空间=第三场景）
     core_tools = [t for t in tools if t.name in CORE]
     other_tools = [t for t in tools if t.name not in CORE]
 
@@ -255,7 +256,7 @@ def load_builtin() -> None:
     from junjun_skills.builtin.action_skills import (
         send_message, send_poke, get_weather, query_chat_history,
     )
-    from junjun_skills.builtin.capability_skills import get_capabilities
+    from junjun_skills.builtin.capability_skills import get_capabilities, find_user_id
 
     register(get_time)
     register(do_not_reply)
@@ -276,4 +277,5 @@ def load_builtin() -> None:
     register(get_weather)
     register(query_chat_history)
     register(get_capabilities)
+    register(find_user_id)
     logger.info(f"内置 skill 已加载: {[t.name for t in get_tools()]}")
