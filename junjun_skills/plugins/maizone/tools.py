@@ -596,15 +596,19 @@ async def reply_comment(cookies: dict, uin: str, fid: str,
 
 
 async def _with_auth_retry(fn, *args):
-    """携带登录态执行 Qzone 操作；登录态失效时强制重取 cookie 重试一次。
+    """携带登录态执行 Qzone 操作；登录态失效时强制重取 cookie 重试一次，
+    网络瞬态错误（连接重置/超时）重试 3 次。
 
     cookie 三层都拿不到时返回 None（调用方回「空间登录态获取失败」）。
     """
+    from junjun_core.retry import retry_async
     cookies = await ensure_cookies()
     if not cookies:
         return None
     try:
-        return await fn(cookies, *args)
+        return await retry_async(lambda: fn(cookies, *args), attempts=3,
+                                 base_delay=1.0, label=f"qzone.{fn.__name__}",
+                                 retry_on=(httpx.TransportError,))
     except _AuthError:
         logger.info("登录态失效，强制刷新 cookie 重试")
         cookies = await ensure_cookies(force_refresh=True)

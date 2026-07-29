@@ -69,19 +69,25 @@ def _vlm_sem() -> asyncio.Semaphore:
 
 async def _describe(data: bytes, *, model, prompt: str = _DESCRIBE_PROMPT) -> Optional[str]:
     from langchain_core.messages import HumanMessage
+    from junjun_core.retry import retry_async
     b64 = base64.b64encode(data).decode()
-    try:
+
+    async def _call():
         async with _vlm_sem():
-            resp = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 model.ainvoke([HumanMessage(content=[
                     {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
                 ])]),
                 timeout=_DESCRIBE_TIMEOUT,
             )
+
+    try:
+        # 瞬态失败（限流/网络抖动）重试 3 次再降级占位
+        resp = await retry_async(_call, attempts=3, base_delay=1.0, label="vlm.describe")
         return str(resp.content).strip() or None
     except Exception as e:
-        logger.warning(f"VLM 识图失败（降级占位）: {e}")
+        logger.warning(f"VLM 识图重试 3 次均失败（降级占位）: {e}")
         return None
 
 
