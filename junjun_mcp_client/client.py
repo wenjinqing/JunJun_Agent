@@ -144,6 +144,13 @@ class MCPManager:
                     result = await asyncio.wait_for(_orig(*args, **kwargs), timeout=_TOOL_TIMEOUT)
                 except asyncio.TimeoutError:
                     return "工具调用超时（30s），请换个方式或稍后再试。", None
+                except Exception as e:
+                    # 任何 MCP 失败（网络/协议/server 崩溃）降级为工具结果文本，
+                    # 绝不外抛——ToolException 会炸掉整个 agent 轮次导致沉默
+                    logger.warning(f"MCP 工具 {tool.name} 调用失败（降级为错误文本）: "
+                                   f"{type(e).__name__}: {e}")
+                    return (f"这个工具调用失败了（{type(e).__name__}: {str(e)[:150]}），"
+                            f"换其他方式回答，或直接告诉用户暂时查不了。"), None
 
                 content, artifact = result if isinstance(result, tuple) else (result, None)
                 text = _extract_text(content) if content is not None else ""
