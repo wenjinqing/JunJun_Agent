@@ -180,6 +180,11 @@ schedule_topics = ["日常生活", "心情分享", "有趣见闻", "天气", "�
 reply_comment_enable = false    # 回复好友对自己说说的评论
 max_comment_reply_per_day = 10
 
+# ---------- 娱乐小工具（fun_texts 插件） ----------
+[fun_texts]
+daily60s_enable = false   # 每日「60s 读懂世界」图片推送（推给近 48h 活跃群）
+daily60s_hour = 8
+
 [plugins]
 # 持久禁用的插件（跳过加载：工具/命令/拦截器全部不注册）
 disabled = []

@@ -227,6 +227,12 @@ _TOPIC_KEYWORDS = {
     "music": ["音乐", "歌", "点歌"],
     "send_feed": ["说说", "空间", "qzone", "动态"],
     "read_feed": ["说说", "空间", "qzone", "动态"],
+    "answer_book": ["答案之书", "该不该", "要不要", "会不会"],
+    "fun_quote": ["毒鸡汤", "鸡汤", "丧"],
+    "draw_lot": ["抽签", "灵签", "观音", "文昌", "求签"],
+    "make_qrcode": ["二维码"],
+    "decode_qrcode": ["二维码", "扫码"],
+    "today_in_history": ["历史上的今天", "今天是什么日子"],
 }
 
 
