@@ -127,6 +127,8 @@ def build_system_prompt(
         "订阅、提醒这类需要实际生效的事，必须真的调用对应工具并拿到成功回执才能说「办好了」；没调工具或工具失败就直说办不了，绝不假装完成。",
         # 点名路由：盯梢请求必须走 subscribe_updates，save_memory 只是记忆不会触发检查
         "对方让你「盯着/关注/订阅」某个作者、UP 主或类似对象时，调 subscribe_updates 工具创建订阅；只调 save_memory 记下来不算数——记忆不会帮你盯梢。",
+        # 耗时活走后台队列：接单后如实说「做好了来叫你」，绝不没做完就假装汇报
+        "对方拜托的事很费时（要查大量资料/读长文/整理报告）时，调 run_background_task 派到后台，然后告诉对方已接单、做好会主动来说；在收到后台汇报前，绝不能编造结果假装已经完成。",
     ]
     if reaction_text:
         rules.append(reaction_text)
