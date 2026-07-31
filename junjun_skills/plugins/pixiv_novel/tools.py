@@ -452,10 +452,16 @@ def _save_txt(title: str, nid: str, content: str) -> Path:
 
 
 async def _send_txt(ctx, path: Path) -> bool:
-    """通过 NapCat 私聊发文件。"""
+    """通过 NapCat 私聊发文件；发送成功后删除本地 txt（原永久堆积磁盘）。"""
     try:
-        return bool(await napcat_client.upload_private_file(
+        ok = bool(await napcat_client.upload_private_file(
             str(ctx.meta.user_id), str(path), path.name))
+        if ok:
+            try:
+                path.unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"txt 清理失败 {path.name}: {e}")
+        return ok
     except Exception as e:
         logger.warning(f"上传私聊文件失败: {type(e).__name__}: {e}")
         return False
@@ -538,42 +544,58 @@ async def _do_download_by_number(ctx, number_text: str) -> str:
 
 
 async def _do_series(ctx, series_id: str) -> str:
-    """抓取整个系列，合成一个 txt 发私聊文件。"""
+    """系列抓取【后台化】：50 章 ×（请求 + 1s 礼貌延迟）在命令 handler 里同步跑，
+    该会话的消息流水线会被卡死数分钟——立即返回，后台抓完私聊发文件。"""
     sid = str(series_id)
-    await ctx.reply(f"开始抓取系列 {sid} 的全部章节，完成后发你文件～")
-    series_meta, novels = await _fetch_series_all_novels(sid, _max_chapters())
-    if series_meta.get("error"):
-        return f"获取系列失败：{series_meta['error']}"
-    if not novels:
-        return "这个系列没有抓到任何章节，可能需要检查 Cookie 或该系列不可见。"
+    asyncio.create_task(_series_worker(ctx, sid), name=f"pixiv-series-{sid}")
+    return f"开始抓取系列 {sid}，章节多的话要几分钟，完成后私聊发你文件～"
 
-    title = series_meta.get("title") or "未知系列"
-    author = series_meta.get("userName") or series_meta.get("user_name") or ""
-    total = len(novels)
-    await ctx.reply(f"《{title}》共 {total} 章，逐章抓取中，请稍候...")
 
-    chapters: list = []
-    success = 0
-    for idx, item in enumerate(novels, 1):
-        nid = str(item.get("id"))
-        ctitle = item.get("title") or "(无标题)"
-        data = await _fetch_novel_full(nid)
-        if data.get("error"):
-            logger.warning(f"第 {idx} 章抓取失败: {data['error']}")
-            chapters.append(f"第 {idx}/{total} 章  {ctitle}\n[抓取失败: {data['error']}]")
+async def _series_worker(ctx, sid: str) -> None:
+    """后台抓取整个系列，合成一个 txt 发私聊文件。异常兜底通知，绝不炸出栈。"""
+    try:
+        series_meta, novels = await _fetch_series_all_novels(sid, _max_chapters())
+        if series_meta.get("error"):
+            await ctx.reply(f"获取系列失败：{series_meta['error']}")
+            return
+        if not novels:
+            await ctx.reply("这个系列没有抓到任何章节，可能需要检查 Cookie 或该系列不可见。")
+            return
+
+        title = series_meta.get("title") or "未知系列"
+        author = series_meta.get("userName") or series_meta.get("user_name") or ""
+        total = len(novels)
+        await ctx.reply(f"《{title}》共 {total} 章，逐章抓取中，请稍候...")
+
+        chapters: list = []
+        success = 0
+        for idx, item in enumerate(novels, 1):
+            nid = str(item.get("id"))
+            ctitle = item.get("title") or "(无标题)"
+            data = await _fetch_novel_full(nid)
+            if data.get("error"):
+                logger.warning(f"第 {idx} 章抓取失败: {data['error']}")
+                chapters.append(f"第 {idx}/{total} 章  {ctitle}\n[抓取失败: {data['error']}]")
+            else:
+                text = data.get("text") or ""
+                chapters.append(_format_chapter(idx, total, ctitle, nid, text))
+                success += 1
+            if _CHAPTER_DELAY > 0:
+                await asyncio.sleep(_CHAPTER_DELAY)
+
+        full_text = _build_series_txt(title, author, sid, chapters, total, success)
+        path = _save_txt(title, sid, full_text)
+        logger.info(f"系列《{title}》({sid}) 已保存: {path}（{success}/{total} 章）")
+        if await _send_txt(ctx, path):
+            await ctx.reply(f"《{title}》抓取完成（{success}/{total} 章），txt 已发你～")
         else:
-            text = data.get("text") or ""
-            chapters.append(_format_chapter(idx, total, ctitle, nid, text))
-            success += 1
-        if _CHAPTER_DELAY > 0:
-            await asyncio.sleep(_CHAPTER_DELAY)
-
-    full_text = _build_series_txt(title, author, sid, chapters, total, success)
-    path = _save_txt(title, sid, full_text)
-    logger.info(f"系列《{title}》({sid}) 已保存: {path}（{success}/{total} 章）")
-    if await _send_txt(ctx, path):
-        return f"《{title}》抓取完成（{success}/{total} 章），txt 已发你～"
-    return f"《{title}》已保存到 {path.name}，但文件发送失败，稍后再试试吧。"
+            await ctx.reply(f"《{title}》已保存到 {path.name}，但文件发送失败，稍后再试试吧。")
+    except Exception as e:
+        logger.warning(f"系列 {sid} 后台抓取异常: {type(e).__name__}: {e}")
+        try:
+            await ctx.reply("系列抓取中途出了点问题，稍后再试试吧。")
+        except Exception:
+            pass
 
 
 async def _do_single(ctx, novel_id: str) -> str:

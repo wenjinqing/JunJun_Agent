@@ -18,6 +18,14 @@ async def run_cleanup() -> None:
         return
     retention_days = int(cfg.get("cleanup_retention_days", 60))
     cutoff = time.time() - retention_days * 86400
+    # 走 db_writer 单写队列：原实现在事件循环里同步 delete（阻塞循环），
+    # 且绕过单写约定与 writer 并发写 SQLite（偶发 database is locked 被静默吞掉）
+    from junjun_core.database import db_writer
+    db_writer.submit(_do_cleanup, cutoff)
+
+
+def _do_cleanup(cutoff: float) -> None:
+    """实际清理（db_writer executor 线程内同步执行）。"""
     try:
         from junjun_core.database import LLMUsage, Jargon
         n_usage = LLMUsage.delete().where(LLMUsage.time < cutoff).execute()

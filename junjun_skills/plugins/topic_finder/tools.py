@@ -261,17 +261,25 @@ def _fallback_from_title(materials: list) -> str | None:
 
 # ---------------------------------------------------------------- 发送
 
-async def _send_to_groups(topic: str, groups: list) -> None:
-    """把话题文本发到每个目标群。"""
+async def _send_to_groups(topic: str, groups: list) -> list:
+    """把话题文本发到每个目标群；单群失败不影响其他群。返回成功群列表。"""
     from junjun_core.gateway.router import get_gateway
     gw = get_gateway()
+    sent = []
     for gid in groups:
-        await gw.send_reply(ReplySet(
-            platform="qq",
-            target_group_id=str(gid),
-            segments=[ReplySegment(type="text", data=topic)],
-            should_reply=True,
-        ))
+        try:
+            await gw.send_reply(ReplySet(
+                platform="qq",
+                target_group_id=str(gid),
+                segments=[ReplySegment(type="text", data=topic)],
+                should_reply=True,
+            ))
+            sent.append(gid)
+        except Exception as e:
+            # 单群失败只记日志：原来一处抛异常 -> 后续群漏发 + last_send 未记
+            # -> 下轮重复发送先发群
+            logger.warning(f"话题发送失败（群 {gid}，跳过）: {type(e).__name__}: {e}")
+    return sent
 
 
 def _last_message_ts(group_id: str) -> float | None:
@@ -322,16 +330,20 @@ async def run_round(groups: list, reason: str, cfg: dict | None = None,
             logger.info(f"话题与近期重复且重试未果，本轮跳过（{reason}）")
             return False
 
-    await _send_to_groups(topic, groups)
+    sent_groups = await _send_to_groups(topic, groups)
+    if not sent_groups:
+        logger.warning(f"话题全部群发送失败，本轮不计状态（下轮重试）: {topic[:40]}")
+        return False
     _record_recent(topic)
 
     state = state if state is not None else _load_last_send()
     group_state = state.setdefault("groups", {})
     ts = time.time()
-    for gid in groups:
+    # 只记成功发送的群：失败群下轮还会触发（不发重复），成功群不会收到重复
+    for gid in sent_groups:
         group_state[str(gid)] = ts
     _write_json("last_send.json", state)
-    logger.info(f"话题已发送（{reason}）-> {groups}: {topic[:50]}")
+    logger.info(f"话题已发送（{reason}）-> {sent_groups}: {topic[:50]}")
     return True
 
 
@@ -377,7 +389,8 @@ async def topic_finder_tick() -> None:
 
 
 # import 时自注册：scheduler 在 load_plugins 之后启动
-scheduler.add(ScheduledTask("topic_finder", topic_finder_tick, interval=60))
+scheduler.add(ScheduledTask("topic_finder", topic_finder_tick, interval=60,
+                            plugin="topic_finder"))
 
 
 # ---------------------------------------------------------------- 调试命令

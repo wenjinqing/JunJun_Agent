@@ -100,6 +100,13 @@ def check_napcat_server_token(conn, request):
 
 async def napcat_server():
     cfg = get_config().napcat_server
+    # 与 core gateway 对齐：非回环监听 + 空 token = 任何人可伪造 NapCat 连入
+    # 注入任意消息（含伪造管理员 QQ）——硬拒绝启动
+    _LOOPBACK = ("127.0.0.1", "::1", "localhost")
+    if cfg.host not in _LOOPBACK and not (cfg.token or "").strip():
+        raise SystemExit(
+            f"拒绝启动：napcat_server.host={cfg.host} 是对外地址但未配 token"
+            f"（.env NAPCAT_TOKEN），任何人都能伪造 NapCat 连入注入消息。")
     logger.info(f"启动 NapCat WS server ws://{cfg.host}:{cfg.port} 等待 NapCat 连入...")
     async with Server.serve(
         message_recv, cfg.host, cfg.port,

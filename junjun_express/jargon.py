@@ -12,6 +12,17 @@ from junjun_core.observability import get_logger
 
 logger = get_logger("express.jargon")
 
+# 黑话匹配缓存：每消息全表 SELECT + 逐行子串扫描在黑话库上千后是热点。
+# term/explanation/chat_id 缓存进内存，写入时失效（record_jargon 是唯一写口）。
+_MATCH_CACHE: Dict[str, list] = {}   # scope -> [(term, explanation)]
+_MATCH_CACHE_TS: Dict[str, float] = {}
+_MATCH_CACHE_TTL = 300.0             # 兜底刷新（防其他进程写库导致永久不新鲜）
+
+
+def _invalidate_match_cache() -> None:
+    _MATCH_CACHE.clear()
+    _MATCH_CACHE_TS.clear()
+
 
 def _is_global() -> bool:
     return bool(get_global_config().raw.get("jargon", {}).get("all_global", True))
@@ -37,6 +48,7 @@ def record_jargon(term: str, explanation: str, chat_id: str = "") -> None:
             if explanation:
                 row.explanation = explanation
             row.save()
+    _invalidate_match_cache()
 
 
 def lookup_jargon(term: str, chat_id: str = "") -> Optional[str]:
@@ -51,18 +63,26 @@ def lookup_jargon(term: str, chat_id: str = "") -> Optional[str]:
 def match_jargon_from_text(text: str, chat_id: str = "", *, max_hits: int = 3) -> List[Dict]:
     """扫描文本中的已知黑话。返回 [{term, explanation}]。
 
-    黑话库通常很小（<几千条），全量拉 term 做 in 匹配即可。
+    term 列表进程内缓存（TTL 5 分钟 + 写入失效），不再每消息全表查询。
     """
     if not _enabled() or not text:
         return []
-    from junjun_core.database import Jargon
-    q = Jargon.select(Jargon.term, Jargon.explanation).where(Jargon.count >= 2)  # 出现≥2次才可信
-    if not _is_global():
-        q = q.where(Jargon.chat_id.in_(["", chat_id]))
+    import time
+    scope = "global" if _is_global() else chat_id
+    now = time.time()
+    terms = _MATCH_CACHE.get(scope)
+    if terms is None or now - _MATCH_CACHE_TS.get(scope, 0) > _MATCH_CACHE_TTL:
+        from junjun_core.database import Jargon
+        q = Jargon.select(Jargon.term, Jargon.explanation).where(Jargon.count >= 2)  # 出现≥2次才可信
+        if not _is_global():
+            q = q.where(Jargon.chat_id.in_(["", chat_id]))
+        terms = [(row.term, row.explanation) for row in q]
+        _MATCH_CACHE[scope] = terms
+        _MATCH_CACHE_TS[scope] = now
     hits = []
-    for row in q:
-        if row.term in text:
-            hits.append({"term": row.term, "explanation": row.explanation})
+    for term, explanation in terms:
+        if term in text:
+            hits.append({"term": term, "explanation": explanation})
             if len(hits) >= max_hits:
                 break
     return hits

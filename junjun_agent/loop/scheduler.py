@@ -2,6 +2,13 @@
 
 合并原 AsyncTask（后台 interval）与 ScheduledTask（cron）两套为一个实现。
 每任务独立 try/except，崩溃打 WARN 自动继续，不拖垮其他任务。
+
+2026-07-31 P2 加固：
+- 到期任务 create_task 并发执行（原串行 await——topic_finder 一次 LLM 生成
+  30s 会把 reminders 等全部任务延后）；同名任务重入锁防自身并发
+- cron 模式加 10 分钟迟到容忍（原要求 hour==且minute==，机器睡眠/调度
+  繁忙错过分钟窗口当天就丢了）
+- plugin 字段：插件被禁用时其后台任务跳过（原禁用只管工具/命令/拦截器）
 """
 
 import asyncio
@@ -14,6 +21,8 @@ from junjun_core.observability import get_logger
 
 logger = get_logger("loop.scheduler")
 
+_CRON_LATE_TOLERANCE = 600.0  # cron 迟到容忍窗口（秒）
+
 
 @dataclass
 class ScheduledTask:
@@ -23,11 +32,13 @@ class ScheduledTask:
     cron_hour: Optional[int] = None       # cron 模式：每天 HH:MM
     cron_minute: Optional[int] = None
     enabled: bool = True
+    plugin: str = ""                      # 所属插件（插件禁用时任务跳过；空=内置）
     _last_run: float = 0.0
     _last_cron_date: str = ""
+    _running: bool = False                # 重入锁：上一次还没跑完不再触发
 
     def due(self, now: Optional[float] = None) -> bool:
-        if not self.enabled:
+        if not self.enabled or self._running:
             return False
         now = now if now is not None else time.time()
         if self.interval is not None:
@@ -35,9 +46,13 @@ class ScheduledTask:
         if self.cron_hour is not None:
             dt = datetime.fromtimestamp(now)
             today = dt.strftime("%Y-%m-%d")
-            return (dt.hour == self.cron_hour
-                    and dt.minute == (self.cron_minute or 0)
-                    and self._last_cron_date != today)
+            if self._last_cron_date == today:
+                return False
+            scheduled = dt.replace(hour=self.cron_hour,
+                                   minute=(self.cron_minute or 0),
+                                   second=0, microsecond=0)
+            lag = now - scheduled.timestamp()
+            return 0 <= lag <= _CRON_LATE_TOLERANCE
         return False
 
     def mark_run(self, now: Optional[float] = None) -> None:
@@ -85,11 +100,24 @@ class Scheduler:
             for task in list(self._tasks.values()):
                 if task.due():
                     task.mark_run()
-                    try:
-                        await task.callback()
-                    except Exception as e:
-                        logger.warning(f"定时任务 {task.name} 异常（继续调度）: {type(e).__name__}: {e}")
+                    # 并发执行：慢任务（LLM 生成/VLM 注册）不阻塞 reminders 等其他任务
+                    asyncio.create_task(self._run_one(task),
+                                        name=f"sched-{task.name}")
             await asyncio.sleep(self.TICK)
+
+    async def _run_one(self, task: ScheduledTask) -> None:
+        task._running = True
+        try:
+            if task.plugin:
+                # 插件被禁用 -> 后台任务同样静默（禁用语义覆盖全生命周期）
+                from junjun_skills import registry
+                if not registry.is_plugin_enabled(task.plugin):
+                    return
+            await task.callback()
+        except Exception as e:
+            logger.warning(f"定时任务 {task.name} 异常（继续调度）: {type(e).__name__}: {e}")
+        finally:
+            task._running = False
 
 
 scheduler = Scheduler()

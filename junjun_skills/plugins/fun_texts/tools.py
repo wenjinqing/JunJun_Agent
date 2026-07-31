@@ -354,4 +354,5 @@ def _cron_hour() -> int:
 
 
 scheduler.add(ScheduledTask("fun_texts_daily60s", daily60s_push,
-                            cron_hour=_cron_hour(), cron_minute=0))
+                            cron_hour=_cron_hour(), cron_minute=0,
+                            plugin="fun_texts"))
