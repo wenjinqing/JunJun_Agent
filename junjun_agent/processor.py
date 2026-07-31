@@ -378,6 +378,21 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     await _maybe_adjust_frequency(session)
 
 
+# 记忆召回失败告警节流（5 分钟一次）：API 抖动期召回静默全失不能毫无痕迹，
+# 但每条消息都 warning 会刷屏
+_last_recall_warn = 0.0
+
+
+def _warn_recall_throttled(e: BaseException) -> None:
+    global _last_recall_warn
+    import time as _t
+    now = _t.monotonic()
+    if now - _last_recall_warn >= 300:
+        _last_recall_warn = now
+        logger.warning(f"记忆召回失败（降级无记忆注入，5 分钟内不再重复告警）: "
+                       f"{type(e).__name__}: {e}")
+
+
 async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
     """被动记忆注入：按最新消息检索相关长期记忆 + 黑话释义 + 入站图片描述。失败降级空串。"""
     parts = []
@@ -436,8 +451,8 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
         )
         if items:
             parts.append("相关记忆：\n" + "\n".join(f"- {it.text}" for it in items))
-    except Exception:
-        pass
+    except Exception as e:
+        _warn_recall_throttled(e)
     try:
         from junjun_express.jargon import build_jargon_block
         jb = build_jargon_block(meta.text, session.chat_id)

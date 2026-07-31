@@ -33,6 +33,7 @@ class MemoryGraph:
     def __init__(self):
         self._built_count = -1          # 构建时的条目数（-1 = 未构建）
         self._adj: List[set] = []       # 邻接表：item 下标 -> 邻居下标集合
+        self._edges = None              # (src, dst, weight) 边数组——PPR 稀疏幂迭代用
 
     # ---------- 构建 ----------
 
@@ -46,6 +47,7 @@ class MemoryGraph:
         except Exception as e:
             logger.warning(f"记忆图构建失败（降级无图）: {type(e).__name__}: {e}")
             self._adj = [set() for _ in range(n)]
+            self._edges = None
             self._built_count = n
 
     def _rebuild(self, ltm) -> None:
@@ -83,31 +85,46 @@ class MemoryGraph:
         n_edges = sum(len(s) for s in adj) // 2
         logger.info(f"记忆图已构建: {len(items)} 节点 / {n_edges} 边")
         self._adj = adj
+        # 边数组（src->dst 带转移权重）：PPR 用稀疏散点累加，
+        # 不建 n×n dense 矩阵（n=5000 时 dense 单次检索就要 100MB 内存）
+        import numpy as _np
+        src, dst, w = [], [], []
+        for i, nbrs in enumerate(adj):
+            if nbrs:
+                share = 1.0 / len(nbrs)
+                for j in nbrs:
+                    src.append(i)
+                    dst.append(j)
+                    w.append(share)
+        self._edges = (_np.array(src, dtype=_np.int64),
+                       _np.array(dst, dtype=_np.int64),
+                       _np.array(w, dtype=_np.float32))
 
     # ---------- PPR 扩散 ----------
 
     def spread(self, ltm, seed_indices: List[int], *, top_k: int,
                damping: float = 0.85) -> List[int]:
-        """PPR 从种子条目扩散，返回相关条目下标（不含种子），按得分降序。"""
+        """PPR 从种子条目扩散，返回相关条目下标（不含种子），按得分降序。
+
+        稀疏幂迭代：p' = (1-d)·p0 + d·Σ(p[i]/deg(i))，按边数组散点累加，
+        内存 O(E)，单次迭代 O(E)——不随 n² 膨胀。
+        """
         import numpy as np
         self._maybe_rebuild(ltm)
         n = len(self._adj)
         seeds = [s for s in seed_indices if 0 <= s < n]
-        if not seeds or n == 0:
+        if not seeds or n == 0 or self._edges is None:
             return []
 
-        # 转移矩阵（列归一）；n 百~千级 dense 足够快
-        W = np.zeros((n, n), dtype="float32")
-        for i, nbrs in enumerate(self._adj):
-            if nbrs:
-                for j in nbrs:
-                    W[j, i] = 1.0 / len(nbrs)
+        src, dst, w = self._edges
         p0 = np.zeros(n, dtype="float32")
         for s in seeds:
             p0[s] = 1.0 / len(seeds)
         p = p0.copy()
+        teleport = (1.0 - damping) * p0
         for _ in range(_PPR_ITERS):
-            p = damping * (W @ p) + (1.0 - damping) * p0
+            p = teleport + damping * np.bincount(
+                dst, weights=w * p[src], minlength=n).astype("float32")
         p[seeds] = 0.0  # 种子本身不算「相关记忆」
         order = np.argsort(-p)
         return [int(i) for i in order if p[i] > 0][:top_k]
