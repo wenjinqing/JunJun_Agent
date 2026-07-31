@@ -197,6 +197,14 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     if summarizer.note(session.chat_id, meta.nickname or meta.user_id or "?", meta.text):
         await summarizer.summarize(session.chat_id)
 
+    # ---- 事件雷达：群消息里的未来安排自动登记（预过滤 0 token，不阻塞） ----
+    if session.is_group and not meta.is_self:
+        try:
+            from junjun_agent.loop.event_radar import maybe_scan
+            maybe_scan(session.chat_id, meta.user_id, meta.nickname, meta.text)
+        except Exception:
+            pass
+
     # ---- 表达学习：积累群友消息，满批学习 ----
     if session.is_group and not meta.is_self:
         from junjun_express.expression import expression_learner

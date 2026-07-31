@@ -194,6 +194,13 @@ reply_comment_enable = false    # 回复好友对自己说说的评论
 max_comment_reply_per_day = 10
 cookie_max_age_hours = 12  # 缓存 cookie 超过此时长主动刷新（<=0 关闭，只在登录态失效时被动重取）
 
+# ---------- 事件雷达（群消息里的未来安排自动登记成提醒：开黑/考试/拼单…） ----------
+[event_radar]
+enable = true
+max_pending = 5        # 每群同时挂着的雷达事件上限（防刷屏）
+lookahead_days = 7     # 只接受未来 N 天内的事件
+lead_minutes = 15      # 提前多少分钟提醒
+
 # ---------- 订阅（帮我盯着 P 站作者 / B 站 UP 主，有更新主动通知） ----------
 [subscription]
 enable = true
