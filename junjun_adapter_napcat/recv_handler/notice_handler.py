@@ -52,9 +52,10 @@ class NoticeHandler:
             raw_message="（戳了戳你）",
         )
         logger.info(f"收到戳一戳 [user={user_id} group={group_id}]，转决策链")
-        # 直接调 gateway 处理（不经过 adapter 的 maim_message 回环——避免二次注册/路由开销）
-        from junjun_core.gateway.router import get_gateway
-        await get_gateway().handle_inbound(msg_base.to_dict())
+        # adapter 是独立进程，必须和普通消息一样走 WS 发给核心网关——
+        # 直接调本进程的 gateway 只会拿到 echo 占位处理器，poke 会被静默丢弃
+        from ..message_sending import message_send_instance
+        await message_send_instance.message_send(msg_base)
 
 
 async def message_handler_allow(user_id: str, group_id) -> bool:

@@ -94,10 +94,13 @@ class TaskManager:
         busy_text: str = "",
         timeout: float = _DEFAULT_TIMEOUT,
         chat_id: str = "",
+        cleanup: "Callable[[], Awaitable[None]] | None" = None,
     ) -> str:
         """登记后台任务，返回应作为工具返回值的话术。
 
         work: 异步可调用，成功返回内容段列表，失败/超时返回 None 或抛异常。
+        cleanup: 发送尝试之后调用的收尾钩子（无论成败）——成品文件（视频等）
+                 必须等发送后才删，用这个钩子，不要在 work 的 finally 里删。
         返回值：接受时为 ack_text（由调用方原样 return）；占线时为占线话术。
         """
         chat_id = chat_id or self._current_chat_id()
@@ -117,19 +120,27 @@ class TaskManager:
                 logger.warning(f"[{chat_id}] {kind} 后台任务异常: {type(e).__name__}: {e}")
                 segments = None
             elapsed = time.monotonic() - started
-            if segments:
-                if done_text:
-                    text = done_text
+            try:
+                if segments:
+                    if done_text:
+                        text = done_text
+                    else:
+                        pool = _DONE_TEMPLATES.get(kind, _DONE_TEMPLATES["_default"])
+                        text = random.choice(pool) if pool else ""
+                    out = ([ReplySegment(type="text", data=text)] if text else []) + segments
+                    await self._send(chat_id, out)
+                    logger.info(f"[{chat_id}] {kind} 后台任务完成，已直发（{elapsed:.1f}s）")
                 else:
-                    pool = _DONE_TEMPLATES.get(kind, _DONE_TEMPLATES["_default"])
-                    text = random.choice(pool) if pool else ""
-                out = ([ReplySegment(type="text", data=text)] if text else []) + segments
-                await self._send(chat_id, out)
-                logger.info(f"[{chat_id}] {kind} 后台任务完成，已直发（{elapsed:.1f}s）")
-            else:
-                if fail_text:
-                    await self._send(chat_id, [ReplySegment(type="text", data=fail_text)])
-                logger.info(f"[{chat_id}] {kind} 后台任务失败，已发降级文案（{elapsed:.1f}s）")
+                    if fail_text:
+                        await self._send(chat_id, [ReplySegment(type="text", data=fail_text)])
+                    logger.info(f"[{chat_id}] {kind} 后台任务失败，已发降级文案（{elapsed:.1f}s）")
+            finally:
+                # 成品文件等「发送尝试之后」才清理——提前删会让 NapCat 拿到不存在的路径
+                if cleanup is not None:
+                    try:
+                        await cleanup()
+                    except Exception as e:
+                        logger.warning(f"[{chat_id}] {kind} 任务收尾清理异常: {e}")
 
         task = asyncio.create_task(_runner(), name=f"bg-{kind}-{chat_id}")
         self._running[(chat_id, kind)] = task

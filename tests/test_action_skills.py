@@ -80,13 +80,16 @@ class TestNoticePoke:
     async def test_poke_to_bot_becomes_addressed_message(self, monkeypatch):
         from junjun_adapter_napcat.recv_handler import notice_handler as nh
 
-        handled = []
+        sent = []
 
-        class _FakeGateway:
-            async def handle_inbound(self, msg_dict):
-                handled.append(msg_dict)
+        async def _fake_send(msg_base):
+            sent.append(msg_base)
 
-        monkeypatch.setattr("junjun_core.gateway.router._gateway", _FakeGateway())
+        # poke 必须经 message_send_instance 走 WS 到核心网关——
+        # adapter 是独立进程，本进程的 gateway 只是 echo 占位（旧路由 poke 必丢）
+        monkeypatch.setattr(
+            "junjun_adapter_napcat.message_sending.message_send_instance.message_send",
+            _fake_send)
 
         async def _allow(u, g):
             return True
@@ -105,10 +108,10 @@ class TestNoticePoke:
             "post_type": "notice", "notice_type": "notify", "sub_type": "poke",
             "self_id": 10000001, "target_id": 10000001, "user_id": 12345, "group_id": 999,
         })
-        assert len(handled) == 1
-        msg = handled[0]
-        assert msg["message_info"]["additional_config"]["at_bot"] is True
-        assert "戳" in msg["message_segment"]["data"]
+        assert len(sent) == 1
+        msg = sent[0]
+        assert msg.message_info.additional_config["at_bot"] is True
+        assert "戳" in msg.message_segment.data
 
     @pytest.mark.asyncio
     async def test_poke_not_targeting_bot_ignored(self, monkeypatch):

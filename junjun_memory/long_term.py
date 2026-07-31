@@ -33,6 +33,16 @@ def _graph_cfg() -> dict:
         return {}
 
 
+def _chat_allowed(item_chat: str, chat_id) -> bool:
+    """chat_id 过滤：None 放行；str 精确匹配；集合/元组 任一命中
+    （processor 检索传 (会话, "knowledge")，知识库条目也能被召回）。"""
+    if chat_id is None:
+        return True
+    if isinstance(chat_id, str):
+        return item_chat == chat_id
+    return item_chat in chat_id
+
+
 @dataclass
 class MemoryItem:
     text: str
@@ -157,7 +167,7 @@ class LongTermMemory:
                 if pos < 0 or score < 0.3:
                     continue
                 item = self._items[self._vec_map[int(pos)]]
-                if chat_id and item.chat_id != chat_id:
+                if not _chat_allowed(item.chat_id, chat_id):
                     continue
                 out.append(item)
                 if len(out) >= top_k:
@@ -175,7 +185,7 @@ class LongTermMemory:
         return out
 
     def _spread_related(self, seeds: List[MemoryItem], *,
-                        chat_id: Optional[str]) -> List[MemoryItem]:
+                        chat_id) -> List[MemoryItem]:
         """PPR 图扩散：把种子的相关簇追加到结果尾部。任何失败返回原结果。"""
         try:
             from junjun_memory.memory_graph import get_memory_graph
@@ -193,7 +203,7 @@ class LongTermMemory:
                 it = self._items[i]
                 if id(it) in in_out:
                     continue
-                if chat_id and it.chat_id != chat_id:
+                if not _chat_allowed(it.chat_id, chat_id):
                     continue
                 picked.append(it)
             if picked:
@@ -203,12 +213,12 @@ class LongTermMemory:
             logger.debug(f"图扩散失败（返回原结果）: {e}")
             return seeds
 
-    def _keyword_search(self, query: str, *, top_k: int, chat_id: Optional[str]) -> List[MemoryItem]:
+    def _keyword_search(self, query: str, *, top_k: int, chat_id) -> List[MemoryItem]:
         """降级：2-gram 重叠计分。"""
         grams = {query[i:i + 2] for i in range(len(query) - 1)} or {query}
         scored = []
         for item in self._items:
-            if chat_id and item.chat_id != chat_id:
+            if not _chat_allowed(item.chat_id, chat_id):
                 continue
             hits = sum(1 for g in grams if g in item.text)
             if hits:
