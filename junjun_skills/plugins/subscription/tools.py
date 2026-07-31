@@ -203,8 +203,9 @@ async def check_subscriptions() -> None:
 
 @tool
 async def subscribe_updates(source: str, target: str) -> str:
-    """订阅创作者更新，对方有新作品时你会主动发消息通知。
-    用户说「帮我盯着/关注一下/订阅/更新了告诉我」某个 P 站作者或 B 站 UP 主时使用。
+    """订阅创作者更新，对方有新作品时你会主动发消息通知。这是「盯梢」唯一真正的入口：
+    用户说「帮我盯着/关注一下/订阅/更新了告诉我/出新作品叫我」时必须调用本工具创建订阅。
+    注意：只调 save_memory 记住这件事不等于盯梢——记忆不会触发任何检查，必须用本工具。
 
     Args:
         source: pixiv（P 站小说作者）或 bilibili（B 站 UP 主）
