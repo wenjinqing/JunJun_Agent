@@ -35,6 +35,51 @@ def _called_silence_tool(messages: list) -> bool:
     return False
 
 
+# 意图自检规则：强意图词 -> 必须真正调用的工具（顺序敏感，先长后短，
+# 「取消订阅」含「订阅」，必须先匹配）
+_INTENT_RULES = [
+    (("取消订阅", "别盯", "退订", "不用盯"), "unsubscribe"),
+    (("盯", "订阅", "更新了告诉", "出新了告诉", "出新叫我"), "subscribe_updates"),
+    (("提醒我", "记得提醒", "到点叫", "到时候叫"), "set_reminder"),
+]
+
+_NUDGE_PROMPT = (
+    "（系统追问）对方的请求包含明确的「{intent}」意图，必须调用 {tool} 工具"
+    "才能真正生效，你刚才没有调用它。请现在调用该工具完成请求；"
+    "如果工具调用失败或确实办不到，直接如实告诉对方办不到，不要口头承诺。"
+)
+
+
+def _called_tool_names(messages: list) -> set:
+    names = set()
+    for m in messages:
+        if isinstance(m, AIMessage):
+            for tc in (m.tool_calls or []):
+                names.add(tc.get("name"))
+    return names
+
+
+def _intent_nudge(latest_text: str, result_messages: list, available: set):
+    """强意图命中但对应工具没调 -> 返回系统追问文本（最多一条），否则 None。
+
+    背景：弱模型常把「帮我盯着xxx」当成记忆任务只调 save_memory 或纯口头
+    答应——动作没生效用户却以为办好了。给它一次补救轮比换贵模型便宜。
+    """
+    text = (latest_text or "").strip()
+    if not text:
+        return None
+    called = _called_tool_names(result_messages)
+    for keywords, tool_name in _INTENT_RULES:
+        if any(kw in text for kw in keywords):
+            if tool_name in called:
+                return None            # 已正确调用
+            if tool_name not in available:
+                return None            # 工具被掩码裁掉，追问也调不了（掩码层的问题）
+            intent = next(kw for kw in keywords if kw in text)
+            return _NUDGE_PROMPT.format(intent=intent, tool=tool_name)
+    return None
+
+
 def _record_usage(messages: list, chat_id: str, request_type: str = "agent") -> None:
     """从 AIMessage.usage_metadata 提取 token 用量落库（失败静默）。"""
     try:
@@ -188,6 +233,36 @@ class JunJunAgent:
         if _called_silence_tool(messages):
             logger.debug(f"[{self.session.chat_id}] agent 选择沉默")
             return None
+
+        # ---- 意图自检（一轮补救）：强意图词命中但对应工具没调 -> 追问重来 ----
+        if bool(cfg.raw.get("agent", {}).get("intent_retry", True)):
+            try:
+                available = {t.name for t in get_tools(self.session)}
+                nudge = _intent_nudge(latest_text, messages, available)
+            except Exception:
+                nudge = None
+            if nudge:
+                logger.info(f"[{self.session.chat_id}] 意图自检：追问补调工具 [trace={trace_id}]")
+                try:
+                    retry = await self._agent.ainvoke(
+                        {"messages": messages + [HumanMessage(content=nudge)]},
+                        config={
+                            "callbacks": callbacks or [],
+                            "recursion_limit": 2 * eff_iter + 1,
+                            "metadata": {
+                                "chat_id": self.session.chat_id,
+                                "trace_id": trace_id,
+                                "langfuse_session_id": self.session.chat_id,
+                                "langfuse_tags": ["junjun", "agent", "intent-retry"],
+                            },
+                        },
+                    )
+                    messages = retry.get("messages", messages)
+                    _record_usage(messages, self.session.chat_id)
+                    if _called_silence_tool(messages):
+                        return None
+                except Exception as e:
+                    logger.warning(f"意图补救轮异常（沿用首轮结果）: {type(e).__name__}: {e}")
 
         # DeepSeek 官方规则（调研确认）：
         # - 无工具调用时：上一轮的 reasoning_content 禁止拼入后续 context（传了也被忽略）

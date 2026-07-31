@@ -232,3 +232,8 @@ max_spread = 2    # 每次检索最多补充几条相关记忆
 [reflection]
 enable = true
 every_n = 50
+
+# ---------- Agent 决策 ----------
+[agent]
+intent_retry = true   # 意图自检：强意图词（盯着/订阅/提醒我…）没调对应工具时追问补调一轮
+
