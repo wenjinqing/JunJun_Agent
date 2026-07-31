@@ -22,6 +22,16 @@ _LEVELS = [
     (30.0, "熟人"), (10.0, "认识"), (0.0, "陌生"),
 ]
 
+# P2-19 关系驱动行为：好感度档位 -> 行为差异（注入决策上下文，模型照着调整语气）
+_LEVEL_BEHAVIOR = {
+    "挚友": "和 ta 无话不谈，可以主动分享心事、撒娇、开玩笑，尺度随意",
+    "好朋友": "和 ta 亲近自然，玩笑随便开，会主动关心 ta 的事",
+    "朋友": "和 ta 友好放松，可以开适度的玩笑",
+    "熟人": "和 ta 礼貌随和，玩笑适度，不交心",
+    "认识": "和 ta 客气一点，刚认识不久，保持距离感",
+    "陌生": "对 ta 保持礼貌和距离，还不熟，别乱开玩笑",
+}
+
 
 def level_name(score: float) -> str:
     """好感度等级称号。"""
@@ -29,6 +39,11 @@ def level_name(score: float) -> str:
         if score >= threshold:
             return name
     return "陌生"
+
+
+def behavior_hint(level: str) -> str:
+    """关系档位 -> 行为指导（注入 prompt，模型据此调整语气亲疏）。"""
+    return _LEVEL_BEHAVIOR.get(level, _LEVEL_BEHAVIOR["陌生"])
 
 
 def note_interaction(user_id: str, *, addressed: bool = False) -> None:

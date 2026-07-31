@@ -203,6 +203,11 @@ enable = true
 [perception]
 ready_wait_seconds = 3.0  # 决策前等待在途 VLM 识图的上限秒数；超时降级占位但在途任务继续跑
 
+# ---------- 关系驱动行为（好感度真正影响行为） ----------
+[relationship]
+enable = true            # 好感度档位 + 行为指导注入决策上下文（语气亲疏按关系调整）
+proactive_weight = true  # 主动搭话按亲密度排序，高好感度优先
+
 # ---------- 自我反思（定期自评回复质量，私聊管理员） ----------
 [reflection]
 enable = true
