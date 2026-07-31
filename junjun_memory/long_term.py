@@ -296,7 +296,24 @@ class LongTermMemory:
         removed = len(self._items) - len(keep_ids)
         if not removed:
             return 0
-        # 重建：向量条目从旧索引 reconstruct
+        self._rebuild(keep_ids)
+        logger.info(f"遗忘 {removed} 条记忆，索引已重建（{len(keep_ids)} 条保留）")
+        return removed
+
+    def remove_where(self, pred) -> int:
+        """按谓词删除记忆并重建索引（如 /forget 关键词清理）。返回删除数。"""
+        self.load()
+        keep_ids = [i for i, it in enumerate(self._items) if not pred(it)]
+        removed = len(self._items) - len(keep_ids)
+        if not removed:
+            return 0
+        self._rebuild(keep_ids)
+        logger.info(f"按条件删除 {removed} 条记忆（{len(keep_ids)} 条保留）")
+        return removed
+
+    def _rebuild(self, keep_ids: list) -> None:
+        """按保留下标重建 items + faiss 索引并落盘。向量条目从旧索引 reconstruct。"""
+        import faiss
         old_pos = {item_idx: pos for pos, item_idx in enumerate(self._vec_map)}
         new_index = faiss.IndexFlatIP(EMBED_DIM)
         new_items, new_vec_map = [], []
@@ -311,8 +328,6 @@ class LongTermMemory:
             new_index.add(np.vstack(vecs))
         self._index, self._items, self._vec_map = new_index, new_items, new_vec_map
         self.save()
-        logger.info(f"遗忘 {removed} 条记忆，索引已重建（{len(new_items)} 条保留）")
-        return removed
 
 
 _ltm: Optional[LongTermMemory] = None

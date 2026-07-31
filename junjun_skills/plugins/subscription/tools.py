@@ -201,27 +201,15 @@ async def check_subscriptions() -> None:
 
 # ---------------------------------------------------------------- LLM 工具
 
-@tool
-async def subscribe_updates(source: str, target: str) -> str:
-    """订阅创作者更新，对方有新作品时你会主动发消息通知。这是「盯梢」唯一真正的入口：
-    用户说「帮我盯着/关注一下/订阅/更新了告诉我/出新作品叫我」时必须调用本工具创建订阅。
-    注意：只调 save_memory 记住这件事不等于盯梢——记忆不会触发任何检查，必须用本工具。
+# ---------------------------------------------------------------- 创建（工具与命令共用）
 
-    Args:
-        source: pixiv（P 站小说作者）或 bilibili（B 站 UP 主）
-        target: P 站作者 UID（数字或主页 URL）；B 站 UP 主的 mid 或昵称
-    """
-    from junjun_skills.builtin.memory_skills import current_chat_id
-    from junjun_core.security import current_user_id, current_nickname
-
+async def _do_subscribe(source: str, target: str, chat_id: str,
+                        user_id: str, nickname: str) -> str:
     kind_map = {"pixiv": "pixiv_author", "p站": "pixiv_author",
                 "bilibili": "bili_up", "b站": "bili_up"}
-    kind = kind_map.get(source.strip().lower())
+    kind = kind_map.get((source or "").strip().lower())
     if not kind:
         return f"不认识订阅源「{source}」，目前支持 pixiv（P 站作者）和 bilibili（B 站 UP 主）。"
-
-    chat_id = current_chat_id.get()
-    user_id = current_user_id.get()
     if not chat_id:
         return "拿不到当前会话，订阅创建失败。"
     if _chat_sub_count(chat_id) >= int(_cfg().get("max_per_chat", _MAX_PER_CHAT)):
@@ -238,12 +226,28 @@ async def subscribe_updates(source: str, target: str) -> str:
             return f"没找到叫「{target}」的 UP 主，可以直接给我 ta 的 mid（空间 URL 里的数字）。"
 
     baseline, name = await _baseline_for(kind, target_id)
-    sub = _create(kind, target_id, chat_id, user_id, current_nickname.get(),
+    sub = _create(kind, target_id, chat_id, user_id, nickname,
                   baseline, name or found_name)
     display = sub.target_name or target_id
     return (f"订阅好了：{_KIND_NAMES[kind]}「{display}」（#{sub.id}）。"
             f"每 {sub.interval_minutes} 分钟查一次，有更新我会主动来说。"
             f"现有内容不会轰炸你，只盯新发的。想取消说「取消订阅 {sub.id}」。")
+
+
+@tool
+async def subscribe_updates(source: str, target: str) -> str:
+    """订阅创作者更新，对方有新作品时你会主动发消息通知。这是「盯梢」唯一真正的入口：
+    用户说「帮我盯着/关注一下/订阅/更新了告诉我/出新作品叫我」时必须调用本工具创建订阅。
+    注意：只调 save_memory 记住这件事不等于盯梢——记忆不会触发任何检查，必须用本工具。
+
+    Args:
+        source: pixiv（P 站小说作者）或 bilibili（B 站 UP 主）
+        target: P 站作者 UID（数字或主页 URL）；B 站 UP 主的 mid 或昵称
+    """
+    from junjun_skills.builtin.memory_skills import current_chat_id
+    from junjun_core.security import current_user_id, current_nickname
+    return await _do_subscribe(source, target, current_chat_id.get(),
+                               current_user_id.get(), current_nickname.get())
 
 
 # ---------------------------------------------------------------- 列表/取消（工具与命令共用）
@@ -299,6 +303,18 @@ TOOLS = [subscribe_updates, list_subscriptions, unsubscribe]
 
 
 # ---------------------------------------------------------------- 命令
+
+@register_command("sub", aliases=["订阅"], plugin="subscription",
+                  description="订阅更新（/sub pixiv <UID> 或 /sub bili <mid|昵称>）")
+async def sub_cmd(ctx) -> str:
+    """确定性创建通道：不走 LLM 工具选择，命令直达。"""
+    from junjun_core.security import current_user_id, current_nickname
+    parts = (ctx.args or "").split(None, 1)
+    if len(parts) < 2:
+        return "用法：/sub pixiv <作者UID或链接> 或 /sub bili <UP主mid|昵称>"
+    return await _do_subscribe(parts[0], parts[1], ctx.session.chat_id,
+                               current_user_id.get(), current_nickname.get())
+
 
 @register_command("subs", aliases=["订阅列表"], plugin="subscription",
                   description="查看本会话订阅")

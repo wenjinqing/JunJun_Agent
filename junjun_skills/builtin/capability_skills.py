@@ -122,6 +122,20 @@ def get_capabilities(query_type: str = "all") -> str:
 from junjun_agent.commands import register_command  # noqa: E402
 
 
+@register_command("forget", aliases=["忘掉"], plugin="builtin",
+                  admin_only=True, description="删除含关键词的长期记忆")
+async def forget_cmd(ctx) -> str:
+    """/forget <关键词>：删除所有含该关键词的长期记忆（含向量索引重建）。"""
+    kw = (ctx.args or "").strip()
+    if not kw:
+        return "用法：/forget <关键词>"
+    from junjun_memory.long_term import get_long_term_memory
+    removed = get_long_term_memory().remove_where(lambda it: kw in it.text)
+    if removed:
+        return f"已删除 {removed} 条含「{kw}」的记忆。"
+    return f"没找到含「{kw}」的记忆。"
+
+
 @register_command("diary", aliases=["日记"], plugin="builtin",
                   admin_only=True, description="看日记（/diary now = 立即写今天的）")
 async def diary_cmd(ctx) -> str:

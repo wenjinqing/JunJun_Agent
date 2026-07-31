@@ -197,3 +197,46 @@ class TestNotifyFormat:
         sub = SimpleNamespace(kind="bili_up", target_name="某UP", target_id="42")
         text = _env._fmt_notify(sub, [{"seen": "1", "title": "新视频", "url": "http://x"}])
         assert "某UP" in text and "《新视频》" in text and "http://x" in text
+
+
+class TestDoSubscribe:
+    @pytest.mark.asyncio
+    async def test_create_via_command_path(self, _env, monkeypatch):
+        """确定性命令通道：_do_subscribe 直接落库（绕过 LLM 工具选择）。"""
+        from junjun_skills.plugins.pixiv_novel import tools as pixiv
+
+        async def _works(uid):
+            return {"author": "某作者", "series": [], "novels": [{"id": "105", "title": "最新"}]}
+
+        monkeypatch.setattr(pixiv, "_fetch_author_works", _works)
+        reply = await _env._do_subscribe("pixiv", "16689973", "qq:999:group", "111", "甲")
+        assert "订阅好了" in reply and "#" in reply
+        rows = list(m.Subscription.select())
+        assert len(rows) == 1
+        assert rows[0].kind == "pixiv_author" and rows[0].last_seen == "105"
+        assert rows[0].target_name == "某作者"
+
+    @pytest.mark.asyncio
+    async def test_bad_source_rejected(self, _env):
+        reply = await _env._do_subscribe("youtube", "123", "qq:999:group", "111", "甲")
+        assert "不认识订阅源" in reply
+
+
+class TestRemoveWhere:
+    def test_remove_matching_memories(self, tmp_path, monkeypatch):
+        """remove_where：按谓词删除并重建索引（/forget 的底层）。"""
+        from junjun_memory.long_term import LongTermMemory
+        ltm = LongTermMemory.__new__(LongTermMemory)
+        ltm._dir = tmp_path
+        ltm._items = []
+        ltm._index = None
+        ltm._vec_map = []
+        ltm._loaded = True
+        import asyncio
+        asyncio.run(ltm.add("温衿青让君君盯着作者16689973", "qq:1:group"))
+        asyncio.run(ltm.add("白菜兔今天吃了火锅", "qq:1:group"))
+        asyncio.run(ltm.add("另一条关于16689973的记录", "qq:1:group"))
+        removed = ltm.remove_where(lambda it: "16689973" in it.text)
+        assert removed == 2
+        assert len(ltm._items) == 1
+        assert "火锅" in ltm._items[0].text
