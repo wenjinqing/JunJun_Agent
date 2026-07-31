@@ -105,10 +105,19 @@ class SessionQueueManager:
 
     def dispatch(self, session, meta, handler) -> None:
         q = self._queues.get(session.chat_id)
+        # worker 已退出（5 分钟空闲超时）且队列空：旧条目回收重建，防只增不减
+        if q is not None and q._task is not None and q._task.done() and q._queue.empty():
+            q = None
         if q is None:
             q = SessionQueue(session.chat_id, handler)
             self._queues[session.chat_id] = q
         q.put(session, meta)
+
+    def drop(self, chat_id: str) -> None:
+        """会话淘汰时清队列条目（有消息在飞的会话不会被淘汰——last_active 新）。"""
+        q = self._queues.get(chat_id)
+        if q is not None and (q._task is None or q._task.done()) and q._queue.empty():
+            self._queues.pop(chat_id, None)
 
     async def stop_all(self) -> None:
         for q in self._queues.values():

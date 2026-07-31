@@ -63,9 +63,25 @@ class JunJunAgent:
         if model is None:
             from junjun_llm import get_chat_model
             model = get_chat_model("agent")
+        self._model = model  # 留引用：会话淘汰时关闭 httpx 连接池（防泄漏）
         # system prompt 留空，每轮由 process() 动态注入 SystemMessage
         self._agent = create_agent(model=model, tools=get_tools(session),
                                    middleware=[PlanMiddleware()])
+
+    async def aclose(self) -> None:
+        """关闭模型客户端连接池（会话淘汰时调用）。best-effort，失败静默。"""
+        import asyncio as _aio
+        models = [self._model]
+        models.extend(getattr(self._model, "fallbacks", None) or [])
+        for m in models:
+            ac = getattr(m, "async_client", None)
+            try:
+                if ac is not None and hasattr(ac, "close"):
+                    res = ac.close()
+                    if _aio.iscoroutine(res):
+                        await res
+            except Exception:
+                pass
 
     async def process(
         self,
