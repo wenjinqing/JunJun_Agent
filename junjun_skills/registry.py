@@ -208,8 +208,10 @@ def get_tools(session=None) -> List[BaseTool]:
 def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
     """按会话最近话题语义相关性过滤工具，保留 ≤12 个。
 
-    核心工具永远保留；其余按「最近 3 条消息」与「工具 description」的
-    embedding 余弦相似度排序取前 8 个。embedding 不可用时降级关键词匹配。
+    核心工具永远保留；话题关键词命中的工具直接钉住（强词信号比 embedding
+    可靠，且 embedding 路径在 LangGraph 工作线程里实际走不通，兜底就是
+    关键词）；其余按「最近 3 条消息」与「工具 description」的 embedding
+    余弦相似度排序补满 8 个。embedding 不可用时降级纯关键词匹配。
     """
     CORE = {"do_not_reply", "get_time", "recall_memory", "save_memory",
             "set_reminder", "list_reminders", "manage_mood", "send_message",
@@ -221,6 +223,13 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
     recent_text = ""
     if session.memory:
         recent_text = " ".join(e.text for e in session.memory.entries[-3:])
+
+    # 关键词钉住：消息里出现工具强触发词的直接保留（上限 6 防关键词风暴）
+    pinned = _pinned_by_keywords(other_tools, recent_text)[:6]
+    fill_budget = max(0, 8 - len(pinned))
+
+    def _fill(scored):
+        return [t for _, t in scored if t not in pinned][:fill_budget]
 
     # embedding 检索（不可用降级关键词）
     # 注意：不在非主线程调 get_event_loop()——LangGraph 的 asyncio_N 线程
@@ -254,7 +263,7 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
                             score = 0.0
                         scored.append((score, t))
                     scored.sort(key=lambda x: -x[0])
-                    return core_tools + [t for _, t in scored[:8]]
+                    return core_tools + pinned + _fill(scored)
     except Exception:
         pass
 
@@ -265,7 +274,14 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
         score = sum(1 for kw in _TOPIC_KEYWORDS.get(t.name, []) if kw in recent_lower)
         scored.append((score, t))
     scored.sort(key=lambda x: -x[0])
-    return core_tools + [t for _, t in scored[:8]]
+    return core_tools + pinned + _fill(scored)
+
+
+def _pinned_by_keywords(tools: List[BaseTool], recent_text: str) -> List[BaseTool]:
+    """话题关键词命中的工具（强词触发直接钉住，不参与相关性排序）。"""
+    recent_lower = recent_text.lower()
+    return [t for t in tools
+            if any(kw in recent_lower for kw in _TOPIC_KEYWORDS.get(t.name, []))]
 
 
 # 工具名 -> 话题关键词（embedding 降级时的兜底）
@@ -293,6 +309,9 @@ _TOPIC_KEYWORDS = {
     "make_qrcode": ["二维码"],
     "decode_qrcode": ["二维码", "扫码"],
     "today_in_history": ["历史上的今天", "今天是什么日子"],
+    "subscribe_updates": ["订阅", "盯", "关注", "更新了告诉", "出新", "up主", "p站", "pixiv"],
+    "list_subscriptions": ["订阅", "盯"],
+    "unsubscribe": ["取消订阅", "别盯", "退订", "不用盯"],
 }
 
 
