@@ -64,16 +64,23 @@ async def message_recv(server_connection: Server.ServerConnection):
 
 
 async def message_process():
+    """消息消费循环：单条坏消息只打日志跳过——不能杀死整个收信管线。"""
     while True:
         message = await message_queue.get()
-        post_type = message.get("post_type")
-        if post_type == "message":
-            await message_handler.handle_raw_message(message)
-        elif post_type == "meta_event":
-            await meta_event_handler.handle_meta_event(message)
-        elif post_type == "notice":
-            await notice_handler.handle_notice(message)
-        message_queue.task_done()
+        try:
+            post_type = message.get("post_type")
+            if post_type == "message":
+                await message_handler.handle_raw_message(message)
+            elif post_type == "meta_event":
+                await meta_event_handler.handle_meta_event(message)
+            elif post_type == "notice":
+                await notice_handler.handle_notice(message)
+        except Exception as e:
+            logger.warning(
+                f"单条消息处理失败（已跳过，收信继续）: {type(e).__name__}: {e} "
+                f"| post_type={message.get('post_type')}")
+        finally:
+            message_queue.task_done()
         await asyncio.sleep(0.05)
 
 

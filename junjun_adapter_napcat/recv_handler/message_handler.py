@@ -100,8 +100,13 @@ class MessageHandler:
 
     async def check_allow_to_chat(self, user_id, group_id=None) -> bool:
         cfg = get_config().chat
-        uid = int(user_id) if user_id is not None else None
-        gid = int(group_id) if group_id is not None else None
+        # 畸形 id（非数字）按拒绝处理，不让 ValueError 炸到消费循环
+        try:
+            uid = int(user_id) if user_id is not None else None
+            gid = int(group_id) if group_id is not None else None
+        except (TypeError, ValueError):
+            logger.warning(f"黑白名单判定收到畸形 id: user={user_id} group={group_id}，按拒绝处理")
+            return False
         if gid is not None:
             if cfg.group_list_type == "whitelist" and gid not in cfg.group_list:
                 return False

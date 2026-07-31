@@ -428,7 +428,10 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
         query = _re.sub(r"\[[^\]]{0,220}\]", " ", meta.text or "")
         query = _re.sub(r"@\S+\s*", " ", query).strip() or (meta.text or "")
         items = await _aio.wait_for(
-            get_long_term_memory().search(query, top_k=3, chat_id=session.chat_id),
+            # chat_id 多值过滤：本会话记忆 + 知识库条目（"knowledge"）。
+            # 只传会话 id 时知识库永远召不回——导入的知识在日常聊天里是死功能
+            get_long_term_memory().search(query, top_k=3,
+                                          chat_id=(session.chat_id, "knowledge")),
             timeout=1.5,
         )
         if items:

@@ -101,11 +101,19 @@ async def _fire(task) -> None:
         should_reply=True,
     ))
 
-    # 周期任务顺延，一次性任务完成
+    # 周期任务顺延到【下一个未来时刻】，一次性任务完成。
+    # 注意必须推进到未来：在旧时间上加一个周期，若停机多日，remind_time 仍在过去，
+    # 每 60s 轮询都满足到期条件 -> 同一条提醒连续补发（还每次调 LLM 生成文案）。
+    import time as _time
+    now = _time.time()
     if task.repeat_type == "daily":
         task.remind_time += 86400
+        while task.remind_time <= now:
+            task.remind_time += 86400
     elif task.repeat_type == "weekly":
         task.remind_time += 7 * 86400
+        while task.remind_time <= now:
+            task.remind_time += 7 * 86400
     else:
         task.is_completed = True
     task.save()

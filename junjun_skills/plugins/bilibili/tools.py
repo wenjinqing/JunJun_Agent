@@ -372,8 +372,13 @@ def _info_card_segments(info: dict, page_url: str, note: str = "") -> list:
 
 # ---------------------------------------------------------------- 主流程
 
-async def _process_to_segments(url: str) -> list:
-    """解析 -> 下载 -> （必要时压缩）-> 组装段；所有失败路径降级为信息卡/友好文本段。"""
+async def _process_to_segments(url: str, keep: "list[Path] | None" = None) -> list:
+    """解析 -> 下载 -> （必要时压缩）-> 组装段；所有失败路径降级为信息卡/友好文本段。
+
+    keep: 成品视频文件（要发出去的）不能在这里删——finally 只在函数返回时跑，
+    而发送发生在 task_manager 拿到段之后。成品路径放进 keep，由提交方在
+    发送后通过 task_manager 的 cleanup 钩子删除；其余中间文件 finally 照删。
+    """
     touched: list[Path] = []  # 本次产生的临时文件，finally 统一清理
     try:
         bvid = await extract_bvid(url)
@@ -439,7 +444,11 @@ async def _process_to_segments(url: str) -> list:
                 return _info_card_segments(info, page_url,
                                            note=f"（{reason}且压缩失败，请戳链接观看）")
 
-        logger.info(f"B站视频已发送: {info['bvid']} {info['title'][:30]}")
+        logger.info(f"B站视频待发送: {info['bvid']} {info['title'][:30]}")
+        if keep is not None:
+            # 成品文件移交发送方生命周期：发送后由 cleanup 钩子删，此处 finally 不碰
+            touched.remove(final)
+            keep.append(final)
         return [
             ReplySegment(type="text", data=f"📺 {info['title']}"),
             ReplySegment(type="video", data=str(final)),
@@ -456,14 +465,27 @@ async def _process_to_segments(url: str) -> list:
 
 
 async def _submit_process(chat_id: str, url: str) -> str:
-    """登记后台解析任务，返回 ack 话术（接受/占线）。下载+转码最坏给 10 分钟。"""
+    """登记后台解析任务，返回 ack 话术（接受/占线）。下载+转码最坏给 10 分钟。
+
+    成品视频文件：发送成功后由 cleanup 钩子删除（提前删 NapCat 会拿不到文件）。
+    """
+    produced: list[Path] = []
+
+    async def _cleanup() -> None:
+        for p in produced:
+            try:
+                p.unlink(missing_ok=True)
+            except Exception as e:
+                logger.warning(f"成品视频清理失败 {p}: {e}")
+
     return await task_manager.submit(
         kind="bilibili",
-        work=lambda: _process_to_segments(url),
+        work=lambda: _process_to_segments(url, keep=produced),
         ack_text="开始解析 B 站视频，请稍候～",
         fail_text="解析过程中出了点问题，稍后再试试吧。",
         timeout=600,
         chat_id=chat_id,
+        cleanup=_cleanup,
     )
 
 
