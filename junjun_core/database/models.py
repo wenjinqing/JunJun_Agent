@@ -5,6 +5,7 @@ SQLite WAL 模式；写操作统一走 writer 队列防并发锁。
 """
 
 import os
+import time
 from pathlib import Path
 
 from peewee import (
@@ -155,8 +156,27 @@ class Intimacy(BaseModel):
     daily_date = CharField(default="")        # daily_gain 对应日期 YYYY-MM-DD
 
 
+class SelfMood(BaseModel):
+    """全局自我心境：跨场景持续、DB 持久化，由聊天情绪评估与日记共同塑造。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, unique=True)
+    state = CharField(default="平静")
+    reason = CharField(default="")        # 心境来源（哪个场景/日记）
+    updated_at = FloatField(default=0.0)
+
+
+class DiaryEntry(BaseModel):
+    """日记：每天一篇第一人称自我叙事，同时进长期记忆（self:diary 域）。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    date = CharField(index=True)          # YYYY-MM-DD
+    content = TextField()
+    mood = CharField(default="")
+    created_at = FloatField(default=time.time)
+
+
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
-              OnlineTime, Intimacy]
+              OnlineTime, Intimacy, SelfMood, DiaryEntry]
 
 
 def init_database() -> None:

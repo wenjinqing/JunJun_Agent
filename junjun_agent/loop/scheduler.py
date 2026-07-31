@@ -169,6 +169,10 @@ def register_default_tasks() -> None:
         from junjun_express.reflector import expression_reflector
         await expression_reflector.check_and_ask()
 
+    async def diary():
+        from junjun_express.diary import diary_tick
+        await diary_tick()
+
     from junjun_core.config import get_global_config
     raw = get_global_config().raw
     interval = int(raw.get("reminder", {}).get("check_interval_seconds", 60))
@@ -190,3 +194,4 @@ def register_default_tasks() -> None:
     scheduler.add(ScheduledTask("online_time", online_time, interval=60))
     scheduler.add(ScheduledTask("db_cleanup", db_cleanup, interval=cleanup_h * 3600))
     scheduler.add(ScheduledTask("expression_reflect", expression_reflect, interval=5 * 60))
+    scheduler.add(ScheduledTask("diary", diary, interval=30 * 60))
