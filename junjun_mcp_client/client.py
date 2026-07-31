@@ -3,12 +3,19 @@
 - config/mcp_servers.toml 声明 server（command/args/cwd/env，stdio 传输）
 - 启动逐个连接（60s 超时），失败降级跳过不阻塞
 - 工具命名空间 mcp_<server>_<tool>，与内置 skill 冲突由 registry 重名报错承担
+
+2026-07-31 P1-9b 持久 session（原：每次工具调用冷启动子进程——Windows 下
+npx 冷启动数秒且计入 30s 工具超时，慢且超时常发）：
+- 启动时为每个 server 建立持久 session（进程常驻，调用只发 JSON-RPC）
+- 看门狗每 60s 健康检查（list_tools 5s 超时），失败自动重连并重绑工具
+- 工具调用经 holder 间接寻址，重连后无需重注册
 """
 
 import asyncio
 import logging
+from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import tomlkit
 
@@ -16,10 +23,20 @@ from junjun_core.observability import get_logger
 
 logger = get_logger("mcp.client")
 
-# mcp SDK 的 stdout_reader 对非 JSON 行打 logger.exception——
-# 某些第三方 server（bilibili-mcp-js 等）会把数据 print 到 stdout 污染协议流。
-# 解析失败静默（数据不会丢，只是 server 自己的日志喧哗），其它错误仍 WARN。
-logging.getLogger("mcp.client.stdio").setLevel(logging.CRITICAL)
+
+class _NonJsonNoiseFilter(logging.Filter):
+    """只压 mcp stdio 的「非 JSON 行」噪音（某些 server 把数据 print 到 stdout
+    污染协议流，解析失败不影响数据），其余协议错误/断连照常 WARN——
+    原 CRITICAL 一刀切把真错误也吞了，线上排障零线索。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if record.levelno <= logging.ERROR and "JSON" in msg:
+            return False
+        return True
+
+
+logging.getLogger("mcp.client.stdio").addFilter(_NonJsonNoiseFilter())
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MCP_CONFIG = PROJECT_ROOT / "config" / "mcp_servers.toml"
@@ -27,6 +44,8 @@ MCP_CONFIG = PROJECT_ROOT / "config" / "mcp_servers.toml"
 _CONNECT_TIMEOUT = 60.0   # 冷启动 npx/uvx 首次解析+下载较慢，60s 实测不够
 _TOOL_TIMEOUT = 30.0
 _RESULT_MAX_CHARS = 2000
+_WATCHDOG_INTERVAL = 60.0  # 健康检查间隔（秒）
+_HEALTH_TIMEOUT = 5.0      # 健康检查超时（秒）
 
 # 仅管理员可用的 MCP 工具（按工具原名匹配，注册时包权限门）
 # apply_relationship_penalty：惩罚处置行为，不能交给群友触发
@@ -67,45 +86,116 @@ def load_server_configs() -> Dict[str, dict]:
 
 class MCPManager:
     def __init__(self):
-        self._clients: Dict[str, object] = {}   # server 名 -> client（保活，工具调用经它建会话）
+        self._clients: Dict[str, object] = {}     # server 名 -> MultiServerMCPClient
+        self._sessions: Dict[str, object] = {}    # server 名 -> 持久 ClientSession
+        self._stacks: Dict[str, AsyncExitStack] = {}  # server 名 -> session 生命周期栈
+        self._holders: Dict[str, List[dict]] = {}  # server 名 -> 工具 coro 间接寻址 holder
+        self._configs: Dict[str, dict] = {}
         self._tools: List = []
+        self._watchdog: Optional[asyncio.Task] = None
 
     @property
     def tools(self) -> List:
         return self._tools
 
     async def start(self) -> int:
-        """并发连接全部 server 并拉工具。返回可用工具数；全失败返回 0 不抛。
-
-        2026-07-29：串行 -> 并发（9 个 server 启动时间从求和变取最大值）。
-        """
+        """并发连接全部 server（持久 session）并拉工具。返回可用工具数；全失败返回 0 不抛。"""
         configs = load_server_configs()
         if not configs:
             logger.info("无 MCP server 配置，跳过")
             return 0
+        self._configs = configs
         results = await asyncio.gather(
             *[self._connect_one(name, cfg) for name, cfg in configs.items()])
-        raw_tools = [t for tools in results for t in tools]
-        # 命名空间前缀 + 结果截断包装
-        self._tools = [self._wrap(t) for t in raw_tools]
+        # 命名空间前缀 + 结果截断包装（经 holder 间接寻址，重连后自动指向新 session）
+        self._tools = []
+        for name, tools in results:
+            for t in tools:
+                self._tools.append(self._wrap(t, name))
+        if self._watchdog is None or self._watchdog.done():
+            self._watchdog = asyncio.create_task(self._watchdog_loop(), name="mcp-watchdog")
         return len(self._tools)
 
-    async def _connect_one(self, name: str, cfg: dict) -> List:
-        """单 server：连接（重试 3 次）+ 拉工具。失败返回空列表不影响其他。"""
+    async def stop(self) -> None:
+        """关闭全部持久 session 与子进程（进程退出前调用）。"""
+        if self._watchdog is not None:
+            self._watchdog.cancel()
+            self._watchdog = None
+        for name, stack in list(self._stacks.items()):
+            try:
+                await stack.aclose()
+            except Exception as e:
+                logger.debug(f"MCP server [{name}] session 关闭异常（忽略）: {e}")
+        self._stacks.clear()
+        self._sessions.clear()
+
+    async def _connect_one(self, name: str, cfg: dict) -> tuple:
+        """单 server：持久 session（重试 3 次）+ 拉工具。失败返回 (name, []) 不影响其他。"""
         from langchain_mcp_adapters.client import MultiServerMCPClient
+        from langchain_mcp_adapters.tools import load_mcp_tools
         for attempt in (1, 2, 3):
+            stack = AsyncExitStack()
             try:
                 client = MultiServerMCPClient({name: cfg})
-                tools = await asyncio.wait_for(client.get_tools(), timeout=_CONNECT_TIMEOUT)
-                self._clients[name] = client  # 保活：工具每次调用经 client 建会话
-                logger.info(f"MCP server [{name}] 连接成功: {len(tools)} 个工具")
-                return tools
+                session = await asyncio.wait_for(
+                    stack.enter_async_context(client.session(name)),
+                    timeout=_CONNECT_TIMEOUT)
+                tools = await asyncio.wait_for(load_mcp_tools(session),
+                                               timeout=_CONNECT_TIMEOUT)
+                self._clients[name] = client
+                self._sessions[name] = session
+                self._stacks[name] = stack
+                self._holders.setdefault(name, [])
+                logger.info(f"MCP server [{name}] 持久 session 已建立: {len(tools)} 个工具")
+                return name, tools
             except Exception as e:
+                try:
+                    await stack.aclose()
+                except Exception:
+                    pass
                 if attempt == 3:
                     logger.warning(f"MCP server [{name}] 重试 3 次均失败（降级跳过）: {type(e).__name__}: {e}")
                 else:
                     logger.info(f"MCP server [{name}] 第 {attempt} 次连接失败，重试: {type(e).__name__}")
-        return []
+        return name, []
+
+    # ---------- 看门狗：健康检查 + 自动重连 ----------
+
+    async def _watchdog_loop(self) -> None:
+        while True:
+            await asyncio.sleep(_WATCHDOG_INTERVAL)
+            for name in list(self._sessions.keys()):
+                try:
+                    await asyncio.wait_for(self._sessions[name].list_tools(),
+                                           timeout=_HEALTH_TIMEOUT)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"MCP server [{name}] 健康检查失败，重连: "
+                                   f"{type(e).__name__}: {e}")
+                    await self._reconnect(name)
+
+    async def _reconnect(self, name: str) -> None:
+        """重建持久 session 并按工具名重绑 holder（已注册的工具无需重注册）。"""
+        cfg = self._configs.get(name)
+        if cfg is None:
+            return
+        old = self._stacks.pop(name, None)
+        if old is not None:
+            try:
+                await old.aclose()
+            except Exception:
+                pass
+        self._sessions.pop(name, None)
+        _name, tools = await self._connect_one(name, cfg)
+        new_by_name = {t.name: t for t in tools}
+        rebound = 0
+        for holder in self._holders.get(name, []):
+            nt = new_by_name.get(holder["tool_name"])
+            if nt is not None and nt.coroutine is not None:
+                holder["coro"] = nt.coroutine
+                rebound += 1
+        logger.info(f"MCP server [{name}] 重连完成，重绑 {rebound} 个工具")
 
     def register_all(self) -> None:
         """注入 skill registry（重名由 registry 报错）。_ADMIN_TOOLS 包权限门。"""
@@ -118,7 +208,7 @@ class MCPManager:
             except ValueError as e:
                 logger.warning(f"MCP 工具注册冲突（跳过）: {e}")
 
-    def _wrap(self, tool):
+    def _wrap(self, tool, server_name: str = ""):
         """加 mcp_ 前缀 + 超时 + 结果截断 + 内容提取。
 
         langchain-mcp-adapters 工具是 content_and_artifact 格式：
@@ -127,14 +217,21 @@ class MCPManager:
         2026-07-24 调整（用户反馈格式难看）：
         - content 是 [{'type': 'text', 'text': '...'}] 列表时，提取纯文本
         - 不用 markdown 格式，纯文本输出
+
+        2026-07-31：coroutine 经 holder 间接寻址——看门狗重连后 holder 指向
+        新 session 的工具，已注册到 registry 的包装对象无需变更。
         """
         original_coro = tool.coroutine
         if original_coro is not None:
-            async def guarded(*args, _orig=original_coro, **kwargs):
+            holder = {"tool_name": tool.name, "coro": original_coro}
+            self._holders.setdefault(server_name, []).append(holder)
+
+            async def guarded(*args, _holder=holder, **kwargs):
                 from junjun_core.retry import retry_async
 
                 async def _call():
-                    return await asyncio.wait_for(_orig(*args, **kwargs), timeout=_TOOL_TIMEOUT)
+                    return await asyncio.wait_for(_holder["coro"](*args, **kwargs),
+                                                  timeout=_TOOL_TIMEOUT)
 
                 try:
                     # 瞬态失败（网络抖动/限流/ECONNRESET）重试 3 次再降级
