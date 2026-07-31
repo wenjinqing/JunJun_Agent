@@ -208,6 +208,12 @@ ready_wait_seconds = 3.0  # 决策前等待在途 VLM 识图的上限秒数；�
 enable = true            # 好感度档位 + 行为指导注入决策上下文（语气亲疏按关系调整）
 proactive_weight = true  # 主动搭话按亲密度排序，高好感度优先
 
+# ---------- LPMM 图记忆（记忆关联扩散，只读增强） ----------
+[memory_graph]
+enable = true     # 检索命中后沿记忆图 PPR 扩散，补充相关记忆（false 即回滚扁平检索）
+damping = 0.85    # PPR 阻尼系数（0~1，越大扩散越远）
+max_spread = 2    # 每次检索最多补充几条相关记忆
+
 # ---------- 自我反思（定期自评回复质量，私聊管理员） ----------
 [reflection]
 enable = true
