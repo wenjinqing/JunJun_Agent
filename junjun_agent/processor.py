@@ -446,16 +446,31 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
 
 
 def _build_relation_block(session: ChatSession, meta: InboundMeta) -> str:
-    """发言者画像注入。失败降级空串。"""
+    """发言者画像 + 好感度档位注入（P2-19 关系驱动行为）。失败降级空串。"""
     if not meta.user_id:
         return ""
+    parts = []
+    # 好感度档位 + 行为指导：语气亲疏由真实互动数据驱动，不再千人一面
+    try:
+        from junjun_core.config import get_global_config
+        if get_global_config().raw.get("relationship", {}).get("enable", True):
+            from junjun_express.intimacy import behavior_hint, get_intimacy
+            score, count, level = get_intimacy(meta.user_id)
+            parts.append(
+                f"和 {meta.nickname or '对方'} 的关系：{level}"
+                f"（好感度 {score:.0f}/100，互动过 {count} 次）——{behavior_hint(level)}")
+    except Exception:
+        pass
     try:
         from junjun_memory.user_profile import get_profile_store
-        return get_profile_store().build_relation_block(
+        block = get_profile_store().build_relation_block(
             session.platform, meta.user_id, meta.nickname,
         )
+        if block:
+            parts.append(block)
     except Exception:
-        return ""
+        pass
+    return "\n".join(parts)
 
 
 async def _maybe_adjust_frequency(session: ChatSession) -> None:

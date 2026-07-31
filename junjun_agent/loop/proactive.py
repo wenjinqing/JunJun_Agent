@@ -46,6 +46,18 @@ def _in_silent_hours(now: Optional[datetime] = None) -> bool:
     return _in_range(now.hour * 60 + now.minute, spec)
 
 
+def _intimacy_weight(session) -> float:
+    """主动搭话选人权重（P2-19）：私聊取好感度分数，群聊 0。查询失败按 0。"""
+    if session.is_group:
+        return 0.0
+    try:
+        from junjun_express.intimacy import get_intimacy
+        uid = getattr(session, "user_id", "") or ""
+        return float(get_intimacy(uid)[0]) if uid else 0.0
+    except Exception:
+        return 0.0
+
+
 class ProactiveChatManager:
     def __init__(self):
         self._daily_count: Dict[str, int] = {}
@@ -140,12 +152,21 @@ class ProactiveChatManager:
         return True
 
     async def scan(self) -> None:
-        """调度器任务：扫全部会话。"""
+        """调度器任务：扫全部会话，高亲密度优先（P2-19 关系驱动选人）。"""
         from junjun_core.gateway.session_manager import get_session_manager
-        for session in list(get_session_manager().all_sessions().values()):
+        sessions = list(get_session_manager().all_sessions().values())
+        eligible = []
+        for s in sessions:
             try:
-                if self.eligible(session):
-                    await self.try_proactive(session)
+                if self.eligible(s):
+                    eligible.append(s)
+            except Exception as e:
+                logger.warning(f"[{s.chat_id}] 主动扫描 eligibility 异常: {e}")
+        if get_global_config().raw.get("relationship", {}).get("proactive_weight", True):
+            eligible.sort(key=_intimacy_weight, reverse=True)
+        for session in eligible:
+            try:
+                await self.try_proactive(session)
             except Exception as e:
                 logger.warning(f"[{session.chat_id}] 主动扫描异常: {e}")
 
