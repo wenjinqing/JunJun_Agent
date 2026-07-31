@@ -117,3 +117,28 @@ def get_capabilities(query_type: str = "all") -> str:
         return "当前没有启用的功能模块。"
 
     return "\n".join(parts)
+
+
+from junjun_agent.commands import register_command  # noqa: E402
+
+
+@register_command("diary", aliases=["日记"], plugin="builtin",
+                  admin_only=True, description="看日记（/diary now = 立即写今天的）")
+async def diary_cmd(ctx) -> str:
+    """/diary [日期|now]：查看最新/指定日期的日记；now 强制重写今天的。"""
+    from junjun_express import diary as diary_mod
+
+    arg = (ctx.args or "").strip()
+    if arg == "now":
+        content = await diary_mod.write_diary(force=True)
+        return f"今天的日记写好了：\n{content}" if content else "写日记失败了，看看日志。"
+    day = arg or None
+    if day is None:
+        from junjun_core.database.models import DiaryEntry
+        row = DiaryEntry.select().order_by(DiaryEntry.date.desc()).first()
+    else:
+        row = diary_mod._get_entry(day)
+    if row is None:
+        return f"还没有{'这一天' if day else ''}的日记（每天 {diary_mod._cfg().get('time', '23:30')} 自动写）。"
+    mood_txt = f"\n心情：{row.mood}" if row.mood else ""
+    return f"「{row.date}」的日记：\n{row.content}{mood_txt}"

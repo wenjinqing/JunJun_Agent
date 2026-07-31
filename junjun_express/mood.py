@@ -1,13 +1,15 @@
-"""情绪系统：对齐原 mood/mood_manager 语义。
+"""情绪系统：两层心境。
 
-- ChatMood: 按会话维护情绪文本描述
-- 新消息进入 L3 时触发重评（跟随 gate，省 token）；超时衰退回平静
+- ChatMood（会话层）：按会话维护情绪文本描述，新消息进 L3 时触发重评
+  （跟随 gate，省 token）；30 分钟无互动衰退回平静
+- 全局自我心境（SelfMood 表持久化）：跨场景持续的心境，由最近一次
+  情绪变化与每晚的日记共同塑造，重启不丢；超过 self_mood_hours 视为回到平静
 - enable_mood / emotion_style 配置对齐；情绪块进 persona prompt
 """
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
 
 from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger
@@ -41,9 +43,59 @@ class ChatMood:
 class MoodManager:
     def __init__(self):
         self._moods: Dict[str, ChatMood] = {}
+        self._self_mood: Optional[ChatMood] = None  # 懒加载自 SelfMood 表
 
     def _enabled(self) -> bool:
         return bool(get_global_config().raw.get("mood", {}).get("enable_mood", True))
+
+    # ---------------------------------------------------------------- 全局自我心境
+
+    def _self_fresh_hours(self) -> float:
+        try:
+            return float(get_global_config().raw.get("mood", {}).get("self_mood_hours", 12))
+        except (TypeError, ValueError):
+            return 12.0
+
+    def _load_self(self) -> ChatMood:
+        if self._self_mood is None:
+            try:
+                from junjun_core.database.models import SelfMood, _bot_id
+                row = SelfMood.get_or_none(SelfMood.bot_id == _bot_id())
+                if row:
+                    self._self_mood = ChatMood(state=row.state, updated_at=row.updated_at)
+            except Exception:
+                pass
+            if self._self_mood is None:
+                self._self_mood = ChatMood()
+        return self._self_mood
+
+    def get_self_mood(self) -> str:
+        """全局自我心境（超新鲜期视为回到平静，不落库）。"""
+        if not self._enabled():
+            return ""
+        sm = self._load_self()
+        if sm.state == _DEFAULT_MOOD:
+            return _DEFAULT_MOOD
+        if time.time() - sm.updated_at > self._self_fresh_hours() * 3600:
+            return _DEFAULT_MOOD
+        return sm.state
+
+    def set_self_mood(self, state: str, reason: str = "") -> None:
+        """更新全局自我心境并持久化（情绪重评变化 / 日记沉淀都会走这里）。"""
+        state = (state or "").strip()[:20]
+        if not state:
+            return
+        self._self_mood = ChatMood(state=state, updated_at=time.time())
+        try:
+            from junjun_core.database.models import SelfMood, _bot_id
+            row = SelfMood.get_or_none(SelfMood.bot_id == _bot_id())
+            if row is None:
+                SelfMood.create(state=state, reason=reason[:100], updated_at=time.time())
+            else:
+                row.state, row.reason, row.updated_at = state, reason[:100], time.time()
+                row.save()
+        except Exception as e:
+            logger.warning(f"自我心境持久化失败（仅内存保留）: {e}")
 
     def get_mood(self, chat_id: str) -> str:
         """读取情绪（自动衰退）。"""
@@ -63,12 +115,18 @@ class MoodManager:
             return ""
         base = f"你当前的情绪：{mood}"
         if any(w in mood for w in _MOOD_NEGATIVE):
-            return base + "。让情绪体现在行为上：现在不太想说话，回复尽量短（一两句）；" \
+            block = base + "。让情绪体现在行为上：现在不太想说话，回复尽量短（一两句）；" \
                           "不要主动发表情包、语音、画图，也不想折腾工具。"
-        if any(w in mood for w in _MOOD_POSITIVE):
-            return base + "。让情绪体现在行为上：现在很愿意聊，可以活泼一点；" \
+        elif any(w in mood for w in _MOOD_POSITIVE):
+            block = base + "。让情绪体现在行为上：现在很愿意聊，可以活泼一点；" \
                           "合适时主动发表情包/语音，被夸就大方得意。"
-        return base + "（让回复语气自然反映这个情绪）"
+        else:
+            block = base + "（让回复语气自然反映这个情绪）"
+        # 全局自我心境：与会话情绪不同时补充（它是更缓慢、跨场景的底色）
+        self_mood = self.get_self_mood()
+        if self_mood and self_mood != _DEFAULT_MOOD and self_mood != mood:
+            block += f"\n你的整体心境：{self_mood}（最近经历沉淀下来的底色，跨场景持续，让它自然地影响你的状态）"
+        return block
 
     def should_evaluate(self, chat_id: str) -> bool:
         if not self._enabled():
@@ -98,6 +156,8 @@ class MoodManager:
             if new_state and new_state != mood.state:
                 logger.info(f"[{chat_id}] 情绪变化: {mood.state} -> {new_state}")
                 mood.state = new_state
+                # 会话情绪变化同时塑造全局自我心境（最近的经历定义现在的自己）
+                self.set_self_mood(new_state, reason=chat_id)
             mood.updated_at = time.time()
         except Exception as e:
             logger.warning(f"情绪评估失败（保持 {mood.state}）: {e}")
