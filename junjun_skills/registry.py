@@ -274,7 +274,10 @@ def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
         score = sum(1 for kw in _TOPIC_KEYWORDS.get(t.name, []) if kw in recent_lower)
         scored.append((score, t))
     scored.sort(key=lambda x: -x[0])
-    return core_tools + pinned + _fill(scored)
+    kept = core_tools + pinned + _fill(scored)
+    logger.debug(f"工具掩码: {len(tools)} -> {len(kept)}"
+                 f"（钉住 {[t.name for t in pinned]}）")
+    return kept
 
 
 def _pinned_by_keywords(tools: List[BaseTool], recent_text: str) -> List[BaseTool]:

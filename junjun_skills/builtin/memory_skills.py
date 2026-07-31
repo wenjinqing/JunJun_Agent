@@ -35,6 +35,8 @@ async def recall_memory(query: str) -> str:
 @tool
 async def save_memory(content: str, importance: float = 0.8) -> str:
     """主动记住重要信息。当聊天中出现值得长期记住的事（约定、喜好、重要事件）时使用。
+    注意：本工具只是「记住」，不会执行任何动作——对方让你「盯着/订阅」某人或「到时间提醒」
+    时要用 subscribe_updates / set_reminder，不要用本工具。
 
     Args:
         content: 要记住的内容，一句话概括，如"甲下周三过生日"
