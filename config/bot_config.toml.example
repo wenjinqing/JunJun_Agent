@@ -89,6 +89,10 @@ word_replace_rate = 0.006  # 整词替换概率
 max_agent_iterations = 5       # 单轮决策最大工具调用轮数（防死循环，对应 recursion_limit）
 enable_jargon_detection = true # 黑话检测：上下文渲染时给黑话标注解释
 
+# ---------- 轻量规划循环（多步任务清单） ----------
+[plan]
+enable = true  # 疑似复合任务先拆步骤清单，工具循环中持续注入进度
+
 # ---------- 黑话 ----------
 [jargon]
 all_global = true  # true=黑话库全群共享 / false=按会话隔离

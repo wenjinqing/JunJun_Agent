@@ -16,6 +16,9 @@ from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger
 from junjun_skills.registry import get_tools, load_builtin
 from junjun_skills.builtin.do_not_reply import SILENCE_TOOL_NAME
+from junjun_agent.loop.plan_tracker import (
+    PlanMiddleware, detect_complexity, make_plan, set_plan, reset_plan,
+)
 from junjun_agent.persona import build_system_prompt
 
 logger = get_logger("agent")
@@ -61,7 +64,8 @@ class JunJunAgent:
             from junjun_llm import get_chat_model
             model = get_chat_model("agent")
         # system prompt 留空，每轮由 process() 动态注入 SystemMessage
-        self._agent = create_agent(model=model, tools=get_tools(session))
+        self._agent = create_agent(model=model, tools=get_tools(session),
+                                   middleware=[PlanMiddleware()])
 
     async def process(
         self,
@@ -125,12 +129,26 @@ class JunJunAgent:
         else:
             messages.append(HumanMessage(content=context_text))
 
+        # ---- 轻量规划循环（P0-12）：疑似复合任务先拆清单，工具循环里持续注入 ----
+        plan_token = None
+        plan_steps = None
+        if bool(cfg.raw.get("plan", {}).get("enable", True)):
+            target_text = latest_text or context_text
+            if detect_complexity(target_text):
+                plan_steps = await make_plan(target_text)
+                if plan_steps:
+                    logger.info(f"[{self.session.chat_id}] 任务清单({len(plan_steps)}步): "
+                                f"{' → '.join(plan_steps)}")
+                    plan_token = set_plan(plan_steps)
+        # 多步任务加迭代预算：每步可能 1-2 次工具调用
+        eff_iter = max_iter + len(plan_steps or [])
+
         try:
             result = await self._agent.ainvoke(
                 {"messages": messages},
                 config={
                     "callbacks": callbacks or [],
-                    "recursion_limit": 2 * max_iter + 1,
+                    "recursion_limit": 2 * eff_iter + 1,
                     "metadata": {
                         "chat_id": self.session.chat_id,
                         "trace_id": trace_id,
@@ -144,6 +162,9 @@ class JunJunAgent:
             # 含 GraphRecursionError：超限兜底沉默，不炸会话
             logger.warning(f"agent 执行异常，本轮沉默 [trace={trace_id}]: {type(e).__name__}: {e}")
             return None
+        finally:
+            if plan_token is not None:
+                reset_plan(plan_token)
 
         messages = result.get("messages", [])
         _record_usage(messages, self.session.chat_id)
