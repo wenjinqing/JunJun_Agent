@@ -7,6 +7,24 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+# 管理员锚点防伪：昵称/消息内容里不得出现系统标记样式或换行，
+# 否则群名片「xx(管理员)」或消息内伪造行能冒充系统打的标记（代码层
+# is_admin_privileged 闸门不受影响，但 LLM 认知锚点会被污染）
+_ADMIN_MARKER_TOKENS = ("(管理员)", "（管理员）")
+
+
+def _sanitize_nickname(nickname: str) -> str:
+    """昵称里的系统标记样式一律剥掉（用户可任意改群名片，不可信）。"""
+    name = nickname or ""
+    for token in _ADMIN_MARKER_TOKENS:
+        name = name.replace(token, "")
+    return name.replace("\n", " ").strip()
+
+
+def _sanitize_text(text: str) -> str:
+    """消息内容换行压成可见符号——防止消息体内伪造一行「昵称(管理员): ...」。"""
+    return (text or "").replace("\r", " ").replace("\n", " ⏎ ")
+
 
 @dataclass
 class MemoryEntry:
@@ -76,7 +94,7 @@ class ShortTermMemory:
                     lines.append(f"你(历史): {e.text}")
                 # 默认不进 context（include_bot=False 时）
             else:
-                prefix = f"{e.nickname or e.user_id}"
+                prefix = _sanitize_nickname(e.nickname) or e.user_id
                 # 管理员标记：for_security=True 才保留（安全验证用），
                 # 默认不显示——L2/L3 看到的都是普通群友，不影响回复意愿
                 if for_security and is_admin(e.user_id):
@@ -84,7 +102,7 @@ class ShortTermMemory:
                 mark = " [@你]" if e.at_bot else ""
                 if mark_latest and i == last_user_idx:
                     prefix = f"【最新】{prefix}"
-                lines.append(f"{prefix}{mark}: {e.text}")
+                lines.append(f"{prefix}{mark}: {_sanitize_text(e.text)}")
         return "\n".join(lines)
 
     def last_user_entry(self) -> Optional[MemoryEntry]:
