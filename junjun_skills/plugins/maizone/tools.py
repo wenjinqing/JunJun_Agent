@@ -806,18 +806,33 @@ async def _generate_comment_reply(feed: dict, comment: dict) -> str:
 
 # ---------------------------------------------------------------- 配图（AI 生成 → bytes）
 
-async def _feed_image_bytes(prompt: str) -> Optional[bytes]:
-    """用 ai_draw 管线生成配图并下载为 bytes（供 upload_image）。任何失败返回 None。"""
+async def _download_image_bytes(url: str) -> Optional[bytes]:
+    """下载图片 URL 为 bytes；失败返回 None。"""
     try:
-        from junjun_skills.plugins.ai_draw.tools import _draw_pipeline
-        url, _model = await _draw_pipeline(prompt)
-        if not url:
-            return None
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             resp = await client.get(url)
         if resp.status_code == 200 and len(resp.content) > 1000:
             return resp.content
         logger.warning(f"说说配图下载失败: HTTP {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"说说配图下载异常: {type(e).__name__}: {e}")
+    return None
+
+
+async def _feed_image_bytes(prompt: str) -> Optional[bytes]:
+    """说说配图：优先复用本会话正在画/刚画好的图（「画图发空间」只画一张），
+    没有才走 ai_draw 管线自己生成。任何失败返回 None（降级纯文字说说）。"""
+    try:
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        from junjun_skills.plugins.ai_draw.tools import _draw_pipeline, wait_recent_drawn_url
+        url = await wait_recent_drawn_url(current_chat_id.get(""))
+        if url:
+            logger.info("说说配图复用本会话刚画的图，不再重复生成")
+        else:
+            url, _final = await _draw_pipeline(prompt)
+        if not url:
+            return None
+        return await _download_image_bytes(url)
     except Exception as e:
         logger.warning(f"说说配图生成失败: {type(e).__name__}: {e}")
     return None
@@ -928,6 +943,8 @@ async def send_feed_tool(content: str, with_image: bool = False) -> str:
     content 就是说说正文（口语自然、可适当颜文字，不要 @ 和引号包裹）。
     空间不支持语音和视频，不要承诺发语音说说；with_image=True 会根据正文自动生成
     一张 AI 配图一起发（较慢，适合风景/心情/二次元主题）。
+    要配图时直接 with_image=True 即可——本工具内部会自己画图，不要再单独调 ai_draw，
+    否则会画出两张图。
 
     Args:
         content: 说说正文（100 字内效果最好）
