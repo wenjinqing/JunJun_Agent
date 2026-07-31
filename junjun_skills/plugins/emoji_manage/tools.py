@@ -1,7 +1,6 @@
 """表情包管理插件：/emoji add|delete|list + /random_emojis。
 
-对齐旧 MaiBot emoji_manage_plugin 的命令面，但不复制其架构——
-存储与注册管线复用新架构的 junjun_express.emoji.emoji_manager
+存储与注册管线复用 junjun_express.emoji.emoji_manager
 （下载 / hash 去重 / VLM 描述）与 junjun_core.database.Emoji 表，
 不另建存储。表情库管理是管理行为，/emoji 系列均为 admin_only。
 """

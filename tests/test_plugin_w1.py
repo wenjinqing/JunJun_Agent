@@ -46,7 +46,7 @@ class TestWife:
     async def test_draw_and_same_day_reuse(self, _fake_gateway, monkeypatch, tmp_path):
         import junjun_skills.plugins.wife.tools as wife
         monkeypatch.setattr(wife, "DATA_DIR", tmp_path)
-        monkeypatch.setenv("MAIBOT_QQ_ACCOUNT", "10000001")
+        monkeypatch.setenv("JUNJUN_QQ_ACCOUNT", "10000001")
 
         members = [{"user_id": 111, "nickname": "乙", "card": ""},
                    {"user_id": 222, "nickname": "丙", "card": "小丙"},
@@ -87,7 +87,7 @@ class TestWife:
         """不同人抽到的老婆应该不同（每人每天一个）。"""
         import junjun_skills.plugins.wife.tools as wife
         monkeypatch.setattr(wife, "DATA_DIR", tmp_path)
-        monkeypatch.setenv("MAIBOT_QQ_ACCOUNT", "10000001")
+        monkeypatch.setenv("JUNJUN_QQ_ACCOUNT", "10000001")
 
         members = [{"user_id": 111, "nickname": "乙", "card": ""},
                    {"user_id": 222, "nickname": "丙", "card": "小丙"},

@@ -72,7 +72,7 @@ async def start_adapter():
     from junjun_adapter_napcat.config import get_config
     cfg = get_config()
     cfg.napcat_server.port = TEST_NAPCAT_PORT
-    cfg.maibot_server.port = TEST_GATEWAY_PORT
+    cfg.junjun_server.port = TEST_GATEWAY_PORT
     # Adapter 的三个核心协程（不含超时清理）
     from junjun_adapter_napcat.main import napcat_server, message_process
     from junjun_adapter_napcat.com_layer import mmc_start_com

@@ -87,7 +87,7 @@ def get_capabilities(query_type: str = "all") -> str:
                 parts.append(f"- {s['name']}: {s['description'][:50]}")
 
     if query_type in ("all", "plugins"):
-        # 插件工具（ai_draw/music/maizone 等）按插件分组显示
+        # 插件工具（ai_draw/music/junzone 等）按插件分组显示
         plugin_tools = {p: items for p, items in by_plugin.items() if p not in ("builtin", "mcp")}
         if plugin_tools:
             parts.append("## 插件功能")

@@ -3,7 +3,7 @@
 真机自测脚本：发给君君自己（私聊链路验证）。
 
 用法：
-  1. .env 填好 MAIBOT_QQ_ACCOUNT（君君的 QQ 号）+ DEEPSEEK_API_KEY
+  1. .env 填好 JUNJUN_QQ_ACCOUNT（君君的 QQ 号）+ DEEPSEEK_API_KEY
   2. 启动君君：.venv\Scripts\python.exe scripts\run_junjun.py
   3. 启动 adapter：.venv\Scripts\python.exe -m junjun_adapter_napcat
   4. 等 NapCat 连接日志出现后，在君君自己的 QQ 私聊窗口发消息
@@ -48,9 +48,9 @@ class FakeGateway:
 
 async def main():
     # 从 .env 读君君自己的 QQ，不硬编码
-    bot_qq = os.environ.get("MAIBOT_QQ_ACCOUNT", "")
+    bot_qq = os.environ.get("JUNJUN_QQ_ACCOUNT", "")
     if not bot_qq:
-        print("[ERROR] .env 中 MAIBOT_QQ_ACCOUNT 未设置，请填写君君的 QQ 号后重试", flush=True)
+        print("[ERROR] .env 中 JUNJUN_QQ_ACCOUNT 未设置，请填写君君的 QQ 号后重试", flush=True)
         return
 
     router_mod._gateway = FakeGateway()

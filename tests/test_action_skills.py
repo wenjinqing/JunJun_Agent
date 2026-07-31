@@ -99,7 +99,7 @@ class TestNoticePoke:
         import junjun_adapter_napcat.config as cfg_mod
 
         class _Cfg:
-            class maibot_server:
+            class junjun_server:
                 platform_name = "qq"
 
         monkeypatch.setattr(cfg_mod, "get_config", lambda: _Cfg())

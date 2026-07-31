@@ -1,6 +1,6 @@
 # JunJun_Agent · 君君
 
-君君 QQ 聊天机器人的现代 Agent 架构版。由原 MaiBot（Astron bot）架构升级：LangChain 1.x `create_agent` + Function Calling + MCP + Langfuse 可观测，monorepo 分层。
+君君 QQ 聊天机器人，从零搭建的现代 Agent 架构：LangChain 1.x `create_agent` + Function Calling + MCP + Langfuse 可观测，monorepo 分层。
 
 ## 架构
 
@@ -42,13 +42,13 @@ uv venv && uv pip install -e .
 
 # 2. 配置
 copy .env.example .env
-#    必填: MAIBOT_QQ_ACCOUNT（bot 的 QQ 号）、LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（任务模型）
+#    必填: JUNJUN_QQ_ACCOUNT（bot 的 QQ 号）、LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（任务模型）
 #    建议: SILICONFLOW_API_KEY（embedding 向量记忆，缺省降级关键词检索）
 #    可选: VLM_*（多模态识图）、LANGFUSE_*（可观测）、DOUBAO_TTS_API_KEY（语音）、WEBUI_TOKEN
 
 # 3. NapCat：确认 onebot11 配置里 websocketClients 指向 ws://127.0.0.1:8095
 #    （messagePostFormat=array, reportSelfMessage=false）
-#    ⚠️ 确认旧 MaiBot adapter 没在运行（netstat -ano | findstr 8095）
+#    ⚠️ 确认没有其他 adapter 进程占用 8095（netstat -ano | findstr 8095）
 
 # 4. 启动（两个窗口）
 .venv\Scripts\python.exe scripts\run_junjun.py                 # 网关+Agent
@@ -59,7 +59,7 @@ copy .env.example .env
 
 ## 配置说明
 
-- `config/bot_config.toml` — 人设/漏斗频控/回复后处理/情绪/表情包/主动/提醒（字段对齐原 MaiBot，注释即文档）
+- `config/bot_config.toml` — 人设/漏斗频控/回复后处理/情绪/表情包/主动/提醒（注释即文档）
 - `config/model_config.toml` — 任务槽模型：每槽 models 按序 fallback
 - `config/mcp_servers.toml` — MCP server 声明（stdio，`${REPO_ROOT}` 插值）
 
@@ -77,7 +77,7 @@ uv run pytest -q                                      # 全量单测（无网络
 | 现象 | 排查 |
 |---|---|
 | QQ 无响应 | ① netstat 查 8095 是否被旧 adapter 占用 ② adapter 日志是否连上 8092 ③ 名单过滤（启动日志打印生效名单） |
-| 双回复 | 旧 MaiBot adapter 还在跑（可能开机自启），杀掉 |
+| 双回复 | 有第二个 adapter 进程在跑（可能开机自启），杀掉 |
 | 全部沉默 | talk_value 配置/时段规则；日志 DEBUG 看每级漏斗拦截原因 |
 | MCP 工具缺失 | server 子进程必须 `-u`；日志看连接失败原因（10s 超时降级） |
 | Langfuse 无 trace | `LANGFUSE_ENABLED=true` + 自托管服务可达；SDK 降级不影响主流程 |
