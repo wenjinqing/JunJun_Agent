@@ -277,9 +277,10 @@ async def draw_cmd(ctx):
         return "画图功能还没配置 ModelScope 密钥喵，让主人设置 MODELSCOPE_API_KEY 吧。"
 
     _last_use[chat_id] = now
+    fut = _begin_pending_draw(chat_id)
     ack = await task_manager.submit(
         kind="ai_draw",
-        work=lambda: _draw_work(prompt),
+        work=lambda: _draw_work(prompt, chat_id, fut),
         done_text=f"画好啦！{prompt}",
         fail_text="画图失败了，稍后再试试吧。",
         timeout=_POLL_TIMEOUT + 60,
@@ -288,18 +289,68 @@ async def draw_cmd(ctx):
     return ack
 
 
-async def _draw_work(prompt: str) -> list | None:
-    """后台生图：成功返回 [image 段]，失败返回 None（由任务管理器发降级文案）。"""
-    url, _ = await _draw_pipeline(prompt)
-    if not url:
+# 「画图发空间」防重复接力：ai_draw 是异步的（提交即返回，后台画 1~2 分钟），
+# 若 Agent 紧接着调 send_feed(with_image=True)，此时图多半还在画。
+# 所以 send_feed 侧复用顺序 = ① 等本会话【进行中】的画图（_PENDING）
+# ② 30 秒短窗口内刚完成的图（_LAST_DRAWN，防止画图刚好完成 pending 已弹出）。
+# 窗口刻意只有 30 秒：更早的图属于上一轮对话，绝不复用（避免张冠李戴）。
+_LAST_DRAWN: dict[str, tuple[float, str]] = {}   # chat_id -> (完成时间戳, url)
+_PENDING: dict[str, asyncio.Future] = {}          # chat_id -> 进行中的画图 Future
+_LAST_DRAWN_TTL = 30.0    # 完成图的复用窗口（秒）
+_WAIT_DRAWN_TIMEOUT = 150.0  # 等待进行中画图的上限（秒）
+
+
+def _begin_pending_draw(chat_id: str) -> "asyncio.Future | None":
+    """登记一次进行中的画图（提交任务前调用），返回 Future 由 _draw_work 回填。"""
+    if not chat_id:
         return None
-    return [ReplySegment(type="image", data=url)]
+    fut = asyncio.get_running_loop().create_future()
+    _PENDING[chat_id] = fut
+    return fut
+
+
+async def wait_recent_drawn_url(chat_id: str, timeout: float = _WAIT_DRAWN_TIMEOUT) -> str | None:
+    """给发说说等「二次用图」方：等本会话正在画的图 / 拿 30s 内刚画好的图；没有返回 None。"""
+    if not chat_id:
+        return None
+    fut = _PENDING.get(chat_id)
+    if fut is not None:
+        try:
+            url = await asyncio.wait_for(asyncio.shield(fut), timeout)
+            if url:
+                return url
+        except Exception:
+            pass
+    item = _LAST_DRAWN.get(chat_id)
+    if item and time.time() - item[0] <= _LAST_DRAWN_TTL:
+        return item[1]
+    return None
+
+
+async def _draw_work(prompt: str, chat_id: str = "",
+                     fut: "asyncio.Future | None" = None) -> list | None:
+    """后台生图：成功返回 [image 段]，失败返回 None（由任务管理器发降级文案）。"""
+    try:
+        url, _ = await _draw_pipeline(prompt)
+        if url and chat_id:
+            _LAST_DRAWN[chat_id] = (time.time(), url)
+        if fut is not None and not fut.done():
+            fut.set_result(url)
+        return [ReplySegment(type="image", data=url)] if url else None
+    finally:
+        if fut is not None and not fut.done():
+            fut.set_result(None)
+        if chat_id:
+            _PENDING.pop(chat_id, None)
 
 
 @tool
 async def ai_draw(prompt: str) -> str:
-    """根据描述 AI 生成图片。当用户要求画图、画个xxx、帮我画、来张图、需要配图时使用。
+    """根据描述 AI 生成图片并发到当前聊天。当用户要求画图、画个xxx、帮我画、来张图时使用。
     prompt 为画面描述（如「猫娘少女」「星空下的城市」）。
+
+    注意：如果图片是要作为 QQ 空间说说的配图，不要调本工具——直接用 send_feed
+    的 with_image=True，说说会自己生成配图，调了本工具会重复画两张。
 
     本工具是异步的：调用后立即返回，图片画好会自动发到当前聊天，
     不要在回复里编造图片 URL，也不要说「无法发送图片」——图片会随后发出。"""
@@ -311,13 +362,15 @@ async def ai_draw(prompt: str) -> str:
     if not _api_key():
         return "画图功能未配置 MODELSCOPE_API_KEY，暂时画不了。"
     from junjun_skills.builtin.memory_skills import current_chat_id
-    if not current_chat_id.get():
+    chat_id = current_chat_id.get("")
+    if not chat_id:
         # 无会话路由（边缘场景）：同步生成 + [IMAGE:] 标记，由 processor 提取发图
         url, _ = await _draw_pipeline(prompt)
         return f"[IMAGE:{url}]" if url else "画图失败了，稍后再试。"
+    fut = _begin_pending_draw(chat_id)
     return await task_manager.submit(
         kind="ai_draw",
-        work=lambda: _draw_work(prompt),
+        work=lambda: _draw_work(prompt, chat_id, fut),
         fail_text="这次画失败了，再试一次？",
         timeout=_POLL_TIMEOUT + 60,
     )
