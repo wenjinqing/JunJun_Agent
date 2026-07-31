@@ -194,6 +194,12 @@ reply_comment_enable = false    # 回复好友对自己说说的评论
 max_comment_reply_per_day = 10
 cookie_max_age_hours = 12  # 缓存 cookie 超过此时长主动刷新（<=0 关闭，只在登录态失效时被动重取）
 
+# ---------- 订阅（帮我盯着 P 站作者 / B 站 UP 主，有更新主动通知） ----------
+[subscription]
+enable = true
+default_interval_minutes = 30   # 单条订阅默认检查间隔
+max_per_chat = 10               # 单会话订阅上限
+
 # ---------- 娱乐小工具（fun_texts 插件） ----------
 [fun_texts]
 daily60s_enable = false   # 每日「60s 读懂世界」图片推送（推给近 48h 活跃群）

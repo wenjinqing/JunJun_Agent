@@ -175,8 +175,25 @@ class DiaryEntry(BaseModel):
     created_at = FloatField(default=time.time)
 
 
+class Subscription(BaseModel):
+    """订阅：Agent 自然语言创建的常驻监视任务（P站作者/B站UP主更新等）。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    kind = CharField(index=True)          # pixiv_author / bili_up
+    target_id = CharField()               # 作者UID / UP主mid
+    target_name = CharField(default="")   # 显示名（首次检查时回填）
+    chat_id = CharField(index=True)       # 通知到哪个会话
+    user_id = CharField(default="")       # 创建者（删除权限判定用）
+    user_nickname = CharField(default="")
+    last_seen = CharField(default="")     # 已见最新（pixiv 小说id / b站 pubdate 时间戳）
+    interval_minutes = IntegerField(default=30)
+    enabled = BooleanField(default=True)
+    created_at = FloatField(default=time.time)
+    last_checked = FloatField(default=0.0)
+
+
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
-              OnlineTime, Intimacy, SelfMood, DiaryEntry]
+              OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription]
 
 
 def init_database() -> None:
