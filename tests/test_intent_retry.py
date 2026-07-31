@@ -44,6 +44,25 @@ class TestIntentNudge:
         nudge = _intent_nudge("明天早上八点提醒我开会", msgs, ALL_TOOLS)
         assert nudge and "set_reminder" in nudge
 
+    def test_research_intent_goes_background(self):
+        """「调研」命中后台规则：只做了内联搜索 -> 追问 run_background_task。"""
+        tools = ALL_TOOLS | {"run_background_task"}
+        msgs = [_ai_with_tools("web_search")]
+        nudge = _intent_nudge("帮我调研一下绝区零丹的攻略", msgs, tools)
+        assert nudge and "run_background_task" in nudge
+
+    def test_research_no_nudge_when_submitted(self):
+        tools = ALL_TOOLS | {"run_background_task"}
+        msgs = [_ai_with_tools("run_background_task")]
+        assert _intent_nudge("帮我调研一下绝区零丹的攻略", msgs, tools) is None
+
+    def test_quick_lookup_no_nudge(self):
+        """快查（查天气/搜快讯）不触发后台规则。"""
+        tools = ALL_TOOLS | {"run_background_task"}
+        msgs = [_ai_with_tools("web_search")]
+        assert _intent_nudge("帮我查下明天天气", msgs, tools) is None
+        assert _intent_nudge("绝区零丹怎么配队", msgs, tools) is None
+
     def test_no_intent_no_nudge(self):
         msgs = [_ai_with_tools()]
         assert _intent_nudge("今天天气真好", msgs, ALL_TOOLS) is None
