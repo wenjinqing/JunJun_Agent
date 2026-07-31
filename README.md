@@ -42,7 +42,7 @@ uv venv && uv pip install -e .
 
 # 2. 配置
 copy .env.example .env
-#    必填: JUNJUN_QQ_ACCOUNT（bot 的 QQ 号）、LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（任务模型）
+#    必填: JUNJUN_QQ_ACCOUNT（bot 的 QQ 号）、DS_BASE_URL / DS_MODEL / DEEPSEEK_API_KEY（任务模型）
 #    建议: SILICONFLOW_API_KEY（embedding 向量记忆，缺省降级关键词检索）
 #    可选: VLM_*（多模态识图）、LANGFUSE_*（可观测）、DOUBAO_TTS_API_KEY（语音）、WEBUI_TOKEN
 
