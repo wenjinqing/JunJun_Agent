@@ -24,6 +24,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data" / "memory"
 
 
+def _graph_cfg() -> dict:
+    """[memory_graph] 配置（P2-20 图记忆扩散）；读取失败按空配置（默认开）。"""
+    try:
+        from junjun_core.config import get_global_config
+        return get_global_config().raw.get("memory_graph", {})
+    except Exception:
+        return {}
+
+
 @dataclass
 class MemoryItem:
     text: str
@@ -124,35 +133,75 @@ class LongTermMemory:
     # ---------- 检索 ----------
 
     async def search(self, query: str, *, top_k: int = 5,
-                     chat_id: Optional[str] = None) -> List[MemoryItem]:
-        """向量检索 + 纯文本条目关键词补充；embedding 不可用全走关键词。"""
+                     chat_id: Optional[str] = None,
+                     spread: Optional[bool] = None) -> List[MemoryItem]:
+        """向量检索 + 纯文本条目关键词补充；embedding 不可用全走关键词。
+
+        spread（P2-20 图记忆扩散，只读增强）：命中条目作为种子沿记忆图
+        PPR 扩散，追加 top 相关记忆（[memory_graph] max_spread 条）。
+        None 走配置 [memory_graph] enable（默认开）；False 回滚扁平检索。
+        """
         self.load()
         if not self._items:
             return []
         vec = await get_embedding_client().embed_one(query) if self._vec_map else None
         if vec is None:
-            return self._keyword_search(query, top_k=top_k, chat_id=chat_id)
+            out = self._keyword_search(query, top_k=top_k, chat_id=chat_id)
+        else:
+            v = np.array([vec], dtype="float32")
+            v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
+            k = min(top_k * 4, self._index.ntotal)
+            scores, ids = self._index.search(v, k)
+            out = []
+            for score, pos in zip(scores[0], ids[0], strict=False):
+                if pos < 0 or score < 0.3:
+                    continue
+                item = self._items[self._vec_map[int(pos)]]
+                if chat_id and item.chat_id != chat_id:
+                    continue
+                out.append(item)
+                if len(out) >= top_k:
+                    break
+            # 纯文本条目关键词补充（向量检索覆盖不到它们）
+            if len(out) < top_k:
+                plain = [it for it in self._keyword_search(query, top_k=top_k, chat_id=chat_id)
+                         if not it.has_vec and it not in out]
+                out.extend(plain[:top_k - len(out)])
 
-        v = np.array([vec], dtype="float32")
-        v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
-        k = min(top_k * 4, self._index.ntotal)
-        scores, ids = self._index.search(v, k)
-        out = []
-        for score, pos in zip(scores[0], ids[0], strict=False):
-            if pos < 0 or score < 0.3:
-                continue
-            item = self._items[self._vec_map[int(pos)]]
-            if chat_id and item.chat_id != chat_id:
-                continue
-            out.append(item)
-            if len(out) >= top_k:
-                break
-        # 纯文本条目关键词补充（向量检索覆盖不到它们）
-        if len(out) < top_k:
-            plain = [it for it in self._keyword_search(query, top_k=top_k, chat_id=chat_id)
-                     if not it.has_vec and it not in out]
-            out.extend(plain[:top_k - len(out)])
+        if spread is None:
+            spread = bool(_graph_cfg().get("enable", True))
+        if spread and out:
+            out = self._spread_related(out, chat_id=chat_id)
         return out
+
+    def _spread_related(self, seeds: List[MemoryItem], *,
+                        chat_id: Optional[str]) -> List[MemoryItem]:
+        """PPR 图扩散：把种子的相关簇追加到结果尾部。任何失败返回原结果。"""
+        try:
+            from junjun_memory.memory_graph import get_memory_graph
+            cfg = _graph_cfg()
+            idx_of = {id(it): i for i, it in enumerate(self._items)}
+            seed_ids = [idx_of[id(it)] for it in seeds if id(it) in idx_of]
+            related = get_memory_graph().spread(
+                self, seed_ids,
+                top_k=int(cfg.get("max_spread", 2)),
+                damping=float(cfg.get("damping", 0.85)),
+            )
+            in_out = {id(it) for it in seeds}
+            picked = []
+            for i in related:
+                it = self._items[i]
+                if id(it) in in_out:
+                    continue
+                if chat_id and it.chat_id != chat_id:
+                    continue
+                picked.append(it)
+            if picked:
+                logger.debug(f"图扩散补充 {len(picked)} 条相关记忆")
+            return list(seeds) + picked
+        except Exception as e:
+            logger.debug(f"图扩散失败（返回原结果）: {e}")
+            return seeds
 
     def _keyword_search(self, query: str, *, top_k: int, chat_id: Optional[str]) -> List[MemoryItem]:
         """降级：2-gram 重叠计分。"""
