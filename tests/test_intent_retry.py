@@ -6,6 +6,8 @@
 
 from langchain_core.messages import AIMessage
 
+import pytest
+
 from junjun_agent.agent import _called_tool_names, _intent_nudge
 
 
@@ -71,3 +73,37 @@ class TestIntentNudge:
     def test_called_tool_names(self):
         msgs = [_ai_with_tools("a", "b"), AIMessage(content="你好")]
         assert _called_tool_names(msgs) == {"a", "b"}
+
+
+class TestAgentRebuild:
+    @pytest.mark.asyncio
+    async def test_agent_rebuilds_tools_each_round(self, monkeypatch):
+        """回归（2026-08-01 trace）：agent 图必须每轮重建。
+
+        曾经构造时绑死工具集——此时 memory 为空，关键词钉不住，
+        run_background_task 等非 CORE 工具被裁后整个会话不可用，
+        意图自检却按实时掩码追问 -> 模型被追问一个没绑定的工具。
+        """
+        import junjun_agent.agent as agent_mod
+        from langchain_core.language_models.fake_chat_models import (
+            FakeMessagesListChatModel)
+        from junjun_core.gateway.session_manager import ChatSession
+
+        class _BindableFake(FakeMessagesListChatModel):
+            def bind_tools(self, tools, **kwargs):
+                return self
+
+        calls = []
+        real_get_tools = agent_mod.get_tools
+
+        def counting(session=None):
+            calls.append(1)
+            return real_get_tools(session)
+        monkeypatch.setattr(agent_mod, "get_tools", counting)
+
+        session = ChatSession("qq:1:private", "qq", user_id="1")
+        agent = agent_mod.JunJunAgent(
+            session, model=_BindableFake(responses=[AIMessage(content="好")]))
+        assert calls == []  # 构造时不再绑工具
+        await agent.process("甲: 你好")
+        assert calls  # process 时按当前会话状态实时构建
