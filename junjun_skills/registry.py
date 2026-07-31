@@ -32,6 +32,7 @@ def register(skill: BaseTool, available_for: Optional[Callable] = None,
         raise ValueError(f"skill 重名: {skill.name}")
     if admin_only:
         skill = _wrap_admin_gate(skill)
+    skill = _wrap_error_feedback(skill)  # 最外层：逃逸异常 -> [TOOL_ERROR] 结构化文本
     _registry[skill.name] = skill
     _availability[skill.name] = available_for
     _skill_plugin[skill.name] = plugin
@@ -70,6 +71,64 @@ def _wrap_admin_gate(skill: BaseTool) -> BaseTool:
         skill.func = gated_sync
     else:
         logger.warning(f"admin 门包装失败（无可包装入口）: {name}")
+    return skill
+
+
+# ---------------------------------------------------------------- 错误结构化（P0-13）
+# 工具抛出的裸异常统一分类成 [TOOL_ERROR kind=...] 文本喂回模型，
+# 配合 system prompt 里的「换乘地图」，模型能按类别决定重试/换乘/放弃，
+# 而不是看到一句英文堆栈就沉默或胡说。
+
+def _classify_error(e: BaseException) -> str:
+    """异常 -> 错误类别：网络 / 参数 / 权限 / 限流 / 未知。"""
+    import asyncio
+
+    import httpx
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        if code == 429:
+            return "限流"
+        if code in (401, 403):
+            return "权限"
+        return "网络"  # 5xx 等服务端错误按网络类处理（可换乘重试）
+    if isinstance(e, PermissionError):
+        return "权限"
+    if isinstance(e, (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPError,
+                      asyncio.TimeoutError, TimeoutError, ConnectionError, OSError)):
+        return "网络"
+    if isinstance(e, (ValueError, TypeError, KeyError)):
+        return "参数"
+    return "未知"
+
+
+def _tool_error_text(tool_name: str, e: BaseException) -> str:
+    kind = _classify_error(e)
+    logger.warning(f"工具 {tool_name} 异常[{kind}]: {type(e).__name__}: {e}")
+    detail = str(e).replace("\n", " ")[:150]
+    return f"[TOOL_ERROR kind={kind}] 工具 {tool_name} 执行失败：{type(e).__name__}: {detail}"
+
+
+def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
+    """统一错误包装（最外层）：工具逃逸的异常 -> 结构化错误文本，不再抛给框架。"""
+    name = skill.name
+    if getattr(skill, "coroutine", None) is not None:
+        original = skill.coroutine
+
+        async def wrapped(*args, _orig=original, **kwargs):
+            try:
+                return await _orig(*args, **kwargs)
+            except Exception as e:
+                return _tool_error_text(name, e)
+        skill.coroutine = wrapped
+    elif getattr(skill, "func", None) is not None:
+        original_sync = skill.func
+
+        def wrapped_sync(*args, _orig=original_sync, **kwargs):
+            try:
+                return _orig(*args, **kwargs)
+            except Exception as e:
+                return _tool_error_text(name, e)
+        skill.func = wrapped_sync
     return skill
 
 

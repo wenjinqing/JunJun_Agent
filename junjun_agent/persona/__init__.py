@@ -116,6 +116,11 @@ def build_system_prompt(
         "不确定说什么就调 do_not_reply，不要硬编。",
         "需要事实信息（时间/天气/搜索）先调工具，不要凭记忆编。",
         "用户说「搜」「查」「找」「什么时候」「最新」「新闻」时，必须先调 web_search 或 mcp_search，不要凭记忆回答。",
+        # P0-13 工具失败换乘地图（配合 registry 的 [TOOL_ERROR kind=...] 结构化错误）
+        "工具返回 [TOOL_ERROR kind=...] 时按类别处理："
+        "网络→换一个同类工具重试一次（如 web_search 失败换 mcp 搜索，画图失败可改描述重试一次）；"
+        "参数→修正参数重试一次；限流→告诉对方稍后再试，不要立即重试；"
+        "权限→不要重试，直接说明没权限。同一工具最多重试一次，仍失败就如实告诉对方，绝不编造结果。",
     ]
     if reaction_text:
         rules.append(reaction_text)
