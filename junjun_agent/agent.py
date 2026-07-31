@@ -49,6 +49,8 @@ _NUDGE_PROMPT = (
     "（系统追问）对方的请求包含明确的「{intent}」意图，必须调用 {tool} 工具"
     "才能真正生效，你刚才没有调用它。请现在调用该工具完成请求；"
     "如果工具调用失败或确实办不到，直接如实告诉对方办不到，不要口头承诺。"
+    "注意：你上一轮的回复还没有发送出去，对方目前什么都没看到——"
+    "不要说「如上所述」「上面那份」之类的话。"
 )
 
 
@@ -111,9 +113,19 @@ class JunJunAgent:
             from junjun_llm import get_chat_model
             model = get_chat_model("agent")
         self._model = model  # 留引用：会话淘汰时关闭 httpx 连接池（防泄漏）
-        # system prompt 留空，每轮由 process() 动态注入 SystemMessage
-        self._agent = create_agent(model=model, tools=get_tools(session),
-                                   middleware=[PlanMiddleware()])
+
+    def _build_agent(self):
+        """每轮重建 agent 图：工具集按「当前」会话话题实时掩码。
+
+        曾经只在 __init__ 绑一次——那时 memory 是空的，关键词钉不住任何工具，
+        非 CORE 工具（如 run_background_task）被掩码裁掉后整个会话生命周期
+        都不可用；而意图自检按实时掩码判定「可用」去追问，模型却被追问一个
+        没绑定的工具（2026-08-01 实战 trace：模型如实回答「没有这个工具」）。
+        重建成本是毫秒级图编译，相对秒级 LLM 调用可忽略；顺便让话题变化
+        后掩码真正生效（设计本意就是按轮动态）。
+        """
+        return create_agent(model=self._model, tools=get_tools(self.session),
+                            middleware=[PlanMiddleware()])
 
     async def aclose(self) -> None:
         """关闭模型客户端连接池（会话淘汰时调用）。best-effort，失败静默。"""
@@ -206,8 +218,9 @@ class JunJunAgent:
         # 多步任务加迭代预算：每步可能 1-2 次工具调用
         eff_iter = max_iter + len(plan_steps or [])
 
+        agent = self._build_agent()  # 每轮重建：工具掩码按当前话题实时生效
         try:
-            result = await self._agent.ainvoke(
+            result = await agent.ainvoke(
                 {"messages": messages},
                 config={
                     "callbacks": callbacks or [],
@@ -246,7 +259,7 @@ class JunJunAgent:
             if nudge:
                 logger.info(f"[{self.session.chat_id}] 意图自检：追问补调工具 [trace={trace_id}]")
                 try:
-                    retry = await self._agent.ainvoke(
+                    retry = await agent.ainvoke(
                         {"messages": messages + [HumanMessage(content=nudge)]},
                         config={
                             "callbacks": callbacks or [],
