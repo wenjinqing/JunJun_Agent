@@ -105,10 +105,12 @@ def select_expressions(chat_id: str, context: str, *, top_k: int = _MAX_INJECT) 
 
     def score(r):
         s = r.count
-        # 语境关键词重叠加分
-        for w in (r.situation or "").split():
-            if w and w in context:
-                s += 5
+        # 语境重叠加分：中文 situation「表示震惊」按空格 split 永远整段匹配不上
+        # （死代码，score 退化为纯 count）——改 2-gram 重叠计分
+        situation = (r.situation or "").replace(" ", "")
+        if situation and context:
+            grams = {situation[i:i + 2] for i in range(len(situation) - 1)} or {situation}
+            s += sum(5 for g in grams if g in context)
         return s
 
     ranked = sorted(own, key=score, reverse=True)[:top_k]

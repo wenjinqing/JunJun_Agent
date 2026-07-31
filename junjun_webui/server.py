@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -74,7 +75,8 @@ def _check_auth(request: Request) -> None:
     token = os.environ.get("WEBUI_TOKEN", "")
     if token:
         auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {token}":
+        # 常量时间比较：防时序侧信道穷举 token
+        if not hmac.compare_digest(auth, f"Bearer {token}"):
             raise HTTPException(401, "invalid token")
     else:
         client = request.client.host if request.client else ""
@@ -154,7 +156,7 @@ def get_logs(limit: int = 200):
 async def logs_ws(ws: WebSocket):
     token = os.environ.get("WEBUI_TOKEN", "")
     if token:
-        if ws.query_params.get("token") != token:
+        if not hmac.compare_digest(ws.query_params.get("token", ""), token):
             await ws.close(code=4401)
             return
     else:

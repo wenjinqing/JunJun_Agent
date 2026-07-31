@@ -106,7 +106,11 @@ class ChatSummarizer:
             hist = data.get("archived", [])
             hist.extend({"time": time.time(), "summary": s} for s in archived)
             data["archived"] = hist[-200:]
-        p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        # tmp+replace 原子写：直接 write_text 崩溃会留半个 JSON，
+        # 下次加载整体丢弃该会话全部话题缓存
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(p)
 
     # ---------- 摘要 + 话题合并 ----------
 

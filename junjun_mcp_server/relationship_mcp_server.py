@@ -146,7 +146,7 @@ def get_user_profile(user_id: str, platform: str) -> str:
         lines_out.append(f"[称呼] {person.person_name}")
     for p in points:
         lines_out.append(f"[{p['category']}] {p['content']} (w={p['weight']:.2f})")
-    return "\\n".join(lines_out)
+    return "\n".join(lines_out)
 
 @mcp.tool()
 def set_user_name(user_id: str, platform: str, name: str) -> str:

@@ -100,8 +100,11 @@ def notify_config_changed(changed: list) -> None:
     for fn in _listeners:
         try:
             fn(changed)
-        except Exception:
-            pass  # 监听者异常不影响主链路
+        except Exception as e:
+            # 监听者（如模型槽失效重建）挂了必须有痕迹——否则表现为「改了配置没生效」的灵异问题
+            import logging
+            logging.getLogger("core.config").warning(
+                f"配置热更监听者异常: {getattr(fn, '__qualname__', fn)}: {type(e).__name__}: {e}")
 
 
 def persist_bot_config(changed: list, path: Optional[Path] = None) -> None:

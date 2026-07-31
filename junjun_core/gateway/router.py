@@ -70,10 +70,9 @@ class Gateway:
         logger.info(f"消息处理器已注入: {getattr(processor, '__name__', type(processor).__name__)}")
 
     def _get_chat_list(self) -> ChatListConfig:
-        if self._chat_list is None:
-            raw = get_global_config().raw.get("chat", {})
-            self._chat_list = ChatListConfig.from_raw(raw)
-        return self._chat_list
+        # 不缓存：from_raw 只是几个列表推导，微秒级——缓存会导致 WebUI 热改
+        # 群名单/ban 人后网关不生效（紧急 ban 人时是个大坑）
+        return ChatListConfig.from_raw(get_global_config().raw.get("chat", {}))
 
     # 只允许无鉴权监听本机回环；对外监听必须配置 GATEWAY_TOKEN
     _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -174,7 +173,9 @@ class Gateway:
             return
         msg_base = reply.to_message_base(self.bot_user_id)
         if self.server is not None:
-            await self.server.broadcast_message(msg_base.to_dict())
+            # 按平台定向发送（原 broadcast 发给所有已连接 adapter——
+            # 两个 adapter 叠连时每条回复发两遍）
+            await self.server.broadcast_to_platform(reply.platform, msg_base.to_dict())
             logger.info(f"已发送回复 -> {reply.target_group_id or reply.target_user_id}")
 
 

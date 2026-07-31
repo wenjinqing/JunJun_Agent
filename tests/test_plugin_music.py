@@ -107,12 +107,13 @@ class TestSearch:
         assert "QQ" in result or "歌1" in result
 
     @pytest.mark.asyncio
-    async def test_explicit_source_no_fallback(self, monkeypatch):
+    async def test_explicit_source_falls_back_on_failure(self, monkeypatch):
         import junjun_skills.plugins.music.tools as music
         calls = _patch_search(monkeypatch, music, fail_sources=("juhe",))
         result = await music.music_cmd(_ctx("/music juhe 起风了"))
-        assert calls == ["juhe"]  # 指定源不再降级
-        assert "没找到" in result
+        # 指定源失败后照样降级其他源（原：指定失败直接没歌）
+        assert calls == ["juhe", "netease"]
+        assert "歌1" in result
 
     @pytest.mark.asyncio
     async def test_usage_when_no_keyword(self):
@@ -216,6 +217,7 @@ class TestPlayMusicTool:
     @pytest.mark.asyncio
     async def test_tool_not_found(self, monkeypatch):
         import junjun_skills.plugins.music.tools as music
-        _patch_search(monkeypatch, music, fail_sources=("netease", "qq"))
+        # 全部音源失败才报没找到（指定源失败会自动降级其他源）
+        _patch_search(monkeypatch, music, fail_sources=("netease", "qq", "vip", "juhe"))
         out = await music.play_music.ainvoke({"song_name": "不存在的歌"})
         assert "没找到" in out

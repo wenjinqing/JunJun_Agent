@@ -43,7 +43,7 @@ _CACHE_TTL = 60.0          # 搜索缓存有效期（秒），惰性过期
 _RATE_SECONDS = 10.0       # 每会话点歌限流（秒）
 
 _SOURCE_NAMES = {"netease": "网易云音乐", "qq": "QQ音乐", "vip": "网易云VIP", "juhe": "聚合点歌"}
-_FALLBACK_ORDER = ("netease", "qq")  # 未指定音源时的降级顺序
+_FALLBACK_ORDER = ("netease", "qq", "vip", "juhe")  # 未指定音源时的降级顺序（全源覆盖）
 
 # 每会话搜索缓存：chat_id -> {keyword, results, source, timestamp}
 _search_cache: dict = {}
@@ -54,12 +54,20 @@ _last_use: dict = {}
 # ===== HTTP 与数据标准化 =====
 
 async def _get_json(url: str, params: dict):
-    """GET JSON，任何失败都返回 None（绝不向上抛异常）。"""
+    """GET JSON，任何失败都返回 None（绝不向上抛异常）。
+
+    第三方免费音源失效率高：瞬态错误重试 2 次再放弃（retry_async 内部
+    已排除超时/参数类不重试）。
+    """
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(url, params=params)
-        return resp.json()
+        from junjun_core.retry import retry_async
+
+        async def _get():
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.get(url, params=params)
+            return resp.json()
+        return await retry_async(_get, attempts=2, base_delay=0.5, label="music.api")
     except Exception as e:
         logger.warning(f"音乐 API 请求失败 {url}: {type(e).__name__}: {e}")
         return None
@@ -175,8 +183,12 @@ async def fetch_detail(source: str, keyword: str, index: int):
 
 
 async def _search_with_fallback(keyword: str, source: str = ""):
-    """带降级的搜索：指定源只搜该源，否则按 netease→qq 顺序尝试。返回 (列表, 源) 或 (None, None)。"""
-    sources = (source,) if source else _FALLBACK_ORDER
+    """带降级的搜索：指定源先试该源、失败后照样降级其他源；未指定按全源顺序尝试。
+    返回 (列表, 源) 或 (None, None)。"""
+    if source:
+        sources = (source,) + tuple(s for s in _FALLBACK_ORDER if s != source)
+    else:
+        sources = _FALLBACK_ORDER
     for s in sources:
         try:
             results = await fetch_search(s, keyword)

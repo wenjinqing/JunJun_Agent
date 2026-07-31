@@ -19,6 +19,35 @@ logger = get_logger("memory.link_preview")
 _URL_RE = re.compile(r"https?://[^\s<>\"'）】]+")
 _TIMEOUT = 4.0
 _MAX_CHARS = 300
+_MAX_BYTES = 512 * 1024  # 响应体读取上限（防超大页面撑爆内存）
+
+
+def _is_forbidden_target(url: str) -> bool:
+    """SSRF 防护：目标解析到私网/回环/保留地址段则拒绝抓取。
+
+    群友可发任意 URL——不过滤的话 bot 会替他们探测内网服务
+    （http://192.168.x / 169.254.169.254 云元数据）并把内容注入 prompt。
+    DNS 解析失败同样拒绝。注意：这是 best-effort（DNS rebinding 不在防范围）。
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+    try:
+        host = urlparse(url).hostname
+        if not host:
+            return True
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return True
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return True
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return True
+    return False
 
 # 已有专属拦截器/无正文价值的域，跳过
 _SKIP_DOMAINS = (
@@ -68,6 +97,9 @@ async def fetch_link_preview(text: str, *, timeout: float = _TIMEOUT,
     url = _first_fetchable_url(text)
     if not url:
         return ""
+    if _is_forbidden_target(url):
+        logger.warning(f"链接预览拒绝（SSRF 防护，目标为内网/保留地址）: {url[:60]}")
+        return ""
     try:
         import asyncio
 
@@ -76,11 +108,23 @@ async def fetch_link_preview(text: str, *, timeout: float = _TIMEOUT,
                 timeout=timeout, follow_redirects=True,
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
                 trust_env=False) as client:
-            resp = await asyncio.wait_for(client.get(url), timeout=timeout)
-        ctype = resp.headers.get("content-type", "")
-        if "text/html" not in ctype and "text/plain" not in ctype:
-            return ""
-        summary = _extract_summary(resp.text, max_chars)
+            # 流式读取 + 字节上限：超大页面不整个进内存
+            async with client.stream("GET", url) as resp:
+                ctype = resp.headers.get("content-type", "")
+                if "text/html" not in ctype and "text/plain" not in ctype:
+                    return ""
+                chunks, total = [], 0
+                async def _read():
+                    nonlocal total
+                    async for chunk in resp.aiter_bytes(65536):
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total >= _MAX_BYTES:
+                            break
+                await asyncio.wait_for(_read(), timeout=timeout)
+        content = b"".join(chunks)
+        text_body = content.decode("utf-8", errors="replace")
+        summary = _extract_summary(text_body, max_chars)
         if summary:
             logger.info(f"链接预览: {url[:60]} -> {summary[:40]}")
         return summary

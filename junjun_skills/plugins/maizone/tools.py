@@ -1339,7 +1339,9 @@ async def maizone_auto_post() -> None:
 
 # ---------------------------------------------------------------- 注册
 
-scheduler.add(ScheduledTask("maizone_monitor", maizone_monitor, interval=_MONITOR_INTERVAL))
-scheduler.add(ScheduledTask("maizone_auto_post", maizone_auto_post, interval=60))
+scheduler.add(ScheduledTask("maizone_monitor", maizone_monitor, interval=_MONITOR_INTERVAL,
+                            plugin="maizone"))
+scheduler.add(ScheduledTask("maizone_auto_post", maizone_auto_post, interval=60,
+                            plugin="maizone"))
 
 TOOLS = [send_feed_tool, read_feed_tool, delete_feed_tool]

@@ -112,11 +112,23 @@ def _fake_upload(monkeypatch):
     uploads = []
 
     async def _upload(user_id, file_path, name=""):
-        uploads.append({"user_id": user_id, "file_path": file_path, "name": name})
+        # 上传成功后插件会删除本地 txt——在上传时捕获内容供断言
+        with open(file_path, encoding="utf-8") as f:
+            content = f.read()
+        uploads.append({"user_id": user_id, "file_path": file_path,
+                        "name": name, "content": content})
         return True
 
     monkeypatch.setattr("junjun_core.napcat_client.upload_private_file", _upload)
     return uploads
+
+
+async def _drain_series_tasks():
+    """系列抓取已改后台任务（/novel 立即返回进度提示）——等它跑完再断言。"""
+    import asyncio
+    tasks = [t for t in asyncio.all_tasks() if t.get_name().startswith("pixiv-series-")]
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 class TestAccess:
@@ -161,17 +173,20 @@ class TestSearchAndDl:
         up = _fake_upload[0]
         assert up["user_id"] == "12345"
         assert up["name"].endswith(".txt") and "201" in up["name"]
-        content = open(up["file_path"], encoding="utf-8").read()
-        assert "正文201" in content and "单篇201" in content
+        assert "正文201" in up["content"] and "单篇201" in up["content"]
+        # 上传成功后本地 txt 已清理（防磁盘堆积）
+        import os
+        assert not os.path.exists(up["file_path"])
 
     @pytest.mark.asyncio
     async def test_dl_valid_series(self, _env, _fake_pixiv, _fake_gateway, _fake_upload):
         await tools.novel_cmd(_ctx("/novel search 测试"))
         tools._last_use.clear()
         result = await tools.novel_cmd(_ctx("/novel dl 2"))
-        assert "抓取完成" in result
+        assert "开始抓取" in result          # 系列改后台抓取，立即返回进度提示
+        await _drain_series_tasks()
         assert len(_fake_upload) == 1
-        content = open(_fake_upload[0]["file_path"], encoding="utf-8").read()
+        content = _fake_upload[0]["content"]
         assert "测试系列" in content
         assert content.index("第一章 开始") < content.index("第二章 继续")
         assert "正文101" in content and "正文102" in content
@@ -193,17 +208,18 @@ class TestSeriesAndRead:
     async def test_series_compose_txt(self, _env, _fake_pixiv, _fake_gateway, _fake_upload):
         result = await tools.novel_cmd(
             _ctx("/novel https://www.pixiv.net/novel/series/900"))
-        assert "抓取完成" in result and "2/2" in result
-        # 进度提示先行（开始抓取/共2章）
+        assert "开始抓取" in result          # 后台抓取，立即返回
+        await _drain_series_tasks()
+        # 进度提示走 ctx.reply（共2章/抓取完成）
         texts = [s.data for rs in _fake_gateway for s in rs.segments if s.type == "text"]
-        assert any("开始抓取" in t for t in texts)
         assert any("共 2 章" in t for t in texts)
+        assert any("抓取完成" in t for t in texts)
         # 发文件调用
         assert len(_fake_upload) == 1
         up = _fake_upload[0]
         assert up["user_id"] == "12345" and "900" in up["name"]
         # txt 内容与章节顺序
-        content = open(up["file_path"], encoding="utf-8").read()
+        content = up["content"]
         assert "测试系列" in content and "作者甲" in content
         assert content.index("第一章 开始") < content.index("第二章 继续")
         assert "正文101" in content and "正文102" in content
@@ -212,6 +228,7 @@ class TestSeriesAndRead:
     async def test_series_by_id_and_saved_under_save_dir(self, _env, _fake_pixiv,
                                                          _fake_gateway, _fake_upload):
         await tools.novel_cmd(_ctx("/novel 900"))
+        await _drain_series_tasks()
         assert len(_fake_upload) == 1
         path = _fake_upload[0]["file_path"]
         assert path.startswith(str(_env)) or str(_env) in path
@@ -222,8 +239,7 @@ class TestSeriesAndRead:
         result = await tools.novel_cmd(_ctx("/novel read 201"))
         assert "抓取完成" in result
         assert len(_fake_upload) == 1
-        content = open(_fake_upload[0]["file_path"], encoding="utf-8").read()
-        assert "正文201" in content
+        assert "正文201" in _fake_upload[0]["content"]
 
     @pytest.mark.asyncio
     async def test_read_rejects_series_url(self, _env, _fake_pixiv, _fake_gateway):
