@@ -52,9 +52,9 @@ _slots = None
 def _spec_from(cfg: dict, defaults: dict) -> Optional[ModelSpec]:
     """从一条配置（槽级默认 + 条目级覆盖）构造 ModelSpec；env 不全返回 None。"""
     merged = {**defaults, **cfg}
-    base_url = os.environ.get(merged.get("base_url_env", "LLM_BASE_URL"), "")
-    model = os.environ.get(merged.get("model_env", "LLM_MODEL"), "")
-    api_key = os.environ.get(merged.get("api_key_env", "LLM_API_KEY"), "")
+    base_url = os.environ.get(merged.get("base_url_env", "DS_BASE_URL"), "")
+    model = os.environ.get(merged.get("model_env", "DS_MODEL"), "")
+    api_key = os.environ.get(merged.get("api_key_env", "DEEPSEEK_API_KEY"), "")
     if not (base_url and model and api_key):
         return None
     return ModelSpec(

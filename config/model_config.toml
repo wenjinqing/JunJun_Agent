@@ -1,16 +1,16 @@
 # 君君任务模型配置
 # 每个任务槽从 env 读 base_url / model / api_key（env 名按槽可配）。
-# 默认所有槽共用 LLM_BASE_URL / LLM_MODEL / LLM_API_KEY 一组 env；
+# 默认所有槽共用 DS_BASE_URL / DS_MODEL / DEEPSEEK_API_KEY 一组 env；
 # 想让不同任务用不同模型（如 gate 用小模型、agent 用大模型），
-# 把对应槽的 *_env 指向另一组 env 即可（如 GATE_LLM_*，见 .env.example）。
+# 把对应槽的 *_env 指向另一组 env 即可（见 .env.example 的自定义分组示例）。
 #
 # 每槽支持 [[task.X.models]] 多条目实现顺序 fallback（主模型故障自动切下一个）：
 #   [[task.agent.models]]
-#   base_url_env = "LLM_BASE_URL"      # 主：deepseek
-#   model_env    = "LLM_MODEL"
-#   api_key_env  = "LLM_API_KEY"
+#   base_url_env = "DS_BASE_URL"        # 主：deepseek
+#   model_env    = "DS_MODEL"
+#   api_key_env  = "DEEPSEEK_API_KEY"
 #   [[task.agent.models]]
-#   base_url_env = "SF_LLM_BASE_URL"   # 备：siliconflow
+#   base_url_env = "SF_LLM_BASE_URL"    # 备：siliconflow（配了 env 才生效）
 #   model_env    = "SF_LLM_MODEL"
 #   api_key_env  = "SF_LLM_API_KEY"
 
@@ -18,26 +18,17 @@
 # L2 语义门：小模型，判定 reply / no_reply / no_reply_until_call
 temperature = 0.1
 max_tokens = 128
-# 主：讯飞 MaaS（与 agent 共用）；备：deepseek（503 时自动切换）
-[[task.gate.models]]
-base_url_env = "LLM_BASE_URL"
-model_env = "LLM_MODEL"
-api_key_env = "LLM_API_KEY"
-[[task.gate.models]]
 base_url_env = "DS_BASE_URL"
 model_env = "DS_MODEL"
 api_key_env = "DEEPSEEK_API_KEY"
 
 [task.agent]
-# 主 Agent：必须支持 function calling
+# 主 Agent：必须支持 function calling。
+# 工具选择/指令遵循是瓶颈时，给 agent 单独配一组更强的模型：
+# 在 .env 加 AGENT_LLM_BASE_URL / AGENT_LLM_MODEL / AGENT_LLM_API_KEY，
+# 然后把下面三个 *_env 改成 AGENT_LLM_*（小模型槽继续用 DS_* 省钱）。
 temperature = 0.8
 max_tokens = 2048
-# 主：讯飞 MaaS；备：deepseek（503 限流时自动切换）
-[[task.agent.models]]
-base_url_env = "LLM_BASE_URL"
-model_env = "LLM_MODEL"
-api_key_env = "LLM_API_KEY"
-[[task.agent.models]]
 base_url_env = "DS_BASE_URL"
 model_env = "DS_MODEL"
 api_key_env = "DEEPSEEK_API_KEY"
@@ -46,12 +37,6 @@ api_key_env = "DEEPSEEK_API_KEY"
 # 杂项小任务（频率评估/摘要/提醒文案等）
 temperature = 0.3
 max_tokens = 512
-# 主：讯飞 MaaS；备：deepseek
-[[task.utils.models]]
-base_url_env = "LLM_BASE_URL"
-model_env = "LLM_MODEL"
-api_key_env = "LLM_API_KEY"
-[[task.utils.models]]
 base_url_env = "DS_BASE_URL"
 model_env = "DS_MODEL"
 api_key_env = "DEEPSEEK_API_KEY"
@@ -60,9 +45,9 @@ api_key_env = "DEEPSEEK_API_KEY"
 # 更轻量的杂项（情绪重评等高频低难度任务）
 temperature = 0.3
 max_tokens = 256
-base_url_env = "LLM_BASE_URL"
-model_env = "LLM_MODEL"
-api_key_env = "LLM_API_KEY"
+base_url_env = "DS_BASE_URL"
+model_env = "DS_MODEL"
+api_key_env = "DEEPSEEK_API_KEY"
 
 [task.vlm]
 # 多模态识图（图片描述/表情包注册）。未配置对应 env 时识图链路自动降级为 [图片] 占位
@@ -73,7 +58,7 @@ max_tokens = 512
 base_url_env = "SF_VLM_BASE_URL"
 model_env = "SF_VLM_MODEL"
 api_key_env = "SILICONFLOW_API_KEY"
-# 降级：讯飞 MaaS（不支持 image_url 时 fallback 关键词描述）
+# 备用组（默认可与主组相同，或指向其他 VLM 提供方）
 [[task.vlm.models]]
 base_url_env = "VLM_BASE_URL"
 model_env = "VLM_MODEL"
