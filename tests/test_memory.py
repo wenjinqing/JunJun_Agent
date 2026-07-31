@@ -77,10 +77,14 @@ class TestLongTermMemory:
     async def test_corrupt_meta_rebuilds_empty(self, tmp_path, fake_embedding):
         ltm1 = LongTermMemory(data_dir=tmp_path)
         await ltm1.add("x", "c1")
-        (tmp_path / "metadata.json").write_text('{"dim": 512, "model": "other", "items": []}')
+        # 主备都损坏（维度/模型不匹配）才重建空库；仅主文件坏会先从 .bak 恢复
+        bad = '{"dim": 512, "model": "other", "items": []}'
+        (tmp_path / "metadata.json").write_text(bad)
+        (tmp_path / "metadata.bak").write_text(bad)
+        (tmp_path / "faiss_index.bak").write_bytes(b"bad")
         ltm2 = LongTermMemory(data_dir=tmp_path)
         ltm2.load()
-        assert ltm2._items == []  # 维度不匹配重建空库
+        assert ltm2._items == []  # 主备均不可用，重建空库
 
     @pytest.mark.asyncio
     async def test_chat_id_filter(self, tmp_path, fake_embedding):

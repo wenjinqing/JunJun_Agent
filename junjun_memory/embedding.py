@@ -10,6 +10,7 @@
 
 import os
 import socket
+from collections import OrderedDict
 from typing import List, Optional
 
 from junjun_core.observability import get_logger
@@ -20,6 +21,8 @@ EMBED_DIM = 1024
 # 兼容旧引用（long_term.py 索引头校验用）——实际模型名从 client._model 读
 EMBED_MODEL = "BAAI/bge-m3"
 
+_QUERY_CACHE_MAX = 256  # embed_one 查询缓存上限（群聊高频重复查询省 API 调用）
+
 
 class EmbeddingClient:
     def __init__(self):
@@ -27,6 +30,7 @@ class EmbeddingClient:
         self._base_url = ""
         self._model = ""
         self._client = None
+        self._query_cache: OrderedDict = OrderedDict()  # text -> vector（LRU）
         self._load_config()
 
     def _load_config(self) -> None:
@@ -93,8 +97,20 @@ class EmbeddingClient:
             return None
 
     async def embed_one(self, text: str) -> Optional[List[float]]:
+        """单条向量化，带 LRU 查询缓存：群聊高频重复查询（记忆召回每条消息一次）
+        不再重复打远端 API。只缓存成功结果，失败照常降级。"""
+        cached = self._query_cache.get(text)
+        if cached is not None:
+            self._query_cache.move_to_end(text)
+            return cached
         out = await self.embed([text])
-        return out[0] if out else None
+        vec = out[0] if out else None
+        if vec is not None:
+            self._query_cache[text] = vec
+            self._query_cache.move_to_end(text)
+            while len(self._query_cache) > _QUERY_CACHE_MAX:
+                self._query_cache.popitem(last=False)
+        return vec
 
 
 _client: Optional[EmbeddingClient] = None

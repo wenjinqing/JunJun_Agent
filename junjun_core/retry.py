@@ -3,6 +3,8 @@
 适用：网络抖动/限流/连接重置类瞬态错误（MCP 调用、VLM、HTTP 抓取）。
 不适用：确定性错误（参数错误、权限不足、内容不存在）——重试只是浪费时间，
        所以 retry_on 默认排除 ValueError/KeyError/TypeError 等编程错误。
+       TimeoutError 同样不重试：30s 超时已经发生，重试只会把阻塞放大 3 倍
+       （MCP 挂死工具曾因此阻塞 agent 93s+）。
 """
 
 import asyncio
@@ -12,8 +14,8 @@ from junjun_core.observability import get_logger
 
 logger = get_logger("core.retry")
 
-# 编程/确定性错误：重试无意义，直接抛出
-_NO_RETRY = (ValueError, KeyError, TypeError, AttributeError)
+# 编程/确定性错误 + 超时：重试无意义，直接抛出
+_NO_RETRY = (ValueError, KeyError, TypeError, AttributeError, TimeoutError)
 
 
 async def retry_async(fn: Callable[[], Awaitable], *, attempts: int = 3,

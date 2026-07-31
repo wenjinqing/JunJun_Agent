@@ -72,51 +72,88 @@ class LongTermMemory:
     def _meta_path(self) -> Path:
         return self._dir / "metadata.json"
 
+    @staticmethod
+    def _model_tag() -> str:
+        """索引头模型名：用客户端实际模型（换模型触发重建），常量仅兜底。"""
+        try:
+            return get_embedding_client()._model or EMBED_MODEL
+        except Exception:
+            return EMBED_MODEL
+
     def load(self) -> None:
-        """启动加载；索引与向量条目数不一致或维度/模型不匹配时重建。"""
+        """启动加载；索引与向量条目数不一致或维度/模型不匹配时重建。
+
+        恢复策略：主文件损坏先回退 .bak 备份对（上一次良好落盘），
+        备份也坏了才重建空库——记忆是不可再生资产，绝不一次损坏就清零。
+        """
         if self._loaded:
             return
         self._loaded = True
+        for meta_p, idx_p, tag in (
+            (self._meta_path(), self._index_path(), "主文件"),
+            (self._meta_path().with_suffix(".bak"), self._index_path().with_suffix(".bak"), "备份"),
+        ):
+            try:
+                if self._try_load(meta_p, idx_p):
+                    if tag == "备份":
+                        logger.warning("长期记忆主文件损坏，已从 .bak 备份恢复")
+                    return
+            except Exception as e:
+                logger.warning(f"长期记忆{tag}加载失败: {e}")
+        logger.warning("长期记忆主文件与备份均不可用，重建空库")
         import faiss
-        meta_p, idx_p = self._meta_path(), self._index_path()
+        self._index = faiss.IndexFlatIP(EMBED_DIM)
+        self._items, self._vec_map = [], []
+
+    def _try_load(self, meta_p: Path, idx_p: Path) -> bool:
+        """尝试从指定文件对加载。文件对不存在返回 False（静默），损坏抛异常。"""
+        import faiss
         if not meta_p.exists():
-            self._index = faiss.IndexFlatIP(EMBED_DIM)
-            return
-        try:
-            meta = json.loads(meta_p.read_text(encoding="utf-8"))
-            if meta.get("dim") != EMBED_DIM or meta.get("model") != EMBED_MODEL:
-                raise ValueError(f"索引维度/模型不匹配: {meta.get('dim')}/{meta.get('model')}")
-            items = [MemoryItem(**it) for it in meta.get("items", [])]
-            vec_map = [i for i, it in enumerate(items) if it.has_vec]
-            if vec_map:
-                if not idx_p.exists():
-                    raise ValueError("有向量条目但索引文件缺失")
-                index = faiss.read_index(str(idx_p))
-                if index.ntotal != len(vec_map):
-                    raise ValueError(f"索引({index.ntotal})与向量条目({len(vec_map)})数量不一致")
-            else:
-                index = faiss.IndexFlatIP(EMBED_DIM)
-            self._index, self._items, self._vec_map = index, items, vec_map
-            logger.info(f"长期记忆已加载: {len(items)} 条（{len(vec_map)} 条已向量化）")
-        except Exception as e:
-            logger.warning(f"长期记忆索引损坏，重建空库: {e}")
-            self._index = faiss.IndexFlatIP(EMBED_DIM)
-            self._items, self._vec_map = [], []
+            if not self._items and self._index is None:
+                self._index = faiss.IndexFlatIP(EMBED_DIM)
+            return meta_p.name != "metadata.json"  # 主文件不存在=新库可用；备份不存在=跳过
+        meta = json.loads(meta_p.read_text(encoding="utf-8"))
+        if meta.get("dim") != EMBED_DIM or meta.get("model") != self._model_tag():
+            raise ValueError(f"索引维度/模型不匹配: {meta.get('dim')}/{meta.get('model')}")
+        items = [MemoryItem(**it) for it in meta.get("items", [])]
+        vec_map = [i for i, it in enumerate(items) if it.has_vec]
+        if vec_map:
+            if not idx_p.exists():
+                raise ValueError("有向量条目但索引文件缺失")
+            index = faiss.read_index(str(idx_p))
+            if index.ntotal != len(vec_map):
+                raise ValueError(f"索引({index.ntotal})与向量条目({len(vec_map)})数量不一致")
+        else:
+            index = faiss.IndexFlatIP(EMBED_DIM)
+        self._index, self._items, self._vec_map = index, items, vec_map
+        logger.info(f"长期记忆已加载: {len(items)} 条（{len(vec_map)} 条已向量化）")
+        return True
 
     def save(self) -> None:
-        """原子成对落盘（先写临时文件再替换）。"""
+        """原子成对落盘（先写临时文件再替换）；替换成功后同步 .bak 备份对。
+
+        备份在替换【之后】做：崩溃发生在替换中途时，.bak 仍是上一次
+        完整良好状态（若在替换前备份，备份永远落后一代，白丢一条记忆）。
+        """
         if self._index is None:
             return
         import faiss
+        import shutil
         tmp_idx = self._index_path().with_suffix(".tmp")
         tmp_meta = self._meta_path().with_suffix(".tmp")
         faiss.write_index(self._index, str(tmp_idx))
         tmp_meta.write_text(json.dumps({
-            "dim": EMBED_DIM, "model": EMBED_MODEL,
+            "dim": EMBED_DIM, "model": self._model_tag(),
             "items": [vars(it) for it in self._items],
         }, ensure_ascii=False), encoding="utf-8")
         tmp_idx.replace(self._index_path())
         tmp_meta.replace(self._meta_path())
+        # 主文件对落盘成功 -> 同步为备份对（加载失败时的回退点）
+        for src in (self._index_path(), self._meta_path()):
+            try:
+                shutil.copy2(src, src.with_suffix(".bak"))
+            except Exception:
+                pass
 
     # ---------- 写入 ----------
 
@@ -228,15 +265,34 @@ class LongTermMemory:
 
     # ---------- 遗忘 ----------
 
-    def forget(self, *, max_age_days: float = 90, min_weight: float = 0.2) -> int:
-        """删除过期低权重记忆并重建索引。返回删除数。"""
+    def forget(self, *, max_age_days: float = 90, min_weight: float = 0.2,
+               max_items: Optional[int] = None) -> int:
+        """删除记忆并重建索引。返回删除数。
+
+        两个淘汰口：
+        1. 过期低权重（原逻辑；注意多数条目 weight>=1.0，这条几乎不触发）
+        2. 容量上限（真正的闸门）：超过 max_items 时按（weight 低优先、
+           时间老优先）淘汰到上限内——防 faiss/metadata/记忆图无界增长。
+        max_items 默认读 [memory] ltm_max_items（5000）。
+        """
         self.load()
         if not self._items:
             return 0
         import faiss
+        if max_items is None:
+            try:
+                from junjun_core.config import get_global_config
+                max_items = int(get_global_config().raw.get("memory", {}).get("ltm_max_items", 5000))
+            except Exception:
+                max_items = 5000
         cutoff = time.time() - max_age_days * 86400
         keep_ids = [i for i, it in enumerate(self._items)
                     if not (it.timestamp < cutoff and it.weight < min_weight)]
+        if len(keep_ids) > max_items:
+            ranked = sorted(keep_ids, key=lambda i: (self._items[i].weight,
+                                                     self._items[i].timestamp))
+            drop = set(ranked[:len(keep_ids) - max_items])
+            keep_ids = [i for i in keep_ids if i not in drop]
         removed = len(self._items) - len(keep_ids)
         if not removed:
             return 0
