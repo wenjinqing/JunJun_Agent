@@ -148,6 +148,11 @@ def register_default_tasks() -> None:
     emoji_min = int(raw.get("emoji", {}).get("check_interval", 10))
     cleanup_h = int(raw.get("database", {}).get("cleanup_interval_hours", 24))
 
+    # P1-8 会话淘汰回调：core 不 import 上层，用钩子释放 agent 资源 + 队列条目
+    from junjun_core.gateway.session_manager import get_session_manager
+    from junjun_agent.funnel.session_queue import session_queues
+    get_session_manager().on_evict = lambda s: session_queues.drop(s.chat_id)
+
     scheduler.add(ScheduledTask("memory_forget", memory_forget, interval=6 * 3600))
     scheduler.add(ScheduledTask("flush_summaries", flush_pending_summaries, interval=600))
     scheduler.add(ScheduledTask("reminders", reminders, interval=interval))

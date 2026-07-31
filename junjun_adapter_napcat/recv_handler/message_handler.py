@@ -14,6 +14,18 @@ ACCEPT_FORMAT = ["text", "image", "emoji", "reply", "voice"]
 # @ 昵称解析缓存：{(group_id, qq): (nickname, ts)}，TTL 1 小时
 _NICK_CACHE: dict = {}
 _NICK_TTL = 3600.0
+_NICK_CACHE_MAX = 5000  # 硬上限：满了先清过期项，还满丢最旧（防长跑无界增长）
+
+
+def _nick_cache_put(key, name: str) -> None:
+    now = time.time()
+    if len(_NICK_CACHE) >= _NICK_CACHE_MAX:
+        expired = [k for k, (_, ts) in _NICK_CACHE.items() if now - ts >= _NICK_TTL]
+        for k in expired:
+            _NICK_CACHE.pop(k, None)
+        while len(_NICK_CACHE) >= _NICK_CACHE_MAX:
+            _NICK_CACHE.pop(next(iter(_NICK_CACHE)), None)  # 还满就丢最旧
+    _NICK_CACHE[key] = (name, now)
 
 
 async def _resolve_nickname(qq: str, group_id: str) -> str:
@@ -32,7 +44,7 @@ async def _resolve_nickname(qq: str, group_id: str) -> str:
             data = resp.get("data") or {}
             name = (data.get("card") or data.get("nickname") or "").strip()
             if name:
-                _NICK_CACHE[key] = (name, time.time())
+                _nick_cache_put(key, name)
                 return name
         except Exception:
             pass
