@@ -11,6 +11,11 @@
   回复路径命中缓存/共享在途任务——「发图 → 再 @君君看」场景不再看不到图
 - describe_image_shared：同一 url 的 in-flight 任务全局共享，不重复调 VLM
 - 多张图并行识图（原串行）；VLM 调用并发限流（semaphore 3）
+
+2026-07-31 P0-14 感知就绪等待：
+- describe_images/describe_stickers 带就绪上限（[perception] ready_wait_seconds，
+  默认 3s）：到点没描述完的图降级占位，决策不被 VLM 慢调用拖住；
+  在途任务不取消——结果照常入 Images 缓存，下一条消息直接命中。
 """
 
 import asyncio
@@ -155,29 +160,69 @@ def recent_image_urls(chat_id: str, ttl: float = _RECENT_TTL) -> List[tuple]:
     return out[:_RECENT_MAX]
 
 
-async def describe_images(image_urls: List[str], *, model=None) -> Dict[str, str]:
-    """批量识图（并行 + 在途共享）：url -> 描述。失败/未配置映射为 "[图片]" 占位。"""
+def _perception_wait() -> float:
+    """决策前等待在途识图的上限秒数（[perception] ready_wait_seconds，默认 3）。"""
+    try:
+        from junjun_core.config import get_global_config
+        return float(get_global_config().raw.get("perception", {}).get("ready_wait_seconds", 3.0))
+    except Exception:
+        return 3.0
+
+
+async def _gather_bounded(urls: List[str], tasks: List[asyncio.Task],
+                          placeholder: str, wait: float) -> Dict[str, str]:
+    """有界等待在途识图：到 wait 秒未完成的 url 降级占位。
+
+    任务【不取消】——识图结果照常写 Images 缓存，下一条消息直接命中，
+    本次只是「决策等不起」而不是「放弃这张图」。
+    wait <= 0 表示全部等完（旧行为）。
+    """
+    if wait > 0:
+        await asyncio.wait(tasks, timeout=wait)
+    else:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    out = {}
+    for url, t in zip(urls, tasks):
+        if t.done() and not t.cancelled() and t.exception() is None:
+            out[url] = t.result()
+        else:
+            out[url] = placeholder
+    return out
+
+
+async def describe_images(image_urls: List[str], *, model=None,
+                          wait: Optional[float] = None) -> Dict[str, str]:
+    """批量识图（并行 + 在途共享）：url -> 描述。失败/未配置映射为 "[图片]" 占位。
+
+    wait：就绪等待上限秒数；None 走配置 [perception] ready_wait_seconds（默认 3s），
+    <=0 表示全部等完。超时未完成的图降级占位但在途任务继续跑（结果入缓存）。
+    """
     if not image_urls:
         return {}
     if model is None:
         model = _get_vlm()
     tasks = [describe_image_shared(u, model=model, prompt=_DESCRIBE_PROMPT,
                                    placeholder="[图片]") for u in image_urls]
-    results = await asyncio.gather(*tasks)
-    return dict(zip(image_urls, results))
+    if wait is None:
+        wait = _perception_wait()
+    return await _gather_bounded(image_urls, tasks, "[图片]", wait)
 
 
-async def describe_stickers(sticker_urls: List[str], *, model=None) -> Dict[str, str]:
+async def describe_stickers(sticker_urls: List[str], *, model=None,
+                            wait: Optional[float] = None) -> Dict[str, str]:
     """批量识表情包（并行 + 在途共享）：url -> 「画面+情绪」描述。
-    与普通图片共用 Images hash 缓存（同一张表情包只花一次 VLM 调用）。"""
+    与普通图片共用 Images hash 缓存（同一张表情包只花一次 VLM 调用）。
+    wait 语义同 describe_images。
+    """
     if not sticker_urls:
         return {}
     if model is None:
         model = _get_vlm()
     tasks = [describe_image_shared(u, model=model, prompt=_STICKER_PROMPT,
                                    placeholder="[表情]") for u in sticker_urls]
-    results = await asyncio.gather(*tasks)
-    return dict(zip(sticker_urls, results))
+    if wait is None:
+        wait = _perception_wait()
+    return await _gather_bounded(sticker_urls, tasks, "[表情]", wait)
 
 
 def render_image_block(descriptions: Dict[str, str]) -> str:
