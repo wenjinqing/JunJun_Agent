@@ -1,7 +1,7 @@
 {
-  "name": "maizone",
+  "name": "junzone",
   "version": "1.0.0",
-  "module": "junjun_skills.plugins.maizone.tools",
+  "module": "junjun_skills.plugins.junzone.tools",
   "tools_attr": "TOOLS",
   "available_for": []
 }

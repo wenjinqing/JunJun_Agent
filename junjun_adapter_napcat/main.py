@@ -2,7 +2,7 @@
 
 架构：
 - NapCat 作为 WS client 主动连入 Adapter 的 WS server（napcat_server.port，默认 8095）。
-- Adapter 作为 maim_message client 连接君君网关（maibot_server.port，默认 8092）。
+- Adapter 作为 maim_message client 连接君君网关（junjun_server.port，默认 8092）。
 - 收：NapCat WS -> message_handler -> MessageBase -> 网关。
 - 发：网关回复 -> send_handler -> NapCat OneBot API。
 """

@@ -1,4 +1,4 @@
-"""topic_finder 插件：定时/静默触发，自动生成群聊开场话题（迁移自旧 MaiBot topic_finder_plugin，新架构重写）。
+"""topic_finder 插件：定时/静默触发，自动生成群聊开场话题。
 
 触发方式（scheduler 每 60s 调 topic_finder_tick，内部自行判断到点）：
 - 定时：每天 daily_times 命中当前分钟且当日该时刻未发过 -> 发到全部 target_groups

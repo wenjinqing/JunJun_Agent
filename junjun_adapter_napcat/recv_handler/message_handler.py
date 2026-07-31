@@ -137,7 +137,7 @@ class MessageHandler:
         message_type = raw_message.get("message_type")
         message_id = raw_message.get("message_id")
         message_time = time.time()
-        platform = get_config().maibot_server.platform_name
+        platform = get_config().junjun_server.platform_name
 
         if message_type == "private":
             sender = raw_message.get("sender", {})

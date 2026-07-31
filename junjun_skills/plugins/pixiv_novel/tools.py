@@ -1,4 +1,4 @@
-"""pixiv_novel 插件：Pixiv 小说抓取（迁移自旧 MaiBot pixiv_novel_plugin，新架构重写）。
+"""pixiv_novel 插件：Pixiv 小说抓取。
 
 仅命令执行（不注册任何 LLM 工具，TOOLS=[]）：/novel 命令族全部走命令总线。
 仅提取旧插件的 API/协议知识用 httpx 重写：

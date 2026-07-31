@@ -1,10 +1,10 @@
-"""maizone 空间场景化测试：配图上传 / 自己的说说+评论 / 回复评论 / 自动发说说 / LLM 工具。"""
+"""junzone 空间场景化测试：配图上传 / 自己的说说+评论 / 回复评论 / 自动发说说 / LLM 工具。"""
 
 import json
 
 import pytest
 
-from junjun_skills.plugins.maizone import tools as mz
+from junjun_skills.plugins.junzone import tools as mz
 
 
 @pytest.fixture
@@ -270,13 +270,13 @@ class TestAutoPost:
         cfg = dict(mz._cfg())
         cfg["fluctuation_minutes"] = 0
         monkeypatch.setattr(mz, "_cfg", lambda: cfg)
-        await mz.maizone_auto_post()
+        await mz.junzone_auto_post()
         assert published and published[0][0] == "今天也是元气满满的一天"
         # 历史说说注入 prompt 防重复
         assert any("昨天发过的说说" in p for p in prompts)
         assert mz._daily_feed_count() == 1
         # 同一分钟不重复发
-        await mz.maizone_auto_post()
+        await mz.junzone_auto_post()
         assert len(published) == 1
 
     @pytest.mark.asyncio

@@ -31,7 +31,7 @@ class NoticeHandler:
         if not await message_handler_allow(user_id, group_id):
             return
 
-        platform = get_config().maibot_server.platform_name
+        platform = get_config().junjun_server.platform_name
         user_info = UserInfo(platform=platform, user_id=user_id, user_nickname="", user_cardname=None)
         group_info = (
             GroupInfo(platform=platform, group_id=str(group_id), group_name="") if group_id else None

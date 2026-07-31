@@ -1,7 +1,7 @@
-"""maizone 插件：QQ空间发说说 / 看空间 / 定时监控点赞评论 / 回复评论 / 定时自动发说说。
+"""junzone 插件：QQ空间发说说 / 看空间 / 定时监控点赞评论 / 回复评论 / 定时自动发说说。
 
-迁移自旧 MaiBot maizone_plugin，仅提取其协议知识用新架构重写：
-- g_tk/bkn 哈希算法（对 p_skey 的 5381 哈希，旧代码原样提取）
+Qzone 协议要点：
+- g_tk/bkn 哈希算法（对 p_skey 的 5381 哈希）
 - cookie 获取链：NapCat get_cookies（qzone.qq.com / user.qzone.qq.com 多域合并
   确保拿到 p_skey）→ 本地缓存文件兜底；登录态失效时强制重取一次
 - Qzone 端点：emotion_cgi_publish_v6（发说说）、feeds3_html_more（好友说说列表）、
@@ -19,11 +19,11 @@ LLM 工具（空间 = 第三聊天场景，Agent 自主决策）：
 - /qzone_status                cookie 状态 / 今日已评论数 / 各开关
 
 定时任务：
-- maizone_monitor（10 分钟）：monitor_enable 时刷好友空间，
+- junzone_monitor（10 分钟）：monitor_enable 时刷好友空间，
   对未处理说说点赞（like_enable）和/或评论（comment_enable，每日上限
-  max_reply_per_day），处理记录落 data/maizone/processed_list.json；
+  max_reply_per_day），处理记录落 data/junzone/processed_list.json；
   reply_comment_enable 时回复好友对自己说说的评论（首日基线不回旧评论）。
-- maizone_auto_post（1 分钟检查）：schedule_enable 时按当日波动时间表
+- junzone_auto_post（1 分钟检查）：schedule_enable 时按当日波动时间表
   自动发说说（schedule_times ± fluctuation_minutes，每日发送概率
   schedule_probability，配图概率 schedule_image_probability），
   与手动发共享每日上限 max_feed_per_day。
@@ -47,9 +47,9 @@ from junjun_core import napcat_client
 from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger
 
-logger = get_logger("plugin.maizone")
+logger = get_logger("plugin.junzone")
 
-DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "maizone"
+DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "junzone"
 
 # ---------------------------------------------------------------- Qzone 端点
 # （提取自旧插件 qzone_api.py，纯文本说说，裁剪掉图片上传）
@@ -87,9 +87,9 @@ class _AuthError(Exception):
 # ---------------------------------------------------------------- 配置
 
 def _cfg() -> dict:
-    """读取 [maizone] 配置节（热改生效，每次现读）。"""
+    """读取 [junzone] 配置节（热改生效，每次现读）。"""
     try:
-        return get_global_config().raw.get("maizone", {}) or {}
+        return get_global_config().raw.get("junzone", {}) or {}
     except Exception:
         return {}
 
@@ -134,6 +134,22 @@ def _parse_cookie_string(cookie_str: str) -> dict:
 def _valid_cookies(cookies: Optional[dict]) -> bool:
     """关键登录态齐全（skey + p_skey）才算可用。"""
     return bool(cookies) and bool(cookies.get("skey")) and bool(cookies.get("p_skey"))
+
+
+def _cookie_max_age_hours() -> float:
+    """缓存 cookie 的最大年龄（小时），超过则主动刷新；<=0 关闭主动刷新。"""
+    try:
+        return float(_cfg().get("cookie_max_age_hours", 12))
+    except (TypeError, ValueError):
+        return 12.0
+
+
+def _cookie_age_hours(uin: str) -> Optional[float]:
+    """缓存文件年龄（小时），无缓存返回 None。"""
+    path = _cookie_path(uin)
+    if not path.exists():
+        return None
+    return (time.time() - path.stat().st_mtime) / 3600
 
 
 def _load_cached_cookies(uin: str) -> Optional[dict]:
@@ -181,7 +197,12 @@ async def ensure_cookies(force_refresh: bool = False) -> Optional[dict]:
     if not force_refresh:
         cached = _load_cached_cookies(uin)
         if _valid_cookies(cached):
-            return cached
+            age = _cookie_age_hours(uin)
+            max_age = _cookie_max_age_hours()
+            # 到期前主动刷新：不等 API 撞墙报登录态失效才被动重取
+            if age is None or max_age <= 0 or age <= max_age:
+                return cached
+            logger.info(f"cookie 缓存已 {age:.1f}h（阈值 {max_age}h），主动刷新")
 
     fresh = await _fetch_cookies_via_napcat()
     if _valid_cookies(fresh):
@@ -690,7 +711,7 @@ async def _ask_llm(prompt: str) -> Optional[str]:
                 str(p.get("text", "")) if isinstance(p, dict) else str(p) for p in content)
         return (content or "").strip() or None
     except Exception as e:
-        logger.warning(f"maizone LLM 调用失败（将降级模板文本）: {type(e).__name__}: {e}")
+        logger.warning(f"junzone LLM 调用失败（将降级模板文本）: {type(e).__name__}: {e}")
         return None
 
 
@@ -951,7 +972,7 @@ async def send_feed_tool(content: str, with_image: bool = False) -> str:
         with_image: 是否自动配一张 AI 图（默认 False 纯文字）
     """
     if not (_switch("enable") and _switch("send_enable")):
-        return "QQ空间发说说功能没开（config maizone enable/send_enable）。"
+        return "QQ空间发说说功能没开（config junzone enable/send_enable）。"
     content = (content or "").strip()
     if not content:
         return "说说正文是空的，没发。"
@@ -986,7 +1007,7 @@ async def read_feed_tool(num: int = 5) -> str:
         num: 看几条（1-20，默认 5）
     """
     if not (_switch("enable") and _switch("read_enable")):
-        return "QQ空间看空间功能没开（config maizone enable/read_enable）。"
+        return "QQ空间看空间功能没开（config junzone enable/read_enable）。"
     num = max(1, min(20, int(num or 5)))
     try:
         feeds = await _with_auth_retry(fetch_friend_feeds, _bot_uin(), num)
@@ -1015,7 +1036,7 @@ async def delete_feed_tool(tid: str = "") -> str:
         tid: 要删的说说 ID（留空删自己最新一条）
     """
     if not (_switch("enable") and _switch("send_enable")):
-        return "QQ空间功能没开（config maizone enable/send_enable）。"
+        return "QQ空间功能没开（config junzone enable/send_enable）。"
     tid = (tid or "").strip()
     uin = _bot_uin()
     try:
@@ -1048,12 +1069,12 @@ async def delete_feed_tool(tid: str = "") -> str:
 
 # ---------------------------------------------------------------- 命令
 
-@register_command("send_feed", aliases=["发说说"], plugin="maizone",
+@register_command("send_feed", aliases=["发说说"], plugin="junzone",
                   admin_only=True, description="发一条 QQ 空间说说")
 async def send_feed_cmd(ctx) -> str:
     """/send_feed [主题]：LLM 写说说 → 发布 → 回执。"""
     if not (_switch("enable") and _switch("send_enable")):
-        return "QQ空间发说说功能没开哦（config 里 maizone 的 enable / send_enable）。"
+        return "QQ空间发说说功能没开哦（config 里 junzone 的 enable / send_enable）。"
     if not _feed_quota_ok():
         return f"今天说说已经发了 {_daily_feed_count()} 条（到上限了），明天再发吧。"
     content = await _generate_feed_content(ctx.args)
@@ -1069,12 +1090,12 @@ async def send_feed_cmd(ctx) -> str:
     return f"说说发出去啦：{content}"
 
 
-@register_command("read_feed", aliases=["看空间"], plugin="maizone",
+@register_command("read_feed", aliases=["看空间"], plugin="junzone",
                   admin_only=True, description="看好友 QQ 空间说说")
 async def read_feed_cmd(ctx) -> str:
     """/read_feed [数量]：拉好友说说列表做文本摘要（作者/内容/时间）。"""
     if not (_switch("enable") and _switch("read_enable")):
-        return "QQ空间看空间功能没开哦（config 里 maizone 的 enable / read_enable）。"
+        return "QQ空间看空间功能没开哦（config 里 junzone 的 enable / read_enable）。"
     try:
         num = max(1, min(20, int((ctx.args or "").strip() or 5)))
     except ValueError:
@@ -1096,7 +1117,7 @@ async def read_feed_cmd(ctx) -> str:
     return "\n".join(lines)
 
 
-@register_command("qzone_status", plugin="maizone",
+@register_command("qzone_status", plugin="junzone",
                   admin_only=True, description="QQ空间插件状态")
 async def qzone_status_cmd(ctx) -> str:
     """/qzone_status：cookie 状态 / 今日已评论数 / 各开关状态。"""
@@ -1109,7 +1130,9 @@ async def qzone_status_cmd(ctx) -> str:
     if _valid_cookies(cached):
         mtime = datetime.fromtimestamp(
             _cookie_path(uin).stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-        cookie_line = f"cookie 缓存有效（skey/p_skey 齐全，更新于 {mtime}）"
+        age = _cookie_age_hours(uin)
+        age_txt = f"，已 {age:.1f}h" if age is not None else ""
+        cookie_line = f"cookie 缓存有效（skey/p_skey 齐全，更新于 {mtime}{age_txt}）"
     elif cached:
         cookie_line = "cookie 缓存存在但缺关键键（skey/p_skey），需要重取"
     else:
@@ -1129,7 +1152,7 @@ async def qzone_status_cmd(ctx) -> str:
 
 # ---------------------------------------------------------------- 定时监控
 
-async def maizone_monitor() -> None:
+async def junzone_monitor() -> None:
     """定时刷好友空间：对未处理说说点赞/评论，处理记录落盘（各开关热读）；
     随后回复好友对自己说说的评论（独立开关）。"""
     cfg = _cfg()
@@ -1148,9 +1171,9 @@ async def maizone_monitor() -> None:
     except Exception as e:
         err_name = type(e).__name__
         if "JSONDecodeError" in err_name or "Expecting" in str(e):
-            logger.debug(f"maizone 监控: Qzone 返回非标准 JSON（cookie 过期/登录态失效），跳过本轮: {e}")
+            logger.debug(f"junzone 监控: Qzone 返回非标准 JSON（cookie 过期/登录态失效），跳过本轮: {e}")
         else:
-            logger.warning(f"maizone 监控拉取说说失败: {err_name}: {e}")
+            logger.warning(f"junzone 监控拉取说说失败: {err_name}: {e}")
         await _reply_own_feed_comments(cfg)
         return
     if not feeds:
@@ -1211,7 +1234,7 @@ async def _reply_own_feed_comments(cfg: dict) -> None:
     try:
         feeds = await _with_auth_retry(get_own_feeds, uin, 3)
     except Exception as e:
-        logger.warning(f"maizone 拉自己的说说失败: {type(e).__name__}: {e}")
+        logger.warning(f"junzone 拉自己的说说失败: {type(e).__name__}: {e}")
         return
     if not feeds:
         return
@@ -1221,7 +1244,7 @@ async def _reply_own_feed_comments(cfg: dict) -> None:
         replied = {f"{f['tid']}:{c['comment_tid'] or c['nickname']}"
                    for f in feeds for c in f["comments"]}
         _save_replied(replied)
-        logger.info(f"maizone 评论回复基线已建立（{len(replied)} 条存量评论跳过）")
+        logger.info(f"junzone 评论回复基线已建立（{len(replied)} 条存量评论跳过）")
         return
 
     changed = False
@@ -1311,7 +1334,7 @@ async def _send_scheduled_feed(cfg: dict) -> None:
     logger.info(f"[auto] 定时说说已发布 tid={tid} {mode} 配图={len(images)}: {content[:50]}")
 
 
-async def maizone_auto_post() -> None:
+async def junzone_auto_post() -> None:
     """每分钟检查：到达当日波动时间表的时间点就自动发说说（每天按概率决定发不发）。"""
     cfg = _cfg()
     if not (bool(cfg.get("enable", False)) and bool(cfg.get("send_enable", False))
@@ -1326,7 +1349,7 @@ async def maizone_auto_post() -> None:
             "times": _make_fluctuate_table(cfg),
             "allowed": random.random() < float(cfg.get("schedule_probability", 0.75)),
         }
-        logger.info(f"maizone 今日发送时间表: {state['times']}（{'发' if state['allowed'] else '今天休息'}）")
+        logger.info(f"junzone 今日发送时间表: {state['times']}（{'发' if state['allowed'] else '今天休息'}）")
 
     hhmm = now.strftime("%H:%M")
     fired = hhmm in state.get("times", [])
@@ -1339,9 +1362,9 @@ async def maizone_auto_post() -> None:
 
 # ---------------------------------------------------------------- 注册
 
-scheduler.add(ScheduledTask("maizone_monitor", maizone_monitor, interval=_MONITOR_INTERVAL,
-                            plugin="maizone"))
-scheduler.add(ScheduledTask("maizone_auto_post", maizone_auto_post, interval=60,
-                            plugin="maizone"))
+scheduler.add(ScheduledTask("junzone_monitor", junzone_monitor, interval=_MONITOR_INTERVAL,
+                            plugin="junzone"))
+scheduler.add(ScheduledTask("junzone_auto_post", junzone_auto_post, interval=60,
+                            plugin="junzone"))
 
 TOOLS = [send_feed_tool, read_feed_tool, delete_feed_tool]

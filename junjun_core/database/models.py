@@ -1,7 +1,7 @@
 """peewee 数据库 models（阶段 3 实装建表）。
 
-表结构对齐原 MaiBot database_model.py，全部带 bot_id 字段（单 bot 架构预留，
-默认当前 QQ 号）。SQLite WAL 模式；写操作统一走 writer 队列防并发锁。
+全部带 bot_id 字段（单 bot 架构预留，默认当前 QQ 号）。
+SQLite WAL 模式；写操作统一走 writer 队列防并发锁。
 """
 
 import os
@@ -28,7 +28,8 @@ db = SqliteDatabase(
 
 
 def _bot_id() -> str:
-    return os.environ.get("MAIBOT_QQ_ACCOUNT", "")
+    # JUNJUN_QQ_ACCOUNT 为准，MAIBOT_QQ_ACCOUNT 为旧名兼容兜底
+    return os.environ.get("JUNJUN_QQ_ACCOUNT") or os.environ.get("MAIBOT_QQ_ACCOUNT", "")
 
 
 class BaseModel(Model):

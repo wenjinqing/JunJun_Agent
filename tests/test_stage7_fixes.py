@@ -62,13 +62,13 @@ class TestConfigHotReload:
         from junjun_core.config.config import persist_bot_config
         toml = tmp_path / "bot_config.toml"
         toml.write_text(
-            '[chat]\ntalk_value = 0.9\nqq = "${MAIBOT_QQ_ACCOUNT}"\n', encoding="utf-8")
+            '[chat]\ntalk_value = 0.9\nqq = "${JUNJUN_QQ_ACCOUNT}"\n', encoding="utf-8")
         _fake_bot_config.raw["chat"]["talk_value"] = 0.3
         _fake_bot_config.raw["chat"]["qq"] = "999"
         persist_bot_config([("chat", "talk_value"), ("chat", "qq")], path=toml)
         text = toml.read_text(encoding="utf-8")
         assert "talk_value = 0.3" in text
-        assert "${MAIBOT_QQ_ACCOUNT}" in text  # 占位符键不被固化
+        assert "${JUNJUN_QQ_ACCOUNT}" in text  # 占位符键不被固化
 
     def test_listener_notified(self):
         from junjun_core.config.config import register_config_listener, notify_config_changed

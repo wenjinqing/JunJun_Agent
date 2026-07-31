@@ -2,7 +2,7 @@
 
 AnyaDance 是 SteamVR 虚拟设备驱动 + 伴随 UI，它从 127.0.0.1:39570 接收
 60Hz 的 UDP JSON 帧，每个帧描述 6 个虚拟设备(HMD、左右手柄、腰、左右脚)
-的位姿与控制器输入。本模块在 Python 侧复现该协议，让 MaiBot 能直接驱动
+的位姿与控制器输入。本模块在 Python 侧复现该协议，让君君能直接驱动
 AnyaDance，从而让君君的虚拟形象在 VRChat 里活动。
 
 协议字段来自 AnyaDance/src/core/protocol.cpp::SerializeFrame 与

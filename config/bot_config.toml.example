@@ -1,5 +1,5 @@
 # ============================================================
-# 君君 AGENT 配置模板（字段对齐原 MaiBot bot_config.toml）
+# 君君 AGENT 配置模板（注释即文档）
 # 用法：复制为 bot_config.toml 后按需修改（bot_config.toml 不入库）
 # 注释说明：✅=代码已实装  ⏸️=预留未使用
 # 大部分键支持 WebUI 热改（改内存+写回文件），重启后生效项会单独注明
@@ -13,14 +13,14 @@ architecture = "langchain_agent" # 架构标识
 # ---------- Bot 身份 ----------
 [bot]
 platform = "qq"                       # 平台标识（目前仅 qq）
-qq_account = "${MAIBOT_QQ_ACCOUNT}"   # bot 的 QQ 号（从 .env 读，重启生效）
-nickname = "${MAIBOT_NICKNAME}"       # bot 昵称，用于「直呼名字」触发（从 .env 读）
+qq_account = "${JUNJUN_QQ_ACCOUNT}"   # bot 的 QQ 号（从 .env 读，重启生效）
+nickname = "${JUNJUN_NICKNAME}"       # bot 昵称，用于「直呼名字」触发（从 .env 读）
 alias_names = []                      # 别名列表，叫这些名字也算直呼，如 ["猫娘", "君君酱"]
 
 # ---------- 网关（Adapter 连入地址；鉴权 token 在 .env 的 GATEWAY_TOKEN，host 配对外地址时必填） ----------
 [gateway]
 host = "127.0.0.1"   # 监听地址（重启生效；非本机地址且未配 GATEWAY_TOKEN 会拒绝启动）
-port = 8092          # WS 端口，Adapter 的 maibot_server 要指向这里（重启生效）
+port = 8092          # WS 端口，Adapter 的 junjun_server 要指向这里（重启生效）
 # rate_limit_capacity = 8        # 可选：每会话消息令牌桶容量（防刷屏，默认 8）
 # rate_limit_refill_per_sec = 0.5  # 可选：每秒补充令牌数（默认 0.5）
 
@@ -168,8 +168,8 @@ web_llm_enable = false      # 联网大模型热点开关（需 .env TOPIC_WEB_L
 web_llm_base_url = "https://api.openai.com/v1"
 web_llm_model = "gpt-4o-mini-search-preview"
 
-# ---------- QQ 空间（maizone 插件，bot 身份操作，命令均管理员专用） ----------
-[maizone]
+# ---------- QQ 空间（junzone 插件，bot 身份操作，命令均管理员专用） ----------
+[junzone]
 enable = false           # 总开关
 send_enable = false      # /send_feed 发说说
 read_enable = false      # /read_feed 看好友说说
@@ -186,6 +186,7 @@ schedule_image_probability = 0.4  # 每条自动说说带 AI 配图的概率
 schedule_topics = ["日常生活", "心情分享", "有趣见闻", "天气", "动漫游戏"]
 reply_comment_enable = false    # 回复好友对自己说说的评论
 max_comment_reply_per_day = 10
+cookie_max_age_hours = 12  # 缓存 cookie 超过此时长主动刷新（<=0 关闭，只在登录态失效时被动重取）
 
 # ---------- 娱乐小工具（fun_texts 插件） ----------
 [fun_texts]

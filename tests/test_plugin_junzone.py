@@ -1,7 +1,7 @@
-"""maizone 插件测试：g_tk 算法 / cookie 缓存链 / 发说说 / 看空间 / 监控去重与上限。
+"""junzone 插件测试：g_tk 算法 / cookie 缓存链 / 发说说 / 看空间 / 监控去重与上限。
 
 全部网络调用 monkeypatch：napcat_client.call、Qzone API helper、LLM。
-配置注入参照 test_plugin_w1.py 的 cfg_mod.global_config 方式（raw={"maizone": {...}}）。
+配置注入参照 test_plugin_w1.py 的 cfg_mod.global_config 方式（raw={"junzone": {...}}）。
 """
 
 import json
@@ -46,18 +46,18 @@ def _ctx(text, is_group=True):
                                    args=text.split(" ", 1)[1] if " " in text else "")
 
 
-def _set_config(monkeypatch, maizone: dict):
-    """注入全局配置（bot uin=12345 + [maizone] 节）。"""
+def _set_config(monkeypatch, junzone: dict):
+    """注入全局配置（bot uin=12345 + [junzone] 节）。"""
     import junjun_core.config.config as cfg_mod
     monkeypatch.setattr(cfg_mod, "global_config", cfg_mod.GlobalConfig(
         bot=cfg_mod.BotConfig(platform="qq", qq_account="12345", nickname="君君"),
-        raw={"maizone": maizone, "personality": {"personality": "测试人格", "reply_style": "简短"}}))
+        raw={"junzone": junzone, "personality": {"personality": "测试人格", "reply_style": "简短"}}))
 
 
 @pytest.fixture
 def _tools(monkeypatch, tmp_path):
     """导入插件并隔离数据目录 + 假登录态。"""
-    import junjun_skills.plugins.maizone.tools as mz
+    import junjun_skills.plugins.junzone.tools as mz
     monkeypatch.setattr(mz, "DATA_DIR", tmp_path)
 
     async def _cookies(force_refresh=False):
@@ -70,7 +70,7 @@ def _tools(monkeypatch, tmp_path):
 class TestGtk:
     def test_known_vectors(self):
         """g_tk 哈希对已知输入的确定性（向量由旧插件算法算出后硬编码）。"""
-        import junjun_skills.plugins.maizone.tools as mz
+        import junjun_skills.plugins.junzone.tools as mz
         assert mz.generate_gtk("abc") == "193485963"
         assert mz.generate_gtk("@bcdABC123xyz") == "1088769333"
         # 两次计算一致
@@ -81,7 +81,7 @@ class TestCookies:
     @pytest.mark.asyncio
     async def test_cache_reuse_and_force_refresh(self, monkeypatch, tmp_path):
         """缓存复用：第二次不再调 NapCat；force_refresh 会重新取并落盘。"""
-        import junjun_skills.plugins.maizone.tools as mz
+        import junjun_skills.plugins.junzone.tools as mz
         monkeypatch.setattr(mz, "DATA_DIR", tmp_path)
         _set_config(monkeypatch, {})
 
@@ -117,7 +117,7 @@ class TestCookies:
     @pytest.mark.asyncio
     async def test_all_layers_fail_returns_none(self, monkeypatch, tmp_path):
         """三层都失败（NapCat 不可用且无缓存）→ None。"""
-        import junjun_skills.plugins.maizone.tools as mz
+        import junjun_skills.plugins.junzone.tools as mz
         monkeypatch.setattr(mz, "DATA_DIR", tmp_path)
         _set_config(monkeypatch, {})
 
@@ -126,6 +126,94 @@ class TestCookies:
 
         monkeypatch.setattr(mz.napcat_client, "call", _none)
         assert await mz.ensure_cookies() is None
+
+
+class TestCookieProactiveRefresh:
+    """cookie_max_age_hours：缓存到期前主动刷新，而不是等 API 撞墙。"""
+
+    @staticmethod
+    def _write_stale_cache(tmp_path, age_hours: float):
+        import os
+        import time
+        path = tmp_path / "cookies-12345.json"
+        path.write_text(json.dumps({"skey": "OLD", "p_skey": "OLDB"}), encoding="utf-8")
+        old = time.time() - age_hours * 3600
+        os.utime(path, (old, old))
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_triggers_refresh(self, monkeypatch, tmp_path):
+        """缓存超龄 → 主动走 NapCat 重取并落盘新 cookie。"""
+        import junjun_skills.plugins.junzone.tools as mz
+        monkeypatch.setattr(mz, "DATA_DIR", tmp_path)
+        _set_config(monkeypatch, {"cookie_max_age_hours": 12})
+        self._write_stale_cache(tmp_path, 48)
+
+        calls = []
+
+        async def _call(action, params=None, timeout=15.0):
+            calls.append(action)
+            return {"cookies": "skey=NEW; p_skey=NEWB"}
+
+        monkeypatch.setattr(mz.napcat_client, "call", _call)
+
+        cookies = await mz.ensure_cookies()
+        assert cookies["skey"] == "NEW"
+        assert calls
+        saved = json.loads((tmp_path / "cookies-12345.json").read_text(encoding="utf-8"))
+        assert saved["skey"] == "NEW"
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_refresh_fails_falls_back(self, monkeypatch, tmp_path):
+        """缓存超龄但 NapCat 取不到 → 回退旧缓存兜底，不返回 None。"""
+        import junjun_skills.plugins.junzone.tools as mz
+        monkeypatch.setattr(mz, "DATA_DIR", tmp_path)
+        _set_config(monkeypatch, {"cookie_max_age_hours": 12})
+        self._write_stale_cache(tmp_path, 48)
+
+        async def _none(action, params=None, timeout=15.0):
+            return None
+
+        monkeypatch.setattr(mz.napcat_client, "call", _none)
+        cookies = await mz.ensure_cookies()
+        assert cookies == {"skey": "OLD", "p_skey": "OLDB"}
+
+    @pytest.mark.asyncio
+    async def test_fresh_cache_not_refreshed(self, monkeypatch, tmp_path):
+        """缓存未超龄 → 直接复用，不调 NapCat。"""
+        import junjun_skills.plugins.junzone.tools as mz
+        monkeypatch.setattr(mz, "DATA_DIR", tmp_path)
+        _set_config(monkeypatch, {"cookie_max_age_hours": 12})
+        self._write_stale_cache(tmp_path, 1)
+
+        calls = []
+
+        async def _call(action, params=None, timeout=15.0):
+            calls.append(action)
+            return {"cookies": "skey=NEW; p_skey=NEWB"}
+
+        monkeypatch.setattr(mz.napcat_client, "call", _call)
+        cookies = await mz.ensure_cookies()
+        assert cookies["skey"] == "OLD"
+        assert not calls
+
+    @pytest.mark.asyncio
+    async def test_disabled_when_max_age_nonpositive(self, monkeypatch, tmp_path):
+        """cookie_max_age_hours <= 0 关闭主动刷新：再旧的缓存也直接用。"""
+        import junjun_skills.plugins.junzone.tools as mz
+        monkeypatch.setattr(mz, "DATA_DIR", tmp_path)
+        _set_config(monkeypatch, {"cookie_max_age_hours": 0})
+        self._write_stale_cache(tmp_path, 720)
+
+        calls = []
+
+        async def _call(action, params=None, timeout=15.0):
+            calls.append(action)
+            return {"cookies": "skey=NEW; p_skey=NEWB"}
+
+        monkeypatch.setattr(mz.napcat_client, "call", _call)
+        cookies = await mz.ensure_cookies()
+        assert cookies["skey"] == "OLD"
+        assert not calls
 
 
 class TestSendFeed:
@@ -273,12 +361,12 @@ class TestMonitor:
                                   "like_enable": True, "comment_enable": True})
         calls = self._patch_ops(mz, monkeypatch)
 
-        await mz.maizone_monitor()
+        await mz.junzone_monitor()
         assert calls["like"] == ["t1"]
         assert calls["comment"] == [("t1", "好看！")]
 
         # 第二次：processed 已记录，不再点赞/评论
-        await mz.maizone_monitor()
+        await mz.junzone_monitor()
         assert calls["like"] == ["t1"]
         assert len(calls["comment"]) == 1
 
@@ -300,7 +388,7 @@ class TestMonitor:
                                      "created_time": "刚刚"}]
 
         monkeypatch.setattr(mz, "fetch_friend_feeds", _fetch2)
-        await mz.maizone_monitor()
+        await mz.junzone_monitor()
         assert len(calls["comment"]) == 1   # 只评论了第一条
         assert len(calls["like"]) == 2      # 点赞不受评论上限限制
         assert mz._daily_comment_count() == 1
@@ -317,7 +405,7 @@ class TestMonitor:
             return self._feeds()
 
         monkeypatch.setattr(mz, "fetch_friend_feeds", _fetch)
-        await mz.maizone_monitor()
+        await mz.junzone_monitor()
         assert not hit
 
 
@@ -342,7 +430,7 @@ class TestStatus:
 class TestJsonp:
     def test_strip_jsonp(self):
         """JSONP 剥壳：_Callback(...) 与 undefined 替换。"""
-        import junjun_skills.plugins.maizone.tools as mz
+        import junjun_skills.plugins.junzone.tools as mz
         raw = '_Callback({"code":0,"data":{"data":[]}, "x":undefined});'
         payload = json.loads(mz._strip_jsonp(raw))
         assert payload["code"] == 0 and payload["x"] is None

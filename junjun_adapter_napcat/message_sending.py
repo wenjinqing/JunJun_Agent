@@ -8,11 +8,11 @@ from .config import get_config
 
 class MessageSending:
     def __init__(self):
-        self.maibot_router: Router = None
+        self.junjun_router: Router = None
 
     async def message_send(self, message_base) -> bool:
         try:
-            ok = await self.maibot_router.send_message(message_base)
+            ok = await self.junjun_router.send_message(message_base)
             return bool(ok)
         except Exception as e:
             logger.error(f"发送消息到网关失败: {e}")
@@ -23,7 +23,7 @@ message_send_instance = MessageSending()
 
 
 async def build_router() -> Router:
-    cfg = get_config().maibot_server
+    cfg = get_config().junjun_server
     route = RouteConfig(route_config={
         cfg.platform_name: TargetConfig(
             url=f"ws://{cfg.host}:{cfg.port}/ws",

@@ -11,7 +11,7 @@ import time
 import pytest
 
 from junjun_skills.plugins.ai_draw import tools as ad
-from junjun_skills.plugins.maizone import tools as mz
+from junjun_skills.plugins.junzone import tools as mz
 
 CHAT = "qq:1158561385:group"
 IMG_URL = "http://img.example/abc.png"

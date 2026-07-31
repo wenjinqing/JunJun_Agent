@@ -16,7 +16,7 @@ class NapcatServerConfig:
 
 
 @dataclass
-class MaibotServerConfig:
+class JunjunServerConfig:
     host: str = "127.0.0.1"
     port: int = 8092
     platform_name: str = "qq"
@@ -36,7 +36,7 @@ class ChatConfig:
 @dataclass
 class AdapterConfig:
     napcat_server: NapcatServerConfig = None
-    maibot_server: MaibotServerConfig = None
+    junjun_server: JunjunServerConfig = None
     chat: ChatConfig = None
 
     @classmethod
@@ -46,7 +46,7 @@ class AdapterConfig:
         with open(path, "r", encoding="utf-8") as f:
             data = tomlkit.parse(f.read()).unwrap()
         ns = data.get("napcat_server", {})
-        ms = data.get("maibot_server", {})
+        ms = data.get("junjun_server", {})
         ch = data.get("chat", {})
         return cls(
             napcat_server=NapcatServerConfig(
@@ -56,7 +56,7 @@ class AdapterConfig:
                 token=os.environ.get("NAPCAT_TOKEN", "") or ns.get("token", ""),
                 heartbeat_interval=int(ns.get("heartbeat_interval", 30)),
             ),
-            maibot_server=MaibotServerConfig(
+            junjun_server=JunjunServerConfig(
                 host=ms.get("host", "127.0.0.1"),
                 port=int(ms.get("port", 8092)),
                 platform_name=ms.get("platform_name", "qq"),

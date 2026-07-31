@@ -1,10 +1,10 @@
 """任务槽模型工厂：按任务构造 ChatOpenAI。
 
-对齐原 MaiBot model_task_config 语义：
+任务槽语义：
 - config/model_config.toml 声明任务槽（gate/agent/utils/utils_small/vlm...）
 - 每槽从 env 读 base_url / model / api_key（env 名按槽可配，默认同组 LLM_*）
 - 每槽支持 [[task.X.models]] 多条目，用 LangChain 原生 with_fallbacks 顺序故障转移
-  （对齐原 LLMRequest 故障转移语义：主模型挂了自动切下一个）
+  （主模型挂了自动切下一个）
 """
 
 import os
