@@ -1,0 +1,7 @@
+{
+  "name": "async_task",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.async_task.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

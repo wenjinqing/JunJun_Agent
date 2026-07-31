@@ -175,6 +175,26 @@ class DiaryEntry(BaseModel):
     created_at = FloatField(default=time.time)
 
 
+class AsyncJob(BaseModel):
+    """异步任务：接单->后台跑->主动汇报的持久化队列（重启可恢复，区别见 tasks.py 注释）。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    job_id = CharField(unique=True)       # 短 uuid，对用户展示用
+    kind = CharField(index=True)          # agent_task / 未来：video_transcode...
+    title = CharField(default="")         # 一句话任务说明（列表/汇报用）
+    payload = TextField(default="{}")     # JSON，handler 的输入
+    status = CharField(index=True, default="pending")  # pending/running/done/failed/cancelled
+    result = TextField(default="")
+    error = CharField(default="")
+    chat_id = CharField(index=True)       # 汇报到哪个会话
+    user_id = CharField(default="")       # 委托人（取消权限判定用）
+    user_nickname = CharField(default="")
+    attempts = IntegerField(default=0)    # 执行次数（崩溃残留重试计数）
+    created_at = FloatField(default=time.time)
+    started_at = FloatField(default=0.0)
+    finished_at = FloatField(default=0.0)
+
+
 class Subscription(BaseModel):
     """订阅：Agent 自然语言创建的常驻监视任务（P站作者/B站UP主更新等）。"""
     id = AutoField()
@@ -193,7 +213,7 @@ class Subscription(BaseModel):
 
 
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
-              OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription]
+              OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob]
 
 
 def init_database() -> None:
