@@ -227,6 +227,14 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
             prewarm_voice(meta.voice_records)
         except Exception:
             pass
+    # ---- 视频预热感知（同构，但更重：下载+抽帧+ASR 10-30s，预热几乎是唯一
+    # 能及时用完的路径——发视频 -> 过会儿 @君君，描述已就绪）----
+    if not meta.is_self and getattr(meta, "video_urls", None):
+        try:
+            from junjun_memory.video import prewarm_videos
+            prewarm_videos(meta.video_urls)
+        except Exception:
+            pass
 
     # ---- 决策门（0 token）：私聊直通，群聊仅 @/直呼进思考 ----
     if meta.is_self:
@@ -432,6 +440,15 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
         try:
             from junjun_memory.voice import transcribe_voices, render_voice_block
             block = render_voice_block(await transcribe_voices(meta.voice_records))
+            if block:
+                parts.append(block)
+        except Exception:
+            pass
+    # 视频感知：抽帧 VLM + 抽音 ASR（预热就绪才注入；首轮多半还是占位）
+    if getattr(meta, "video_urls", None):
+        try:
+            from junjun_memory.video import describe_videos, render_video_block
+            block = render_video_block(await describe_videos(meta.video_urls))
             if block:
                 parts.append(block)
         except Exception:

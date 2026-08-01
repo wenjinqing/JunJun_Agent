@@ -231,6 +231,11 @@ max_bytes = 20971520   # 20MB 上限（防超大音频撑爆）
 [voice]
 enable = true   # 语音消息转写注入（[语音] 占位 -> 「对方发来一条语音，说的是：…」）
 
+[video_percept]
+enable = true      # 直接发的视频文件感知（抽帧 VLM + 抽音 ASR，需 ffmpeg）
+max_bytes = 31457280  # 30MB 下载上限（群视频通常 <20MB）
+max_frames = 4     # 抽帧上限（每帧一次 VLM 调用）
+
 # ---------- B站视频理解（字幕/弹幕/热评 -> 摘要注入，不用下载视频） ----------
 [bilibili]
 enable_understand = true   # 拦截器命中后后台「看懂」视频 + 摘要注入会话上下文
