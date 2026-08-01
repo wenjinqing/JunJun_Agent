@@ -85,14 +85,20 @@ async def _agent_task_handler(job, payload: dict, *, model=None) -> str:
 
 async_jobs.register_handler("agent_task", _agent_task_handler)
 
+from junjun_skills.plugins.async_task import research  # noqa: E402
+
+async_jobs.register_handler("deep_research", research.deep_research_handler)
+
 
 # ---------------------------------------------------------------- LLM 工具
 
 @tool
 def run_background_task(task: str) -> str:
-    """把耗时任务丢到后台执行，完成后你会主动发消息向对方汇报结果。这是「派活」唯一真正的入口：
-    用户说「帮我深入查查/调研一下/整理一份报告/慢慢做不着急/做好了叫我」时必须调用本工具接单。
+    """把耗时任务丢到后台执行，完成后你会主动发消息向对方汇报结果。这是「派活」的通用入口：
+    读长文、总结长视频、盯梢类跟进等一时半会儿做不完的活用本工具。
+    用户说「帮我深入查查/慢慢做不着急/做好了叫我」时也必须调用本工具接单。
     注意：口头答应不等于接了活——不调本工具就没有任何任务在执行，绝不许假装已经在做。
+    调研/出报告类请求用 deep_research（多轮检索+阅读原文，报告质量更高）；
     一两分钟能搞定的小事（查天气、搜条快讯）直接自己做，不要用本工具。
 
     Args:
@@ -114,6 +120,32 @@ def run_background_task(task: str) -> str:
 
 
 @tool
+def deep_research(topic: str) -> str:
+    """深度研究：拆查询 -> 多源检索 -> 阅读原文 -> 交叉验证 -> 写带来源链接的研究报告，
+    后台执行完成后主动汇报。用户说「深度研究/调研/整理一份报告/系统查查」时用本工具。
+    这是「出报告」唯一真正的入口：口头答应不等于接了活。
+    一两分钟能搞定的小事（查天气、搜条快讯）直接自己做，不要用本工具；
+    读长文/长视频等其他耗时活用 run_background_task。
+
+    Args:
+        topic: 研究主题（要研究什么、关心哪些方面），后台执行时看不到聊天记录，要写具体
+    """
+    from junjun_skills.builtin.memory_skills import current_chat_id
+    from junjun_core.security import current_user_id, current_nickname
+    topic = (topic or "").strip()
+    if len(topic) < 4:
+        return "研究主题太短了，后台执行时看不到聊天记录，把「要研究什么」写具体再派。"
+    job, err = async_jobs.submit_job(
+        "deep_research", title=topic[:80], payload={"topic": topic},
+        chat_id=current_chat_id.get(),
+        user_id=current_user_id.get(), nickname=current_nickname.get())
+    if job is None:
+        return err
+    return (f"接单成功：深度研究 #{job.job_id}（{job.title}）已在后台开始执行，"
+            f"完成后你会主动在这个会话汇报研究报告。现在请告诉对方：已接单，做好了会来叫 ta。")
+
+
+@tool
 def list_background_tasks() -> str:
     """查看当前会话的后台任务（排队中/执行中/最近完成）。用户问「任务做得怎么样了/做好了吗」时使用。"""
     from junjun_skills.builtin.memory_skills import current_chat_id
@@ -131,7 +163,7 @@ def cancel_background_task(job_id: str) -> str:
     return async_jobs.cancel_job(job_id, current_user_id.get())
 
 
-TOOLS = [run_background_task, list_background_tasks, cancel_background_task]
+TOOLS = [deep_research, run_background_task, list_background_tasks, cancel_background_task]
 
 
 # ---------------------------------------------------------------- 命令
