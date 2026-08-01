@@ -37,6 +37,7 @@ class InboundMeta:
     image_urls: list = None      # 消息中的普通图片 URL（VLM 识图用）
     sticker_urls: list = None    # 消息中的表情包 URL（偷图用；OneBot sub_type=1 / mface）
     voice_records: list = None   # 消息中的语音引用（url/file id，ASR 转写用）
+    video_urls: list = None      # 消息中的视频文件 URL（抽帧+抽音感知用）
     has_emoji: bool = False      # 含 QQ 原生表情
 
 
@@ -135,8 +136,9 @@ class Gateway:
         image_urls = _extract_images(msg.message_segment)
         sticker_urls = _extract_stickers(msg.message_segment)
         voice_records = _extract_voices(msg.message_segment)
-        if not text and not image_urls and not sticker_urls and not voice_records:
-            logger.debug("消息无文本/图片/语音内容，跳过")
+        video_urls = _extract_videos(msg.message_segment)
+        if not text and not image_urls and not sticker_urls and not voice_records and not video_urls:
+            logger.debug("消息无文本/图片/语音/视频内容，跳过")
             return
 
         chat_id = f"{info.platform}:{group_id if group_info else user_id}:{'group' if group_info else 'private'}"
@@ -157,6 +159,7 @@ class Gateway:
             image_urls=image_urls,
             sticker_urls=sticker_urls,
             voice_records=voice_records,
+            video_urls=video_urls,
             has_emoji=_has_emoji(msg.message_segment),
         )
 
@@ -230,6 +233,17 @@ def _extract_voices(seg: Seg) -> list:
         for sub in seg.data:
             refs.extend(_extract_voices(sub))
     elif seg.type == "voice" and isinstance(seg.data, str) and seg.data:
+        refs.append(seg.data)
+    return refs
+
+
+def _extract_videos(seg: Seg) -> list:
+    """视频文件段引用（url，抽帧 VLM + 抽音 ASR 感知用）。"""
+    refs = []
+    if seg.type == "seglist" and isinstance(seg.data, list):
+        for sub in seg.data:
+            refs.extend(_extract_videos(sub))
+    elif seg.type == "video_file" and isinstance(seg.data, str) and seg.data:
         refs.append(seg.data)
     return refs
 

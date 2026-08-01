@@ -236,8 +236,11 @@ class MessageHandler:
             elif t == "forward":
                 segs.append(Seg(type="text", data=await self._expand_forward(d)))
             elif t == "video":
-                # 视频段：转占位文本（VLM 暂不支持视频，让 Agent 知道有视频）
+                # 视频段：文本占位 + video_file 引用（感知管线：抽帧 VLM + 抽音 ASR）
                 segs.append(Seg(type="text", data="[视频]"))
+                ref = str(d.get("url") or d.get("file") or "")
+                if ref:
+                    segs.append(Seg(type="video_file", data=ref))
             elif t == "record":
                 # 语音段：文本占位（保上下文形态）+ voice 段（转写管线用，url 优先其次 file id）
                 segs.append(Seg(type="text", data="[语音]"))
