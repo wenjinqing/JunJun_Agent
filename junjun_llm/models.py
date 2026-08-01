@@ -66,6 +66,37 @@ def _spec_from(cfg: dict, defaults: dict) -> Optional[ModelSpec]:
     )
 
 
+# api_key_env 写这个值 = 走硅基流动号池（junjun_llm/key_pool.py）
+_POOL_MARKER = "SF_POOL"
+
+
+def _pool_specs(cfg: dict, defaults: dict) -> List[ModelSpec]:
+    """号池条目展开：每个健康 key 一条 ModelSpec（fallback 链的腿）。
+
+    不同槽调用时起始 key 轮转（负载摊开）；腿数上限防巨型链。
+    池空时返回空列表（该条目缺席，其余静态条目照常兜底）。
+    """
+    merged = {**defaults, **cfg}
+    base_url = os.environ.get(merged.get("base_url_env", "SF_LLM_BASE_URL"), "")
+    model = os.environ.get(merged.get("model_env", "SF_LLM_MODEL"), "")
+    if not (base_url and model):
+        logger.warning("SF_POOL 条目缺 base_url/model env，跳过")
+        return []
+    from junjun_llm.key_pool import sf_pool, _cfg as _pool_cfg
+    keys = sf_pool.healthy_keys()
+    if not keys:
+        logger.warning("SF_POOL 号池为空（检查 data/sf_keys.txt 与 key 余额）")
+        return []
+    max_legs = int(_pool_cfg().get("max_legs", 10))
+    keys = keys[:max_legs]
+    logger.info(f"号池展开: {len(keys)} 条腿 -> {model}")
+    return [ModelSpec(
+        base_url=base_url, model=model, api_key=k,
+        temperature=float(merged.get("temperature", 0.7)),
+        max_tokens=int(merged.get("max_tokens", 1024)),
+    ) for k in keys]
+
+
 def _load_slots():
     global _slots
     if _slots is not None:
@@ -77,7 +108,14 @@ def _load_slots():
     slots = {}
     for name, cfg in data.get("task", {}).items():
         entries = cfg.pop("models", None) or [{}]  # 无 models 列表则槽级配置自身即唯一条目
-        specs = [s for s in (_spec_from(e, cfg) for e in entries) if s]
+        specs = []
+        for e in entries:
+            if {**cfg, **e}.get("api_key_env") == _POOL_MARKER:
+                specs.extend(_pool_specs(e, cfg))  # 号池条目 -> N 条腿
+            else:
+                s = _spec_from(e, cfg)
+                if s:
+                    specs.append(s)
         if not specs:
             logger.warning(f"任务槽 [{name}] 未配置完整（检查对应 env）")
         slots[name] = TaskSlot(name=name, specs=specs)
