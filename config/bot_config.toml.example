@@ -223,6 +223,14 @@ pages_per_query = 2   # 每个查询取前几篇读原文（URL 全局去重）
 fetch_max_chars = 3000  # 单篇原文截断（防综述输入爆炸）
 report_max_chars = 1000 # 报告正文目标长度（加上来源列表后仍需 < async_task.report_max_chars）
 
+# ---------- ASR / 语音消息（硅基流动 SenseVoiceSmall，号池 key） ----------
+[asr]
+model = "FunAudioLLM/SenseVoiceSmall"
+max_bytes = 20971520   # 20MB 上限（防超大音频撑爆）
+
+[voice]
+enable = true   # 语音消息转写注入（[语音] 占位 -> 「对方发来一条语音，说的是：…」）
+
 # ---------- B站视频理解（字幕/弹幕/热评 -> 摘要注入，不用下载视频） ----------
 [bilibili]
 enable_understand = true   # 拦截器命中后后台「看懂」视频 + 摘要注入会话上下文

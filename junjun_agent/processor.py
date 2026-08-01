@@ -220,6 +220,13 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
                            getattr(meta, "sticker_urls", None))
         except Exception:
             pass
+    # ---- 语音预热转写（同构）：发语音 -> 再 @君君，ASR 已就绪/在途 ----
+    if not meta.is_self and getattr(meta, "voice_records", None):
+        try:
+            from junjun_memory.voice import prewarm_voice
+            prewarm_voice(meta.voice_records)
+        except Exception:
+            pass
 
     # ---- 决策门（0 token）：私聊直通，群聊仅 @/直呼进思考 ----
     if meta.is_self:
@@ -416,6 +423,15 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
         try:
             from junjun_memory.vision import describe_stickers, render_sticker_block
             block = render_sticker_block(await describe_stickers(meta.sticker_urls))
+            if block:
+                parts.append(block)
+        except Exception:
+            pass
+    # 语音转写：record 段 -> ASR（预热已就绪则秒回；在途有界等待）
+    if getattr(meta, "voice_records", None):
+        try:
+            from junjun_memory.voice import transcribe_voices, render_voice_block
+            block = render_voice_block(await transcribe_voices(meta.voice_records))
             if block:
                 parts.append(block)
         except Exception:
