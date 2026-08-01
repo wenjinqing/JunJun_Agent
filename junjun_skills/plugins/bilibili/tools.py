@@ -607,4 +607,39 @@ async def bilibili_summary(url: str) -> str:
     return out
 
 
-TOOLS = [bilibili_summary]
+@tool
+def watch_video(url: str) -> str:
+    """认真看完一个 B 站视频再汇报观后感：后台下载后听语音（ASR 转写）+ 看画面关键帧，
+    比 bilibili_summary 深得多但要几分钟，完成后你会主动发消息汇报。
+    对方说「你认真看看这个视频/看完跟我讲讲」，或 bilibili_summary 看不懂
+    （没字幕的实拍/游戏/综艺）时用本工具。
+
+    Args:
+        url: B 站视频链接（bilibili.com/video/BVxxx 或 b23.tv 短链）
+    """
+    from junjun_agent.loop import async_jobs
+    from junjun_skills.builtin.memory_skills import current_chat_id
+    from junjun_core.security import current_user_id, current_nickname
+    url = (url or "").strip()
+    if not url:
+        return "给个 B 站链接我才能看。"
+    job, err = async_jobs.submit_job(
+        "video_watch", title=f"看视频 {url[:60]}", payload={"url": url},
+        chat_id=current_chat_id.get(),
+        user_id=current_user_id.get(), nickname=current_nickname.get())
+    if job is None:
+        return err
+    return (f"接单成功：看视频任务 #{job.job_id} 已在后台开始执行，看完你会主动在这个"
+            f"会话汇报观后感。现在请告诉对方：你去看视频了，看完来跟 ta 讲。")
+
+
+TOOLS = [bilibili_summary, watch_video]
+
+
+from junjun_skills.plugins.bilibili import watch as _watch_mod  # noqa: E402
+
+try:
+    from junjun_agent.loop import async_jobs as _aj
+    _aj.register_handler("video_watch", _watch_mod.video_watch_handler)
+except ValueError:
+    pass  # 测试 reload 插件模块时重复注册，忽略
