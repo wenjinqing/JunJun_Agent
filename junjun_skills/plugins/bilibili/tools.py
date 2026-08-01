@@ -70,6 +70,9 @@ _MIXIN_KEY_INDICES = [
 # mixin key 缓存（1 小时有效期，与旧插件一致）
 _wbi_cache: dict = {"key": None, "at": 0.0}
 _WBI_CACHE_TTL = 3600.0
+# buvid3 反风控 cookie 缓存（24 小时；spi 接口领取）
+_buvid3_cache: dict = {"value": "", "at": 0.0}
+_BUVID3_TTL = 86400.0
 
 
 # ---------------------------------------------------------------- 配置读取（运行时读 env，便于测试 monkeypatch）
@@ -129,11 +132,41 @@ def _check_rate_limit(chat_id: str) -> int:
 
 # ---------------------------------------------------------------- HTTP / WBI 签名
 
+async def _get_buvid3() -> str:
+    """buvid3 反风控 cookie（spi 接口领取，缓存 24h）。
+
+    2026-08-01 实测：动态流 feed/space 等端点没有 buvid3 直接 412（HTML 风控页），
+    有 SESSDATA 也没用；补 buvid3 后 200。失败返回 ""（不阻塞主链路）。
+    """
+    now = time.time()
+    if _buvid3_cache["value"] and (now - _buvid3_cache["at"]) < _BUVID3_TTL:
+        return _buvid3_cache["value"]
+    try:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": USER_AGENT, "Referer": "https://www.bilibili.com/"},
+            timeout=_HTTP_TIMEOUT,
+        ) as client:
+            resp = await client.get("https://api.bilibili.com/x/frontend/finger/spi")
+            v = str(((resp.json() or {}).get("data") or {}).get("b_3") or "")
+            if v:
+                _buvid3_cache.update(value=v, at=now)
+            return v
+    except Exception as e:
+        logger.debug(f"buvid3 领取失败（忽略）: {type(e).__name__}: {e}")
+        return ""
+
+
 async def _fetch_json(url: str, params: dict | None = None) -> dict | None:
-    """GET JSON（带 UA/Referer/SESSDATA Cookie）；任何失败返回 None（独立 helper 便于测试 mock）。"""
+    """GET JSON（带 UA/Referer/buvid3/SESSDATA Cookie）；任何失败返回 None（独立 helper 便于测试 mock）。"""
     headers = {"User-Agent": USER_AGENT, "Referer": "https://www.bilibili.com/"}
+    cookies = []
+    buvid3 = await _get_buvid3()
+    if buvid3:
+        cookies.append(f"buvid3={buvid3}")
     if _sessdata():
-        headers["Cookie"] = f"SESSDATA={_sessdata()}"
+        cookies.append(f"SESSDATA={_sessdata()}")
+    if cookies:
+        headers["Cookie"] = "; ".join(cookies)
     try:
         async with httpx.AsyncClient(headers=headers, timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(url, params=params)
