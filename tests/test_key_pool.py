@@ -88,6 +88,76 @@ class TestRotation:
         assert len(set(seen)) == 3  # 每次起始 key 不同，负载摊开
 
 
+class _Resp:
+    def __init__(self, code, payload=None, text=""):
+        self.status_code = code
+        self._payload = payload or {}
+        self.text = text
+
+    def json(self):
+        return self._payload
+
+
+class _FakeClient:
+    def __init__(self, info: _Resp, probe: "_Resp | None" = None):
+        self._info = info
+        self._probe = probe
+        self.probe_called = False
+
+    async def get(self, url, headers=None):
+        return self._info
+
+    async def post(self, url, headers=None, json=None):
+        self.probe_called = True
+        return self._probe
+
+
+class TestCheckKey:
+    """两阶段判定：余额够直接活；余额 0 走代金券探针（2026-08 实测场景）。"""
+
+    @pytest.mark.asyncio
+    async def test_rich_balance_alive_no_probe(self, pool):
+        client = _FakeClient(_Resp(200, {"data": {"totalBalance": "9.9"}}))
+        state, _ = await pool._check_key(client, "https://x/v1", "sk-a")
+        assert state == "alive" and not client.probe_called
+
+    @pytest.mark.asyncio
+    async def test_zero_balance_voucher_alive(self, pool):
+        """余额 0 + 探针 200 -> 代金券账号，活。"""
+        client = _FakeClient(_Resp(200, {"data": {"totalBalance": "0"}}),
+                             _Resp(200))
+        state, reason = await pool._check_key(client, "https://x/v1", "sk-a")
+        assert state == "alive" and "代金券" in reason and client.probe_called
+
+    @pytest.mark.asyncio
+    async def test_zero_balance_probe_402_dead(self, pool):
+        client = _FakeClient(_Resp(200, {"data": {"totalBalance": "0"}}),
+                             _Resp(402, text='{"error":"Insufficient balance"}'))
+        state, _ = await pool._check_key(client, "https://x/v1", "sk-a")
+        assert state == "dead"
+
+    @pytest.mark.asyncio
+    async def test_probe_400_insufficient_text_dead(self, pool):
+        """有的网关余额不足返回 400 + 文案，也得认。"""
+        client = _FakeClient(_Resp(200, {"data": {"totalBalance": "0"}}),
+                             _Resp(400, text='{"error":{"message":"账户余额不足"}}'))
+        state, _ = await pool._check_key(client, "https://x/v1", "sk-a")
+        assert state == "dead"
+
+    @pytest.mark.asyncio
+    async def test_probe_429_alive(self, pool):
+        client = _FakeClient(_Resp(200, {"data": {"totalBalance": "0"}}),
+                             _Resp(429))
+        state, _ = await pool._check_key(client, "https://x/v1", "sk-a")
+        assert state == "alive"
+
+    @pytest.mark.asyncio
+    async def test_info_401_dead_no_probe(self, pool):
+        client = _FakeClient(_Resp(401))
+        state, _ = await pool._check_key(client, "https://x/v1", "sk-a")
+        assert state == "dead" and not client.probe_called
+
+
 class TestModelsIntegration:
     @pytest.fixture(autouse=True)
     def _cfg(self):

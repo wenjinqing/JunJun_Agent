@@ -7,8 +7,10 @@
   轮转，负载摊开）
 - 文件 mtime 变化热加载，不用重启
 
-余额巡检（/v1/user/info）：
-- 余额 < min_balance 或返回 401 -> 丢弃（本轮进程内不再使用）
+余额巡检（/v1/user/info + 探针两阶段）：
+- 余额 >= min_balance -> 健康
+- 余额不足不直接杀：发 1-token 探针（代金券账号余额恒为 0 但能用，
+  2026-08 实测），探针 402/401/余额不足文案才判死，429 算活（有额度）
 - 网络故障/超时 -> 保持原状态（宁可用错，不可错杀）
 - 每 check_hours 懒复查一次（用到池时才触发，不占调度器）；
   复查覆盖文件里全部 key——手动 top up 的 key 下一轮自动复活
@@ -28,6 +30,8 @@ logger = get_logger("llm.key_pool")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
+# 探针默认模型（SF_LLM_MODEL 未配时用）：非 Pro 前缀全 tier 可调，付费模型探针才有意义
+_DEFAULT_PROBE_MODEL = "Qwen/Qwen3.5-397B-A17B"
 
 
 def _cfg() -> dict:
@@ -147,9 +151,14 @@ class SFKeyPool:
             self._refreshing = False
 
     async def _check_key(self, client: httpx.AsyncClient, base_url: str, key: str):
-        """单 key 检查 -> ("alive"/"dead"/"unknown", 原因)。异常向外抛（gather 兜住）。"""
-        resp = await client.get(f"{base_url.rstrip('/')}/user/info",
-                                headers={"Authorization": f"Bearer {key}"})
+        """单 key 检查 -> ("alive"/"dead"/"unknown", 原因)。异常向外抛（gather 兜住）。
+
+        两阶段：先查余额（付费账号）；余额不足不直接杀——发 1-token 探针
+        （代金券账号 /user/info 恒为 ¥0 但调用照跑），探针确认没钱才判死。
+        """
+        base = base_url.rstrip("/")
+        headers = {"Authorization": f"Bearer {key}"}
+        resp = await client.get(f"{base}/user/info", headers=headers)
         if resp.status_code == 401:
             return "dead", "key 无效(401)"
         if resp.status_code != 200:
@@ -161,9 +170,24 @@ class SFKeyPool:
         except (TypeError, ValueError):
             return "unknown", "余额解析失败"
         min_balance = float(_cfg().get("min_balance", 0.5))
-        if balance < min_balance:
-            return "dead", f"余额 ¥{balance:.2f}"
-        return "alive", f"¥{balance:.2f}"
+        if balance >= min_balance:
+            return "alive", f"¥{balance:.2f}"
+
+        # 第二阶段：代金券探针（余额为 0 不代表不能调用）
+        probe_model = os.environ.get("SF_LLM_MODEL") or _DEFAULT_PROBE_MODEL
+        probe = await client.post(
+            f"{base}/chat/completions", headers=headers,
+            json={"model": probe_model, "max_tokens": 1,
+                  "messages": [{"role": "user", "content": "hi"}]})
+        if probe.status_code == 200:
+            return "alive", "代金券可用"
+        if probe.status_code == 429:
+            return "alive", "限流中(有额度)"
+        text = (probe.text or "")[:200].lower()
+        if probe.status_code in (401, 402, 403) or \
+                any(w in text for w in ("insufficient", "balance", "余额", "quota")):
+            return "dead", f"余额/代金券耗尽({probe.status_code})"
+        return "unknown", f"探针 http {probe.status_code}"
 
 
 sf_pool = SFKeyPool()
