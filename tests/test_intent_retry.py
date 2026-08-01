@@ -107,3 +107,38 @@ class TestAgentRebuild:
         assert calls == []  # 构造时不再绑工具
         await agent.process("甲: 你好")
         assert calls  # process 时按当前会话状态实时构建
+
+
+class TestAddressedFallback:
+    @pytest.mark.asyncio
+    async def test_addressed_exception_gets_fallback(self, monkeypatch):
+        """被 @ 时 agent 炸了（含 recursion limit）回实话，不装死。"""
+        import junjun_agent.agent as agent_mod
+        from junjun_core.gateway.session_manager import ChatSession
+
+        class _BoomAgent:
+            async def ainvoke(self, *a, **kw):
+                raise RuntimeError("Recursion limit reached")
+
+        monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
+                            lambda self: _BoomAgent())
+        session = ChatSession("qq:1:private", "qq", user_id="1")
+        agent = agent_mod.JunJunAgent(session, model=object())
+        out = await agent.process("甲: 帮我盯着p站16689973", addressed=True)
+        assert out and "没办成" in out
+
+    @pytest.mark.asyncio
+    async def test_unaddressed_exception_stays_silent(self, monkeypatch):
+        """未被 @ 时保持沉默（不炸会话）。"""
+        import junjun_agent.agent as agent_mod
+        from junjun_core.gateway.session_manager import ChatSession
+
+        class _BoomAgent:
+            async def ainvoke(self, *a, **kw):
+                raise RuntimeError("Recursion limit reached")
+
+        monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
+                            lambda self: _BoomAgent())
+        session = ChatSession("qq:1:group", "qq", group_id="1")
+        agent = agent_mod.JunJunAgent(session, model=object())
+        assert await agent.process("甲: 随便聊聊", addressed=False) is None
