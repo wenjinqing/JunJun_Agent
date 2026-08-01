@@ -40,52 +40,90 @@ def _cfg() -> dict:
 # 统一签名：(sub) -> (items, name)；items 为 [{seen, title, url}] 新内容（旧->新），
 # name 为目标显示名（拿不到给 ""）。失败/无更新返回 ([], name)。
 
-async def _check_pixiv_author(sub) -> tuple:
+async def _fetch_pixiv_latest(uid: str, limit: int = 15) -> tuple:
+    """作者最新小说 ID/标题（含系列章节！）。
+
+    2026-08-01 实锤 bug：订阅检查原本复用浏览接口 _fetch_author_works，
+    它把「系列内章节」去重不单列——系列型作者（章节全在系列里）检查
+    结果恒为空，订阅永远静默。盯更新必须盯全部新章节。
+    返回 ([{id,title}] 最新在前, author)。
+    """
     from junjun_skills.plugins.pixiv_novel import tools as pixiv
-    data = await pixiv._fetch_author_works(sub.target_id)
-    if data.get("error"):
-        logger.warning(f"订阅检查 pixiv 作者 {sub.target_id} 失败: {data['error']}")
+    profile = await pixiv._fetch_json(pixiv._AJAX_USER_PROFILE.format(uid),
+                                      pixiv._BASE_URL + f"/users/{uid}")
+    if not profile or profile.get("error"):
         return [], ""
-    name = data.get("author") or ""
+    novels_map = profile.get("novels") or {}
+    raw_ids = novels_map.keys() if isinstance(novels_map, dict) else novels_map
+    ids = sorted((str(i) for i in raw_ids if str(i).isdigit()),
+                 key=int, reverse=True)[:limit]
+    if not ids:
+        return [], ""
+    query = "&".join(f"ids[]={i}" for i in ids)
+    works_resp = await pixiv._fetch_json(
+        pixiv._AJAX_USER_NOVELS.format(uid) + "?" + query,
+        pixiv._BASE_URL + f"/users/{uid}/novels")
+    works = (works_resp or {}).get("works") or {}
+    author, items = "", []
+    for nid in ids:
+        w = works.get(nid) or {}
+        author = author or str(w.get("userName") or "")
+        items.append({"id": nid, "title": str(w.get("title") or "(无标题)")})
+    return items, author
+
+
+async def _check_pixiv_author(sub) -> tuple:
+    latest, name = await _fetch_pixiv_latest(sub.target_id)
+    if not latest:
+        return [], name
     try:
         baseline = int(sub.last_seen or 0)
     except ValueError:
         baseline = 0
     fresh = []
-    for item in reversed(data.get("novels") or []):  # novels 最新在前，反转为旧->新
-        nid = str(item.get("id") or "")
-        if nid.isdigit() and int(nid) > baseline:
+    for item in reversed(latest):  # latest 最新在前，反转为旧->新
+        nid = item["id"]
+        if int(nid) > baseline:
             fresh.append({
                 "seen": nid,
-                "title": item.get("title") or "(无标题)",
+                "title": item["title"],
                 "url": f"https://www.pixiv.net/novel/show.php?id={nid}",
             })
     return fresh, name
 
 
 async def _check_bili_up(sub) -> tuple:
+    """UP 主最新投稿：动态流 feed/space。
+
+    2026-08-01 实测：arc/search 端点风控 412/-799（有 SESSDATA 也过不了），
+    动态流 + buvid3 稳定 200。基线按动态发布 ts（pub_ts）。
+    """
     from junjun_skills.plugins.bilibili import tools as bili
-    params = await bili._wbi_sign({"mid": sub.target_id, "ps": 5, "order": "pubdate"})
-    data = await bili._fetch_json("https://api.bilibili.com/x/space/arc/search", params)
-    vlist = ((((data or {}).get("data") or {}).get("list") or {}).get("vlist")) or []
-    if not vlist:
-        return [], ""
-    name = str(vlist[0].get("author") or "")
+    params = await bili._wbi_sign({"host_mid": sub.target_id, "timezone_offset": "-480"})
+    data = await bili._fetch_json(
+        "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space", params)
+    raw_items = (((data or {}).get("data") or {}).get("items")) or []
+    name, vids = "", []
+    for it in raw_items:
+        if it.get("type") != "DYNAMIC_TYPE_AV":
+            continue
+        modules = it.get("modules") or {}
+        author_mod = modules.get("module_author") or {}
+        name = name or str(author_mod.get("name") or "")
+        av = (((modules.get("module_dynamic") or {}).get("major") or {}).get("archive")) or {}
+        bvid = str(av.get("bvid") or "")
+        try:
+            ts = int(author_mod.get("pub_ts") or 0)
+        except (TypeError, ValueError):
+            ts = 0
+        if bvid and ts:
+            vids.append((ts, {"seen": str(ts), "title": str(av.get("title") or "(无标题)"),
+                              "url": f"https://www.bilibili.com/video/{bvid}"}))
     try:
         baseline = int(float(sub.last_seen or 0))
     except ValueError:
         baseline = 0
-    fresh = []
-    for v in sorted(vlist, key=lambda x: int(x.get("created") or 0)):  # 旧->新
-        created = int(v.get("created") or 0)
-        bvid = str(v.get("bvid") or "")
-        if created > baseline and bvid:
-            fresh.append({
-                "seen": str(created),
-                "title": v.get("title") or "(无标题)",
-                "url": f"https://www.bilibili.com/video/{bvid}",
-            })
-    return fresh, name
+    return [v for ts, v in sorted(vids) if ts > baseline], name
 
 
 _CHECKERS = {"pixiv_author": _check_pixiv_author, "bili_up": _check_bili_up}
@@ -139,10 +177,11 @@ def _chat_sub_count(chat_id: str) -> int:
 
 
 async def _baseline_for(kind: str, target_id: str) -> tuple:
-    """订阅当下的基线（最新内容标记 + 显示名），防止把历史内容当更新轰炸。"""
+    """订阅当下的基线 + 显示名 + 最新作品标题（回执里证明「盯上了」）。"""
     fake = type("Sub", (), {"target_id": target_id, "last_seen": "0"})()
     items, name = await _CHECKERS[kind](fake)
-    return (items[-1]["seen"] if items else "0"), name
+    return (items[-1]["seen"] if items else "0"), name, \
+        (items[-1]["title"] if items else "")
 
 
 # ---------------------------------------------------------------- 调度检查
@@ -225,11 +264,12 @@ async def _do_subscribe(source: str, target: str, chat_id: str,
         if not target_id:
             return f"没找到叫「{target}」的 UP 主，可以直接给我 ta 的 mid（空间 URL 里的数字）。"
 
-    baseline, name = await _baseline_for(kind, target_id)
+    baseline, name, latest = await _baseline_for(kind, target_id)
     sub = _create(kind, target_id, chat_id, user_id, nickname,
                   baseline, name or found_name)
     display = sub.target_name or target_id
-    return (f"订阅好了：{_KIND_NAMES[kind]}「{display}」（#{sub.id}）。"
+    latest_line = f"ta 最新的是《{latest}》。" if latest else ""
+    return (f"订阅好了：{_KIND_NAMES[kind]}「{display}」（#{sub.id}）。{latest_line}"
             f"每 {sub.interval_minutes} 分钟查一次，有更新我会主动来说。"
             f"现有内容不会轰炸你，只盯新发的。想取消说「取消订阅 {sub.id}」。")
 

@@ -43,6 +43,21 @@ def _mk_sub(sub, **kw):
     return m.Subscription.create(**defaults)
 
 
+def _stub_pixiv(monkeypatch, works: dict, author="某作者", called=None):
+    """桩 pixiv._fetch_json：profile/all 返回小说 ID 表，profile/novels 返回标题表。"""
+    from junjun_skills.plugins.pixiv_novel import tools as pixiv
+
+    async def _fetch(url, referer=""):
+        if called is not None:
+            called.append(1)
+        if "profile/all" in url:
+            return {"novels": {nid: {} for nid in works}}
+        return {"works": {nid: {"title": t, "userName": author}
+                          for nid, t in works.items()}}
+
+    monkeypatch.setattr(pixiv, "_fetch_json", _fetch)
+
+
 class TestResolve:
     def test_pixiv_uid_and_url(self, _env):
         assert _env._resolve_pixiv_uid("16689973") == "16689973"
@@ -73,17 +88,8 @@ class TestResolve:
 class TestCheckers:
     @pytest.mark.asyncio
     async def test_pixiv_diff(self, _env, monkeypatch):
-        """只报比 last_seen 新的 P 站小说，旧->新排序。"""
-        from junjun_skills.plugins.pixiv_novel import tools as pixiv
-
-        async def _works(uid):
-            return {"author": "某作者", "series": [], "novels": [
-                {"id": "103", "title": "新篇3"},
-                {"id": "101", "title": "新篇1"},
-                {"id": "99", "title": "旧篇"},   # <= baseline 100 不报（字符串比较转 int）
-            ]}
-
-        monkeypatch.setattr(pixiv, "_fetch_author_works", _works)
+        """只报比 last_seen 新的 P 站小说（含系列章节），旧->新排序。"""
+        _stub_pixiv(monkeypatch, {"103": "新篇3", "101": "新篇1", "99": "旧篇"})
         sub = SimpleNamespace(target_id="16689973", last_seen="100")
         items, name = await _env._check_pixiv_author(sub)
         assert name == "某作者"
@@ -92,17 +98,24 @@ class TestCheckers:
 
     @pytest.mark.asyncio
     async def test_bili_diff(self, _env, monkeypatch):
-        """只报 pubdate 比 last_seen 新的视频。"""
+        """只报 pub_ts 比 last_seen 新的视频；非视频动态被过滤。"""
         from junjun_skills.plugins.bilibili import tools as bili
 
         async def _sign(params):
             return params
 
+        def _card(bvid, title, ts):
+            return {"type": "DYNAMIC_TYPE_AV",
+                    "modules": {"module_author": {"name": "某UP", "pub_ts": ts},
+                                "module_dynamic": {"major": {"archive": {
+                                    "bvid": bvid, "title": title}}}}}
+
         async def _fetch(url, params=None):
-            return {"data": {"list": {"vlist": [
-                {"bvid": "BV3", "title": "新视频", "created": 2000, "author": "某UP"},
-                {"bvid": "BV1", "title": "旧视频", "created": 500, "author": "某UP"},
-            ]}}}
+            return {"data": {"items": [
+                _card("BV3", "新视频", 2000),
+                _card("BV1", "旧视频", 500),
+                {"type": "DYNAMIC_TYPE_DRAW", "modules": {}},  # 图文动态忽略
+            ]}}
 
         monkeypatch.setattr(bili, "_wbi_sign", _sign)
         monkeypatch.setattr(bili, "_fetch_json", _fetch)
@@ -117,15 +130,9 @@ class TestSubscribeFlow:
     @pytest.mark.asyncio
     async def test_baseline_no_history_spam(self, _env, monkeypatch):
         """订阅当下以最新内容为基线——首次检查不会轰炸历史内容。"""
-        from junjun_skills.plugins.pixiv_novel import tools as pixiv
-
-        async def _works(uid):
-            return {"author": "某作者", "series": [], "novels": [
-                {"id": "105", "title": "最新"}, {"id": "104", "title": "次新"}]}
-
-        monkeypatch.setattr(pixiv, "_fetch_author_works", _works)
-        baseline, name = await _env._baseline_for("pixiv_author", "16689973")
-        assert baseline == "105" and name == "某作者"
+        _stub_pixiv(monkeypatch, {"105": "最新", "104": "次新"})
+        baseline, name, latest = await _env._baseline_for("pixiv_author", "16689973")
+        assert baseline == "105" and name == "某作者" and latest == "最新"
 
         sub = _mk_sub(_env, last_seen=baseline, last_checked=0)
         sent = []
@@ -140,12 +147,7 @@ class TestSubscribeFlow:
     @pytest.mark.asyncio
     async def test_check_pushes_and_updates_state(self, _env, monkeypatch):
         """有更新：推送 + last_seen/last_checked/target_name 更新。"""
-        from junjun_skills.plugins.pixiv_novel import tools as pixiv
-
-        async def _works(uid):
-            return {"author": "真名", "series": [], "novels": [{"id": "107", "title": "新"}]}
-
-        monkeypatch.setattr(pixiv, "_fetch_author_works", _works)
+        _stub_pixiv(monkeypatch, {"107": "新"}, author="真名")
         sub = _mk_sub(_env, target_name="", last_seen="100")
         sent = []
 
@@ -163,14 +165,8 @@ class TestSubscribeFlow:
     @pytest.mark.asyncio
     async def test_interval_throttle(self, _env, monkeypatch):
         """未到检查间隔的订阅跳过。"""
-        from junjun_skills.plugins.pixiv_novel import tools as pixiv
         called = []
-
-        async def _works(uid):
-            called.append(1)
-            return {"author": "", "series": [], "novels": [{"id": "107", "title": "新"}]}
-
-        monkeypatch.setattr(pixiv, "_fetch_author_works", _works)
+        _stub_pixiv(monkeypatch, {"107": "新"}, called=called)
         _mk_sub(_env, last_checked=time.time())  # 刚查过
         monkeypatch.setattr(_env, "_notify", lambda s, i: None)
         await _env.check_subscriptions()
@@ -203,14 +199,9 @@ class TestDoSubscribe:
     @pytest.mark.asyncio
     async def test_create_via_command_path(self, _env, monkeypatch):
         """确定性命令通道：_do_subscribe 直接落库（绕过 LLM 工具选择）。"""
-        from junjun_skills.plugins.pixiv_novel import tools as pixiv
-
-        async def _works(uid):
-            return {"author": "某作者", "series": [], "novels": [{"id": "105", "title": "最新"}]}
-
-        monkeypatch.setattr(pixiv, "_fetch_author_works", _works)
+        _stub_pixiv(monkeypatch, {"105": "最新"})
         reply = await _env._do_subscribe("pixiv", "16689973", "qq:999:group", "111", "甲")
-        assert "订阅好了" in reply and "#" in reply
+        assert "订阅好了" in reply and "#" in reply and "《最新》" in reply
         rows = list(m.Subscription.select())
         assert len(rows) == 1
         assert rows[0].kind == "pixiv_author" and rows[0].last_seen == "105"
