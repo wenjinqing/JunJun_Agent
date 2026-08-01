@@ -404,7 +404,7 @@ class TestManifest:
             (Path(bili.__file__).parent / "_manifest.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "bilibili"
         assert manifest["tools_attr"] == "TOOLS"
-        assert [t.name for t in bili.TOOLS] == ["bilibili_summary"]
+        assert [t.name for t in bili.TOOLS] == ["bilibili_summary", "watch_video"]
         # 命令/拦截器的 plugin 参数与 manifest name 一致
         cmd_plugins = {c["name"]: c["plugin"] for c in commands.list_commands()}
         it_plugins = {i["name"]: i["plugin"] for i in interceptors.list_interceptors()}

@@ -228,6 +228,15 @@ report_max_chars = 1000 # 报告正文目标长度（加上来源列表后仍需
 enable_understand = true   # 拦截器命中后后台「看懂」视频 + 摘要注入会话上下文
 subtitle_max_chars = 8000  # 字幕全文截断（长视频防综述输入爆炸）
 
+# ---------- 认真看视频（video_watch job：下载 -> ASR 转写 -> 关键帧 -> 观后报告） ----------
+[video_watch]
+max_duration = 1800        # 能看的视频时长上限（秒，30 分钟）
+asr_model = "FunAudioLLM/SenseVoiceSmall"  # 硅基流动 ASR（OpenAI 兼容接口，号池 key）
+asr_max_chars = 6000       # 语音转写截断
+keyframe_interval = 30     # 关键帧抽取间隔（秒）
+max_keyframes = 8          # 关键帧上限（每帧一次 VLM 调用）
+report_max_chars = 1200    # 观后报告目标长度（留量给汇报上限 1500）
+
 # ---------- 硅基流动 key 号池（多 key 轮用，余额不足自动丢弃） ----------
 [key_pool]
 min_balance = 0.5   # 余额低于此值（元）发 1-token 探针复核（代金券余额恒 0 但可用），确认没钱才丢弃
