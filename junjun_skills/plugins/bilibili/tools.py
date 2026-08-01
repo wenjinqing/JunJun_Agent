@@ -23,6 +23,7 @@ import urllib.parse
 from pathlib import Path
 
 import httpx
+from langchain_core.tools import tool
 
 from junjun_agent.commands import register_command
 from junjun_agent.interceptors import register_interceptor
@@ -539,9 +540,23 @@ async def bili_info_cmd(ctx):
 @register_interceptor(BILI_LINK_RE.pattern, name="bilibili_link", plugin="bilibili",
                       group_at_only=_GROUP_AT_ONLY)
 async def bilibili_hit(ctx) -> bool:
-    """自动识别消息中的 B 站链接并解析；消费消息不再进 LLM 决策。"""
+    """自动识别消息中的 B 站链接。
+
+    两种语义：
+    - 纯分享（「这个好看 <链接>」）：消费消息，后台下载发送视频 + 后台「看懂」
+      （字幕材料预热 + 摘要进会话上下文），Agent 后续能自然聊起
+    - 提问（「这视频讲了啥 <链接>」）：不消费，只预热材料，交给 LLM 决策——
+      Agent 调 bilibili_summary 直接回答，不再当复读机
+    """
     url = (ctx.args or "").rstrip(_TRAILING_PUNCT)
     if not url:
+        return False
+
+    rest = (ctx.meta.text or "").replace(url, "")
+    if any(h in rest for h in _QUESTION_HINTS):
+        logger.info(f"B站链接+提问，预热材料后交给 LLM: {url[:60]}")
+        from junjun_skills.plugins.bilibili import content
+        content.prewarm_video(ctx.session.chat_id, url)
         return False
 
     remain = _check_rate_limit(ctx.session.chat_id)
@@ -550,9 +565,46 @@ async def bilibili_hit(ctx) -> bool:
         return True
 
     logger.info(f"B站解析(自动): url={url[:80]}")
+    from junjun_skills.plugins.bilibili import content
+    content.prewarm_video(ctx.session.chat_id, url)  # 与下载并行，互不阻塞
     ack = await _submit_process(ctx.session.chat_id, url)
     await ctx.reply(ack)
     return True
 
 
-TOOLS = []
+# 链接之外的文本命中这些词 = 在问视频内容（而非求转发视频文件）
+_QUESTION_HINTS = (
+    "讲了啥", "讲了什么", "讲了些啥", "讲的啥", "讲的什么", "什么内容",
+    "什么视频", "说啥", "说了啥", "怎么样", "好看吗", "讲讲", "总结",
+    "看看这个", "看下这个", "瞅瞅",
+)
+
+
+# ---------------------------------------------------------------- LLM 工具
+
+@tool
+async def bilibili_summary(url: str) -> str:
+    """看懂一个 B 站视频：抓 AI 字幕（没有则用弹幕+热评）后总结内容。
+    对方发 B 站链接问「讲了啥/什么内容/总结一下/好看吗」，或你想聊群里刚分享的视频时使用。
+
+    Args:
+        url: B 站视频链接（bilibili.com/video/BVxxx 或 b23.tv 短链）
+    """
+    from junjun_skills.plugins.bilibili import content
+    m = await content.get_material((url or "").strip())
+    if not m:
+        return "没拿到这个视频的资料（链接失效或被风控），让对方直接说说讲的啥吧。"
+    summary = ""
+    try:
+        summary = await content.summarize_material(m["material"], max_chars=200)
+    except Exception:
+        pass
+    info = m["info"]
+    out = f"视频《{info['title']}》（UP主：{info.get('owner') or '未知'}）\n"
+    if summary:
+        out += f"内容要点（依据{m['source']}）：{summary}\n"
+    out += f"材料详情：\n{m['material'][:2000]}"
+    return out
+
+
+TOOLS = [bilibili_summary]

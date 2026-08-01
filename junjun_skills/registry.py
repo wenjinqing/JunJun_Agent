@@ -343,6 +343,7 @@ _TOPIC_KEYWORDS = {
     "ja_tts": ["日语", "日文", "语音", "声音"],
     "send_poke": ["戳", "poke"],
     "bilibili": ["b站", "bilibili", "视频", "bv"],
+    "bilibili_summary": ["b站", "bilibili", "视频讲", "讲了啥", "讲了什么", "bv", "视频内容", "什么视频"],
     "douyin": ["抖音", "douyin"],
     "music": ["音乐", "歌", "点歌"],
     "send_feed": ["说说", "空间", "qzone", "动态"],
