@@ -47,10 +47,13 @@ class TestIntentNudge:
         assert nudge and "set_reminder" in nudge
 
     def test_research_intent_goes_background(self):
-        """「调研」命中深度研究规则：只做了内联搜索 -> 追问 deep_research。"""
+        """「调研」「深研」命中深度研究规则：只做了内联搜索 -> 追问 deep_research。"""
         tools = ALL_TOOLS | {"deep_research"}
         msgs = [_ai_with_tools("web_search")]
         nudge = _intent_nudge("帮我调研一下绝区零丹的攻略", msgs, tools)
+        assert nudge and "deep_research" in nudge
+        # 2026-08-01 trace：用户口语缩写「深研」未命中关键词，当场内联查完
+        nudge = _intent_nudge("帮我深研一下绝区零丹的配队", msgs, tools)
         assert nudge and "deep_research" in nudge
 
     def test_research_no_nudge_when_submitted(self):

@@ -357,7 +357,7 @@ _TOPIC_KEYWORDS = {
     "subscribe_updates": ["订阅", "盯", "关注", "更新了告诉", "出新", "up主", "p站", "pixiv"],
     "list_subscriptions": ["订阅", "盯"],
     "unsubscribe": ["取消订阅", "别盯", "退订", "不用盯"],
-    "deep_research": ["调研", "深度研究", "研究报告", "整理一份", "报告", "系统查", "查资料"],
+    "deep_research": ["调研", "深研", "深度研究", "研究报告", "整理一份", "报告", "系统查", "查资料"],
     "run_background_task": ["后台", "慢慢做", "不着急", "研究一下", "做好了叫", "总结一下这个", "读一下这个"],
     "list_background_tasks": ["后台任务", "任务进度", "做得怎么样", "做好了吗"],
     "cancel_background_task": ["取消任务", "别做了", "不用做了", "停掉"],
