@@ -32,12 +32,16 @@ api_key_env = "DEEPSEEK_API_KEY"
 
 [task.agent]
 # 主 Agent：必须支持 function calling。
-# 工具选择/指令遵循是瓶颈时，给 agent 单独配一组更强的模型：
-# 在 .env 加 AGENT_LLM_BASE_URL / AGENT_LLM_MODEL / AGENT_LLM_API_KEY，
-# 然后把下面三个 *_env 改成 AGENT_LLM_*（小模型槽继续用 DS_* 省钱）。
 # temperature 0.6：人格活泼与工具调用稳定性的平衡点（0.8 时弱模型工具选择太飘）
 temperature = 0.6
 max_tokens = 2048
+# 主：硅基流动号池（Qwen3.5-397B，工具路由主力；key 在 data/sf_keys.txt）
+[[task.agent.models]]
+base_url_env = "SF_LLM_BASE_URL"
+model_env = "SF_LLM_MODEL"
+api_key_env = "SF_POOL"
+# 备：DeepSeek V4-Flash（号池全灭/限流时自动切回）
+[[task.agent.models]]
 base_url_env = "DS_BASE_URL"
 model_env = "DS_MODEL"
 api_key_env = "DEEPSEEK_API_KEY"
