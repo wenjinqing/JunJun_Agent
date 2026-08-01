@@ -36,6 +36,7 @@ class InboundMeta:
     is_self: bool
     image_urls: list = None      # 消息中的普通图片 URL（VLM 识图用）
     sticker_urls: list = None    # 消息中的表情包 URL（偷图用；OneBot sub_type=1 / mface）
+    voice_records: list = None   # 消息中的语音引用（url/file id，ASR 转写用）
     has_emoji: bool = False      # 含 QQ 原生表情
 
 
@@ -133,8 +134,9 @@ class Gateway:
         text = _extract_text(msg.message_segment)
         image_urls = _extract_images(msg.message_segment)
         sticker_urls = _extract_stickers(msg.message_segment)
-        if not text and not image_urls and not sticker_urls:
-            logger.debug("消息无文本/图片内容，跳过")
+        voice_records = _extract_voices(msg.message_segment)
+        if not text and not image_urls and not sticker_urls and not voice_records:
+            logger.debug("消息无文本/图片/语音内容，跳过")
             return
 
         chat_id = f"{info.platform}:{group_id if group_info else user_id}:{'group' if group_info else 'private'}"
@@ -154,6 +156,7 @@ class Gateway:
             is_self=bool(self.bot_user_id and str(user_id) == str(self.bot_user_id)),
             image_urls=image_urls,
             sticker_urls=sticker_urls,
+            voice_records=voice_records,
             has_emoji=_has_emoji(msg.message_segment),
         )
 
@@ -218,6 +221,17 @@ def _has_emoji(seg: Seg) -> bool:
     if seg.type == "seglist" and isinstance(seg.data, list):
         return any(_has_emoji(sub) for sub in seg.data)
     return seg.type in ("emoji", "sticker")
+
+
+def _extract_voices(seg: Seg) -> list:
+    """语音段引用（url 或 file id，ASR 转写用）。"""
+    refs = []
+    if seg.type == "seglist" and isinstance(seg.data, list):
+        for sub in seg.data:
+            refs.extend(_extract_voices(sub))
+    elif seg.type == "voice" and isinstance(seg.data, str) and seg.data:
+        refs.append(seg.data)
+    return refs
 
 
 _gateway: Optional[Gateway] = None

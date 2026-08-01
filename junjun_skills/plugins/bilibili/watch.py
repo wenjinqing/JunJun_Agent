@@ -17,7 +17,6 @@ key 复用号池（sf_pool），代金券直接烧。
 """
 
 import asyncio
-import os
 import shutil
 import time
 from pathlib import Path
@@ -87,36 +86,11 @@ async def _extract_frames(video: Path, out_dir: Path, interval: int, max_n: int)
 # ---------------------------------------------------------------- ASR / VLM
 
 async def _asr_transcribe(audio_path: Path, *, client_factory=None) -> str:
-    """硅基流动 ASR（OpenAI 兼容 /audio/transcriptions）。失败返回 ""。"""
-    try:
-        import httpx
-        key = ""
-        try:
-            from junjun_llm.key_pool import sf_pool
-            keys = sf_pool.healthy_keys()
-            key = keys[0] if keys else ""
-        except Exception:
-            pass
-        key = key or os.environ.get("SILICONFLOW_API_KEY", "")
-        if not key:
-            logger.warning("ASR 无可用 key（号池空且无 SILICONFLOW_API_KEY）")
-            return ""
-        base = os.environ.get("SF_LLM_BASE_URL", "https://api.siliconflow.cn/v1").rstrip("/")
-        model = str(_cfg().get("asr_model", "FunAudioLLM/SenseVoiceSmall"))
-        factory = client_factory or (lambda: httpx.AsyncClient(timeout=_ASR_TIMEOUT))
-        async with factory() as client:
-            with open(audio_path, "rb") as f:
-                resp = await client.post(
-                    f"{base}/audio/transcriptions",
-                    headers={"Authorization": f"Bearer {key}"},
-                    files={"file": (audio_path.name, f, "audio/m4a")},
-                    data={"model": model})
-        text = str((resp.json() or {}).get("text") or "").strip()
-        logger.info(f"ASR 转写完成: {len(text)} 字")
-        return text
-    except Exception as e:
-        logger.warning(f"ASR 转写失败: {type(e).__name__}: {e}")
-        return ""
+    """视频音频转写（长音频，走共享 ASR 模块，模型取 [video_watch].asr_model）。"""
+    from junjun_llm.asr import transcribe_file
+    return await transcribe_file(audio_path,
+                                 model=str(_cfg().get("asr_model", "")),
+                                 timeout=_ASR_TIMEOUT)
 
 
 async def _describe_frames(frames: list, *, vlm=None) -> list:
