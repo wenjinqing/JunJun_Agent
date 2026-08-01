@@ -13,6 +13,14 @@
 #   base_url_env = "SF_LLM_BASE_URL"    # 备：siliconflow（配了 env 才生效）
 #   model_env    = "SF_LLM_MODEL"
 #   api_key_env  = "SF_LLM_API_KEY"
+#
+# 硅基流动号池（多 key 轮用）：api_key_env 写 "SF_POOL"，
+# key 放 data/sf_keys.txt 一行一个；余额不足/失效自动换下一条腿，
+# 不同任务槽起始 key 轮转（详见 junjun_llm/key_pool.py）：
+#   [[task.agent.models]]
+#   base_url_env = "SF_LLM_BASE_URL"
+#   model_env    = "SF_LLM_MODEL"
+#   api_key_env  = "SF_POOL"
 
 [task.gate]
 # L2 语义门：小模型，判定 reply / no_reply / no_reply_until_call

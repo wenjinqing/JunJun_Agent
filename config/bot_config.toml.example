@@ -216,6 +216,12 @@ max_pending_per_chat = 5   # 单会话排队+进行中的上限
 subagent_max_iter = 12     # 子任务 agent 的最大迭代轮数
 report_max_chars = 1500    # 汇报正文最长（超出截断）
 
+# ---------- 硅基流动 key 号池（多 key 轮用，余额不足自动丢弃） ----------
+[key_pool]
+min_balance = 0.5   # 余额低于此值（元）丢弃
+check_hours = 2     # 余额巡检间隔（小时；top up 的 key 下轮自动复活）
+max_legs = 10       # 单槽 fallback 链最多用几个 key
+
 # ---------- 娱乐小工具（fun_texts 插件） ----------
 [fun_texts]
 daily60s_enable = false   # 每日「60s 读懂世界」图片推送（推给近 48h 活跃群）
