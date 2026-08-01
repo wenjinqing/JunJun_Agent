@@ -95,6 +95,9 @@ def _patch_common(monkeypatch, bili, *, view=_UNSET, playurl=_UNSET,
     monkeypatch.setattr(bili, "_fetch_view", _view)
     monkeypatch.setattr(bili, "_fetch_playurl", _play)
     monkeypatch.setattr(bili, "_ffmpeg_path", lambda: ffmpeg)
+    # 内容理解预热是 fire-and-forget 后台任务：桩掉防测试碰真实 B 站 API
+    import junjun_skills.plugins.bilibili.content as bili_content
+    monkeypatch.setattr(bili_content, "prewarm_video", lambda *a, **k: None)
 
 
 def _fake_download(monkeypatch, bili, size=1024):
@@ -360,6 +363,37 @@ class TestInterceptor:
         assert segs[0].type == "text" and "播放地址获取失败" in segs[0].data
         assert segs[1].type == "image"
 
+    @pytest.mark.asyncio
+    async def test_question_passes_through(self, _fake_gateway, monkeypatch, tmp_path):
+        """「这视频讲了啥 <链接>」：不消费，交给 LLM + bilibili_summary；材料预热。"""
+        bili = _load()
+        monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
+        _patch_common(monkeypatch, bili)
+        prewarmed = []
+        import junjun_skills.plugins.bilibili.content as bili_content
+        monkeypatch.setattr(bili_content, "prewarm_video",
+                            lambda chat_id, url: prewarmed.append(url))
+
+        meta = _meta("这视频讲了啥 https://www.bilibili.com/video/BV1xx411c7mD")
+        consumed = await interceptors.dispatch(_session(), meta)
+        assert consumed is False
+        assert not _fake_gateway              # 不下载不回复，进漏斗
+        assert prewarmed                      # 材料已预热，工具调用秒回
+
+    @pytest.mark.asyncio
+    async def test_share_without_question_still_consumes(self, _fake_gateway, monkeypatch, tmp_path):
+        """「这个好看」不含提问词（「好看吗」才算问）——保持原下载语义。"""
+        bili = _load()
+        monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
+        _patch_common(monkeypatch, bili)
+        _fake_download(monkeypatch, bili)
+
+        meta = _meta("这个好看 https://www.bilibili.com/video/BV1xx411c7mD")
+        consumed = await interceptors.dispatch(_session(), meta)
+        assert consumed is True
+        await _drain()
+        assert any(s.type == "video" for s in _fake_gateway[1].segments)
+
 
 class TestManifest:
     def test_manifest_and_registration(self):
@@ -370,7 +404,7 @@ class TestManifest:
             (Path(bili.__file__).parent / "_manifest.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "bilibili"
         assert manifest["tools_attr"] == "TOOLS"
-        assert bili.TOOLS == []
+        assert [t.name for t in bili.TOOLS] == ["bilibili_summary"]
         # 命令/拦截器的 plugin 参数与 manifest name 一致
         cmd_plugins = {c["name"]: c["plugin"] for c in commands.list_commands()}
         it_plugins = {i["name"]: i["plugin"] for i in interceptors.list_interceptors()}

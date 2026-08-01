@@ -443,6 +443,14 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
             parts.append(f"对方分享的链接内容：{preview}")
     except Exception:
         pass
+    # B站视频理解：群里最近分享的视频字幕摘要（bilibili 插件后台「看懂」）
+    try:
+        from junjun_skills.plugins.bilibili import content as _bili_content
+        vb = _bili_content.render_recent_block(session.chat_id)
+        if vb:
+            parts.append(vb)
+    except Exception:
+        pass
     try:
         import asyncio as _aio
         import re as _re
