@@ -235,8 +235,11 @@ class JunJunAgent:
                 },
             )
         except Exception as e:
-            # 含 GraphRecursionError：超限兜底沉默，不炸会话
-            logger.warning(f"agent 执行异常，本轮沉默 [trace={trace_id}]: {type(e).__name__}: {e}")
+            # 含 GraphRecursionError：超限兜底。被 @ 必回语义下沉默像装死，
+            # 回一句实话（2026-08-01 trace：工具参数校验连错 5 次烧穿上限，用户被晾）
+            logger.warning(f"agent 执行异常 [trace={trace_id}]: {type(e).__name__}: {e}")
+            if addressed:
+                return "……刚才那个请求把我绕进去了，没办成。换个说法再叫我一次？"
             return None
         finally:
             if plan_token is not None:

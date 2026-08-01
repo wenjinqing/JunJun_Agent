@@ -30,6 +30,7 @@ def register(skill: BaseTool, available_for: Optional[Callable] = None,
     """
     if skill.name in _registry:
         raise ValueError(f"skill 重名: {skill.name}")
+    _relax_str_args(skill)
     if admin_only:
         skill = _wrap_admin_gate(skill)
     skill = _wrap_error_feedback(skill)  # 最外层：逃逸异常 -> [TOOL_ERROR] 结构化文本
@@ -37,6 +38,47 @@ def register(skill: BaseTool, available_for: Optional[Callable] = None,
     _availability[skill.name] = available_for
     _skill_plugin[skill.name] = plugin
     logger.debug(f"注册 skill: {skill.name} [{plugin}]{' (admin)' if admin_only else ''}")
+
+
+# ---------------------------------------------------------------- str 参数宽松化
+# 弱模型常把数字 ID 传成 JSON number（Qwen 尤甚：target=16689973 不带引号），
+# pydantic v2 的 str 字段 lax 模式也不吃 int -> 校验报错，模型还多半原样重试
+# 烧穿迭代上限（2026-08-01 实战 trace：5 次同样报错 -> recursion limit -> 沉默）。
+# 服务端统一宽松：str 字段包 BeforeValidator 把数字转字符串。
+# 模型侧 JSON schema 不变（仍声明 string），只影响服务端校验。
+
+def _num_to_str(v):
+    if isinstance(v, bool):
+        return v  # bool 是 int 子类，str(True)="True" 更糟，留给校验报错
+    if isinstance(v, (int, float)):
+        return str(v)
+    return v
+
+
+def _relax_str_args(skill: BaseTool) -> None:
+    """str 参数服务端宽松化（in-place 重建 args_schema）。非 pydantic schema 跳过。"""
+    from typing import Annotated
+    from pydantic import BeforeValidator, Field, create_model
+    schema = getattr(skill, "args_schema", None)
+    if schema is None or not hasattr(schema, "model_fields"):
+        return
+    defs = {}
+    relaxed = []
+    for name, f in schema.model_fields.items():
+        if f.annotation is str:
+            # FieldInfo 直接当 default 传会丢 description（模型理解参数的命根子），显式重建
+            new_field = Field(default=f.default, description=f.description,
+                              json_schema_extra=f.json_schema_extra)
+            defs[name] = (Annotated[str, BeforeValidator(_num_to_str)], new_field)
+            relaxed.append(name)
+        else:
+            defs[name] = (f.annotation, f)
+    if relaxed:
+        try:
+            skill.args_schema = create_model(f"{schema.__name__}Lax", **defs)
+            logger.debug(f"{skill.name} str 参数宽松化: {relaxed}")
+        except Exception as e:
+            logger.debug(f"{skill.name} args_schema 重建失败（保持原样）: {e}")
 
 
 def _admin_refusal(tool_name: str, args: tuple, kwargs: dict) -> str:
