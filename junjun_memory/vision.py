@@ -190,6 +190,27 @@ async def _gather_bounded(urls: List[str], tasks: List[asyncio.Task],
     return out
 
 
+async def describe_images_full(image_urls: List[str], *, model=None,
+                               wait: Optional[float] = None) -> tuple:
+    """完整版：返回 (url->描述, 仍在途的任务列表)。
+
+    「还在看」与「没有图」必须可区分——决策窗内没看完的图，Agent 应该
+    说「我在看」而不是「看不到」（2026-08-02 生产反馈）。在途任务交给
+    调用方决定要不要等完成后主动补一句。
+    """
+    if not image_urls:
+        return {}, []
+    if model is None:
+        model = _get_vlm()
+    tasks = [describe_image_shared(u, model=model, prompt=_DESCRIBE_PROMPT,
+                                   placeholder="[图片]") for u in image_urls]
+    if wait is None:
+        wait = _perception_wait()
+    out = await _gather_bounded(image_urls, tasks, "[图片]", wait)
+    pending = [t for t in tasks if not t.done()]
+    return out, pending
+
+
 async def describe_images(image_urls: List[str], *, model=None,
                           wait: Optional[float] = None) -> Dict[str, str]:
     """批量识图（并行 + 在途共享）：url -> 描述。失败/未配置映射为 "[图片]" 占位。
@@ -197,15 +218,8 @@ async def describe_images(image_urls: List[str], *, model=None,
     wait：就绪等待上限秒数；None 走配置 [perception] ready_wait_seconds（默认 3s），
     <=0 表示全部等完。超时未完成的图降级占位但在途任务继续跑（结果入缓存）。
     """
-    if not image_urls:
-        return {}
-    if model is None:
-        model = _get_vlm()
-    tasks = [describe_image_shared(u, model=model, prompt=_DESCRIBE_PROMPT,
-                                   placeholder="[图片]") for u in image_urls]
-    if wait is None:
-        wait = _perception_wait()
-    return await _gather_bounded(image_urls, tasks, "[图片]", wait)
+    out, _ = await describe_images_full(image_urls, model=model, wait=wait)
+    return out
 
 
 async def describe_stickers(sticker_urls: List[str], *, model=None,
