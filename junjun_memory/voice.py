@@ -96,12 +96,10 @@ def _perception_wait() -> float:
         return 3.0
 
 
-async def transcribe_voices(records: List[str], *, wait: Optional[float] = None) -> List[str]:
-    """批量转写（并行 + 在途共享 + 有界等待）。超时未完成的降级 "[语音]" 占位，
-    在途任务不取消——结果留在 _PENDING 直到完成，同语音下次命中。
-    """
+async def transcribe_voices_full(records: List[str], *, wait: Optional[float] = None) -> tuple:
+    """完整版：返回 (转写列表, 仍在途的任务列表)——「还在听」与「没语音」可区分。"""
     if not records or not _enabled():
-        return []
+        return [], []
     tasks = [_shared_task(ref) for ref in records[:3]]
     if wait is None:
         wait = _perception_wait()
@@ -115,6 +113,15 @@ async def transcribe_voices(records: List[str], *, wait: Optional[float] = None)
             out.append(t.result())
         else:
             out.append("[语音]")
+    pending = [t for t in tasks if not t.done()]
+    return out, pending
+
+
+async def transcribe_voices(records: List[str], *, wait: Optional[float] = None) -> List[str]:
+    """批量转写（并行 + 在途共享 + 有界等待）。超时未完成的降级 "[语音]" 占位，
+    在途任务不取消——结果留在 _PENDING 直到完成，同语音下次命中。
+    """
+    out, _ = await transcribe_voices_full(records, wait=wait)
     return out
 
 

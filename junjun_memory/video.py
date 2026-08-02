@@ -171,10 +171,10 @@ def _perception_wait() -> float:
         return 3.0
 
 
-async def describe_videos(urls: List[str], *, wait: Optional[float] = None) -> Dict[str, str]:
-    """url -> 描述。超时未完成的降级 "[视频]"，在途任务不取消（结果入 md5 缓存）。"""
+async def describe_videos_full(urls: List[str], *, wait: Optional[float] = None) -> tuple:
+    """完整版：返回 (url->描述, 仍在途的任务列表)——「还在看」与「没视频」可区分。"""
     if not urls or not _enabled():
-        return {}
+        return {}, []
     tasks = [_shared_task(u) for u in urls[:2]]
     if wait is None:
         wait = _perception_wait()
@@ -188,6 +188,13 @@ async def describe_videos(urls: List[str], *, wait: Optional[float] = None) -> D
             out[u] = t.result()
         else:
             out[u] = "[视频]"
+    pending = [t for t in tasks if not t.done()]
+    return out, pending
+
+
+async def describe_videos(urls: List[str], *, wait: Optional[float] = None) -> Dict[str, str]:
+    """url -> 描述。超时未完成的降级 "[视频]"，在途任务不取消（结果入 md5 缓存）。"""
+    out, _ = await describe_videos_full(urls, wait=wait)
     return out
 
 

@@ -261,7 +261,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     current_platform.set(session.platform)
 
     # ---- 记忆/关系/情绪/表达块（检索失败降级空串，不阻塞回复）----
-    memory_block = await _build_memory_block(session, meta)
+    memory_block, pending_perception = await _build_memory_block(session, meta)
     relation_block = _build_relation_block(session, meta)
 
     from junjun_express.mood import mood_manager
@@ -310,6 +310,15 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     # 情绪重评（跟随 L3，冷却内跳过；不阻塞发送——先发再评）
     if not text:
         return
+
+    # ---- 感知后续：决策时「还在看」的图/语音/视频，看完后主动补一句 ----
+    # （治「我看不到图片」：Agent 已接话 + 有在途感知 -> 完成后观后感推上门）
+    if pending_perception:
+        try:
+            from junjun_agent.loop import perception_followup
+            perception_followup.schedule(session, pending_perception)
+        except Exception:
+            pass
 
     session.memory.add_bot(text)
     _store_outbound(session, text)
@@ -416,15 +425,28 @@ def _warn_recall_throttled(e: BaseException) -> None:
                        f"{type(e).__name__}: {e}")
 
 
-async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
-    """被动记忆注入：按最新消息检索相关长期记忆 + 黑话释义 + 入站图片描述。失败降级空串。"""
+async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> tuple:
+    """被动记忆注入 + 感知在途清单。
+
+    返回 (记忆块文本, 在途感知条目 [{"kind","task"}])。
+    在途感知（3s 决策窗内没看完的图/语音/视频）必须让 Agent 知道「还在看」
+    而不是「看不到」——2026-08-02 生产反馈：占位符与「没有图」无法区分，
+    Agent 只能说「看不到图片」，体验像瞎子。条目交给 perception_followup
+    在完成后主动补观后感。
+    """
     parts = []
+    pending: list = []
+    pending_kinds: list = []
     if meta.image_urls:
         try:
-            from junjun_memory.vision import describe_images, render_image_block
-            block = render_image_block(await describe_images(meta.image_urls))
+            from junjun_memory.vision import describe_images_full, render_image_block
+            descs, pend = await describe_images_full(meta.image_urls)
+            block = render_image_block(descs)
             if block:
                 parts.append(block)
+            if pend:
+                pending += [{"kind": "image", "task": t} for t in pend]
+                pending_kinds.append(f"{len(pend)} 张图片")
         except Exception:
             pass
     if getattr(meta, "sticker_urls", None):
@@ -438,21 +460,33 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
     # 语音转写：record 段 -> ASR（预热已就绪则秒回；在途有界等待）
     if getattr(meta, "voice_records", None):
         try:
-            from junjun_memory.voice import transcribe_voices, render_voice_block
-            block = render_voice_block(await transcribe_voices(meta.voice_records))
+            from junjun_memory.voice import transcribe_voices_full, render_voice_block
+            texts, pend = await transcribe_voices_full(meta.voice_records)
+            block = render_voice_block(texts)
             if block:
                 parts.append(block)
+            if pend:
+                pending += [{"kind": "voice", "task": t} for t in pend]
+                pending_kinds.append(f"{len(pend)} 段语音")
         except Exception:
             pass
-    # 视频感知：抽帧 VLM + 抽音 ASR（预热就绪才注入；首轮多半还是占位）
+    # 视频感知：抽帧 VLM + 抽音 ASR（预热就绪才注入；首轮多半还在看）
     if getattr(meta, "video_urls", None):
         try:
-            from junjun_memory.video import describe_videos, render_video_block
-            block = render_video_block(await describe_videos(meta.video_urls))
+            from junjun_memory.video import describe_videos_full, render_video_block
+            descs, pend = await describe_videos_full(meta.video_urls)
+            block = render_video_block(descs)
             if block:
                 parts.append(block)
+            if pend:
+                pending += [{"kind": "video", "task": t} for t in pend]
+                pending_kinds.append(f"{len(pend)} 个视频")
         except Exception:
             pass
+    if pending_kinds:
+        parts.append("注意：对方刚发的" + "、".join(pending_kinds) +
+                     "你还在看（后台解析中，还没看完）——先自然地说你在看，"
+                     "看完你会主动补一句；绝不要说「看不到/没收到」。")
     # 近期图片补充：图是前几条消息发的（当时没 @bot），被 @ 时把最近 10 分钟
     # 群里的图片描述也注入（预热任务已就续则秒回；在途则 await 同一任务）
     try:
@@ -518,7 +552,7 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
             parts.append(jb)
     except Exception:
         pass
-    return "\n".join(parts)
+    return "\n".join(parts), pending
 
 
 def _build_relation_block(session: ChatSession, meta: InboundMeta) -> str:
