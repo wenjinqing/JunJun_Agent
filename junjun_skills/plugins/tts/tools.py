@@ -18,7 +18,8 @@
 
 说明：ai_voice 类后端依赖 NapCat 侧命令转发，本架构无对应通道，未实现；
 GPT-SoVITS 的 styles 表简化为环境变量单风格；
-音色/情绪参数只保留各后端默认音色常量（可用 env 覆盖）。
+情绪语气（2026-08 起）：doubao 走 Seed-TTS 2.0 emotion/emotion_scale（实测 vv 音色支持），
+gsv2p 走 other_params.emotion 中文词，其余后端忽略；情绪来源见 emotion.py。
 """
 
 import os
@@ -74,8 +75,12 @@ _last_use: dict = {}
 
 
 # ========== 各后端合成 helper（独立 async，失败返回 None，绝不抛异常） ==========
-async def synthesize_doubao(text: str) -> bytes | None:
-    """豆包 Seed-TTS 双向 WS 合成（协议实现复用 ja_tts 插件）。返回 mp3 字节或 None。"""
+async def synthesize_doubao(text: str, *, emotion: str = "",
+                            emotion_scale: int = 0) -> bytes | None:
+    """豆包 Seed-TTS 双向 WS 合成（协议实现复用 ja_tts 插件）。返回 mp3 字节或 None。
+
+    emotion/emotion_scale：Seed-TTS 2.0 情感参数（实测 vv 音色支持；空串=默认语气）。
+    """
     api_key = os.environ.get("DOUBAO_TTS_API_KEY", "").strip()
     if not api_key:
         return None
@@ -90,7 +95,8 @@ async def synthesize_doubao(text: str) -> bytes | None:
     try:
         # 懒加载避免 import 本模块时连带注册 ja_tts 命令
         from junjun_skills.plugins.ja_tts.tools import synthesize as _ja_synthesize
-        return await _ja_synthesize(text, speaker)
+        return await _ja_synthesize(text, speaker,
+                                    emotion=emotion, emotion_scale=emotion_scale)
     except Exception as e:
         logger.warning(f"tts 豆包合成失败: {type(e).__name__}: {e}")
         return None
@@ -130,8 +136,11 @@ async def synthesize_siliconflow(text: str) -> bytes | None:
         return None
 
 
-async def synthesize_gsv2p(text: str) -> bytes | None:
-    """GSV2P 云 API：POST /v1/audio/speech，返回 mp3 字节或 None。"""
+async def synthesize_gsv2p(text: str, *, emotion_zh: str = "默认") -> bytes | None:
+    """GSV2P 云 API：POST /v1/audio/speech，返回 mp3 字节或 None。
+
+    emotion_zh：GSV2P 中文情绪词（开心/生气/难过…，不认识回「默认」）。
+    """
     token = os.environ.get("TTS_GSV2P_TOKEN", "").strip()
     if not token:
         return None
@@ -145,7 +154,7 @@ async def synthesize_gsv2p(text: str) -> bytes | None:
         "response_format": "mp3",
         "speed": 1.0,
         "other_params": {
-            "text_lang": "中英混合", "prompt_lang": "中文", "emotion": "默认",
+            "text_lang": "中英混合", "prompt_lang": "中文", "emotion": emotion_zh or "默认",
             "top_k": 10, "top_p": 1.0, "temperature": 1.0,
             "text_split_method": "按标点符号切", "batch_size": 1,
             "batch_threshold": 0.75, "split_bucket": True,
@@ -253,14 +262,25 @@ def _parse_args(args: str) -> tuple:
     return args, _default_backend()
 
 
-async def _synthesize_with_fallback(text: str, backend: str) -> tuple:
-    """先试指定后端，失败再依次试其他已配置后端。返回 (实际后端, 音频字节) 或 (None, None)。"""
+async def _synthesize_with_fallback(text: str, backend: str, *,
+                                    emotion: str = "",
+                                    emotion_scale: int = 0) -> tuple:
+    """先试指定后端，失败再依次试其他已配置后端。返回 (实际后端, 音频字节) 或 (None, None)。
+
+    emotion 是豆包码；降级到 gsv2p 时自动映射成中文情绪词，其他后端忽略。
+    """
+    from .emotion import doubao_to_gsv2p
     order = [backend] + [b for b in BACKENDS if b != backend]
     for b in order:
         if b != backend and not _backend_configured(b):
             continue  # 未配置的后端不参与降级
         fn = globals()[f"synthesize_{b}"]  # 运行时取值，便于测试 monkeypatch
-        audio = await fn(text)
+        if b == "doubao":
+            audio = await fn(text, emotion=emotion, emotion_scale=emotion_scale)
+        elif b == "gsv2p":
+            audio = await fn(text, emotion_zh=doubao_to_gsv2p(emotion))
+        else:
+            audio = await fn(text)
         if audio:
             if b != backend:
                 logger.info(f"tts: {backend} 失败，已降级到 {b}")
@@ -269,13 +289,19 @@ async def _synthesize_with_fallback(text: str, backend: str) -> tuple:
     return None, None
 
 
-async def _synthesize_to_file(text: str, backend: str) -> Path | None:
-    """口播清洗 -> 合成（带降级）-> 落盘，返回文件路径；失败 None。"""
+async def _synthesize_to_file(text: str, backend: str, *, chat_id: str = "",
+                              llm_emotion: str = "") -> Path | None:
+    """口播清洗 -> 定案情绪 -> 合成（带降级）-> 落盘，返回文件路径；失败 None。"""
+    from .emotion import resolve_emotion
     from .speakable import make_speakable
     text = make_speakable(text, _MAX_TEXT_LEN)
     if not text:
         return None
-    used, audio = await _synthesize_with_fallback(text, backend)
+    emotion, scale = resolve_emotion(chat_id, llm_emotion)
+    if emotion:
+        logger.info(f"tts 情绪: {emotion}(scale={scale}) chat={chat_id}")
+    used, audio = await _synthesize_with_fallback(
+        text, backend, emotion=emotion, emotion_scale=scale)
     if not audio:
         return None
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -311,7 +337,8 @@ async def tts_cmd(ctx):
         return "用法：/tts <文本> [后端]"
 
     async def work():
-        path = await _synthesize_to_file(text, backend)
+        path = await _synthesize_to_file(text, backend,
+                                         chat_id=ctx.session.chat_id)
         if path is None:
             return None
         return [ReplySegment(type="voice", data=str(path))]
@@ -328,7 +355,7 @@ async def tts_cmd(ctx):
 
 # ========== 工具：LLM 触发 ==========
 @tool("unified_tts")
-async def unified_tts(text: str, backend: str = "") -> str:
+async def unified_tts(text: str, backend: str = "", emotion: str = "") -> str:
     """把文本合成语音发到当前聊天。用户要求"发语音""用语音说""朗读""念一下""语音回复"时使用；
     未调用本工具前禁止只用文字假装已发语音。
 
@@ -336,10 +363,13 @@ async def unified_tts(text: str, backend: str = "") -> str:
     text 写作要求（口播稿，不是聊天文本）：用口语短句，像真的在说话；
     不要 emoji、颜文字、markdown、链接、括号动作描写——这些会被清洗掉；
     系统会自动做口播清洗，你只负责把「要说的话」写得自然好听。
+    语音默认自动带上你当前的心情语气；需要特定情绪时用 emotion 指定。
 
     Args:
         text: 要读给用户听的内容（300 字内，越短效果越好）
         backend: 可选后端 doubao(豆包)/siliconflow(硅基流动)/gsv2p/sovits(GPT-SoVITS)，留空用默认
+        emotion: 可选情绪语气（中文词）：开心/兴奋/生气/发疯/难过/委屈/惊讶/害怕/冷漠/温柔/撒娇；
+                 留空则自动跟随你当前的心情
     """
     text = (text or "").strip()
     if not text:
@@ -361,7 +391,8 @@ async def unified_tts(text: str, backend: str = "") -> str:
         use_backend = _default_backend()
 
     async def work():
-        path = await _synthesize_to_file(text, use_backend)
+        path = await _synthesize_to_file(text, use_backend,
+                                         chat_id=chat_id, llm_emotion=emotion)
         if path is None:
             return None
         return [ReplySegment(type="voice", data=str(path))]

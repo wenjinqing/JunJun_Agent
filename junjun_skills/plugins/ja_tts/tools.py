@@ -221,8 +221,13 @@ def _split_text(text: str, max_len: int = 60) -> list:
     return merged
 
 
-async def _synthesize_ws(text: str, api_key: str, speaker: str) -> bytes:
-    """走完整双向 WS 握手合成，返回 mp3 字节；失败抛异常（由 synthesize 兜底）。"""
+async def _synthesize_ws(text: str, api_key: str, speaker: str,
+                         *, emotion: str = "", emotion_scale: int = 0) -> bytes:
+    """走完整双向 WS 握手合成，返回 mp3 字节；失败抛异常（由 synthesize 兜底）。
+
+    emotion/emotion_scale：Seed-TTS 2.0 情感参数（2026-08 实测 vv 音色已支持——
+    scale 拉高显著改变韵律时长；非法情绪值服务端静默忽略，安全）。
+    """
     import websockets
 
     headers = {
@@ -231,14 +236,18 @@ async def _synthesize_ws(text: str, api_key: str, speaker: str) -> bytes:
         "X-Api-Connect-Id": str(uuid.uuid4()),
         "X-Control-Require-Usage-Tokens-Return": "*",
     }
+    audio_params = {
+        "format": "mp3",
+        "sample_rate": _SAMPLE_RATE,
+        "speech_rate": 0,
+        "loudness_rate": 0,
+    }
+    if emotion:
+        audio_params["emotion"] = emotion
+        audio_params["emotion_scale"] = max(1, min(5, int(emotion_scale or 4)))
     req_params = {
         "speaker": speaker,
-        "audio_params": {
-            "format": "mp3",
-            "sample_rate": _SAMPLE_RATE,
-            "speech_rate": 0,
-            "loudness_rate": 0,
-        },
+        "audio_params": audio_params,
     }
     session_id = str(uuid.uuid4())
 
@@ -294,14 +303,18 @@ async def _synthesize_ws(text: str, api_key: str, speaker: str) -> bytes:
     return bytes(audio)
 
 
-async def synthesize(text: str, speaker: str = "") -> bytes | None:
+async def synthesize(text: str, speaker: str = "",
+                     *, emotion: str = "", emotion_scale: int = 0) -> bytes | None:
     """合成语音字节（独立 helper，测试 monkeypatch 它）；任何失败返回 None。"""
     api_key = os.environ.get("DOUBAO_TTS_API_KEY", "").strip()
     if not api_key:
         return None
     speaker = speaker or VOICE_PRESETS[DEFAULT_VOICE]
     try:
-        return await asyncio.wait_for(_synthesize_ws(text, api_key, speaker), timeout=_TIMEOUT)
+        return await asyncio.wait_for(
+            _synthesize_ws(text, api_key, speaker,
+                           emotion=emotion, emotion_scale=emotion_scale),
+            timeout=_TIMEOUT)
     except Exception as e:
         logger.warning(f"ja_tts 合成失败: {type(e).__name__}: {e}")
         return None

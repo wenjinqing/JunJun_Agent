@@ -134,6 +134,11 @@ self_mood_hours = 12   # 全局自我心境的有效时长（小时），过期�
 enable = true
 time = "23:30"           # 每天写日记的时间（当天没写才会补写）
 
+# ---------- TTS 情绪语气（语音跟随君君的真实心情） ----------
+[tts]
+enable_emotion = true    # 语音自动带当前心情语气（豆包 emotion 参数，实测 vv 音色支持）
+emotion_scale = 4        # 情绪强度 1-5，4 明显但不过火；LLM 指定「发疯/气炸」会再+1 拉满
+
 # ---------- 表情包 ----------
 [emoji]
 emoji_chance = 0.0       # ⏸️ 预留（当前版本未读取；发送由 Agent 调 send_emoji 自主决定，60s/会话冷却）
