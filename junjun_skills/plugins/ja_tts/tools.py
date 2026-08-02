@@ -222,11 +222,13 @@ def _split_text(text: str, max_len: int = 60) -> list:
 
 
 async def _synthesize_ws(text: str, api_key: str, speaker: str,
-                         *, emotion: str = "", emotion_scale: int = 0) -> bytes:
+                         *, emotion: str = "", emotion_scale: int = 0,
+                         speech_rate: int = 0, loudness_rate: int = 0) -> bytes:
     """走完整双向 WS 握手合成，返回 mp3 字节；失败抛异常（由 synthesize 兜底）。
 
-    emotion/emotion_scale：Seed-TTS 2.0 情感参数（2026-08 实测 vv 音色已支持——
-    scale 拉高显著改变韵律时长；非法情绪值服务端静默忽略，安全）。
+    emotion/emotion_scale/speech_rate/loudness_rate：情绪风格参数
+    （2026-08 实测：vv 音色 emotion 只调音高色彩，语速+音量叠加才可听地区分情绪；
+    非法 emotion 值静默忽略，speech/loudness 范围 [-50,100]，scale 钳 [1,5]）。
     """
     import websockets
 
@@ -239,8 +241,8 @@ async def _synthesize_ws(text: str, api_key: str, speaker: str,
     audio_params = {
         "format": "mp3",
         "sample_rate": _SAMPLE_RATE,
-        "speech_rate": 0,
-        "loudness_rate": 0,
+        "speech_rate": max(-50, min(100, int(speech_rate))),
+        "loudness_rate": max(-50, min(100, int(loudness_rate))),
     }
     if emotion:
         audio_params["emotion"] = emotion
@@ -304,7 +306,8 @@ async def _synthesize_ws(text: str, api_key: str, speaker: str,
 
 
 async def synthesize(text: str, speaker: str = "",
-                     *, emotion: str = "", emotion_scale: int = 0) -> bytes | None:
+                     *, emotion: str = "", emotion_scale: int = 0,
+                     speech_rate: int = 0, loudness_rate: int = 0) -> bytes | None:
     """合成语音字节（独立 helper，测试 monkeypatch 它）；任何失败返回 None。"""
     api_key = os.environ.get("DOUBAO_TTS_API_KEY", "").strip()
     if not api_key:
@@ -313,7 +316,8 @@ async def synthesize(text: str, speaker: str = "",
     try:
         return await asyncio.wait_for(
             _synthesize_ws(text, api_key, speaker,
-                           emotion=emotion, emotion_scale=emotion_scale),
+                           emotion=emotion, emotion_scale=emotion_scale,
+                           speech_rate=speech_rate, loudness_rate=loudness_rate),
             timeout=_TIMEOUT)
     except Exception as e:
         logger.warning(f"ja_tts 合成失败: {type(e).__name__}: {e}")
