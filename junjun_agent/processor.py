@@ -484,6 +484,14 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> str:
             parts.append(vb)
     except Exception:
         pass
+    # 订阅感知：本会话生效中的订阅（重启后 Agent 依然知道自己在盯梢）
+    try:
+        from junjun_skills.plugins.subscription.tools import subscriptions_block
+        sb = subscriptions_block(session.chat_id)
+        if sb:
+            parts.append(sb)
+    except Exception:
+        pass
     try:
         import asyncio as _aio
         import re as _re
