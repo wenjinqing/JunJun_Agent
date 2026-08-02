@@ -350,16 +350,29 @@ def _parse_args(args: str) -> tuple:
     return args, VOICE_PRESETS[DEFAULT_VOICE]
 
 
-async def _synthesize_to_file(text: str, speaker: str, *, mix: bool = False) -> Path | None:
-    """口播清洗 -> （日语专用音色）中译日 -> 合成 -> 落盘 mp3；失败 None。
-    mix=True 允许中日混读（日语音色读中文带口音，仅在需要该效果时用）。"""
+async def _synthesize_to_file(text: str, speaker: str, *, mix: bool = False,
+                              chat_id: str = "") -> Path | None:
+    """口播清洗 -> （日语专用音色）中译日 -> 定案情绪风格 -> 合成 -> 落盘 mp3；失败 None。
+    mix=True 允许中日混读（日语音色读中文带口音，仅在需要该效果时用）。
+    情绪风格跟随会话心情（实测日语音色同样吃 speech/loudness_rate：快慢方向一致）。"""
     from ..tts.speakable import make_speakable
     text = make_speakable(text, _MAX_TEXT_LEN)
     if not text:
         return None
     if not mix and speaker in _JA_ONLY_SPEAKERS:
         text = await ensure_japanese(text)
-    audio = await synthesize(text, speaker)
+    style_kw = {}
+    try:
+        from ..tts.emotion import resolve_emotion
+        style = resolve_emotion(chat_id)
+        if style:
+            style_kw = {"emotion": style["emotion"],
+                        "emotion_scale": style["emotion_scale"],
+                        "speech_rate": style["speech_rate"],
+                        "loudness_rate": style["loudness_rate"]}
+    except Exception:
+        pass
+    audio = await synthesize(text, speaker, **style_kw)
     if not audio:
         return None
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -396,7 +409,8 @@ async def ja_tts_cmd(ctx):
         return "用法：/ja_tts <日语文本> [音色]；中文会自动翻译成日语，想保留混读加前缀「混合」"
 
     async def work():
-        path = await _synthesize_to_file(text, speaker, mix=mix)
+        path = await _synthesize_to_file(text, speaker, mix=mix,
+                                         chat_id=ctx.session.chat_id)
         if path is None:
             return None
         return [ReplySegment(type="voice", data=str(path))]
@@ -444,7 +458,8 @@ async def ja_tts_tool(text: str, speaker: str = "", mix: bool = False) -> str:
                                    VOICE_PRESETS[DEFAULT_VOICE])
 
     async def work():
-        path = await _synthesize_to_file(text, speaker_id, mix=mix)
+        path = await _synthesize_to_file(text, speaker_id, mix=mix,
+                                         chat_id=chat_id)
         if path is None:
             return None
         return [ReplySegment(type="voice", data=str(path))]
