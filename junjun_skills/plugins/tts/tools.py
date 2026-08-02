@@ -75,11 +75,10 @@ _last_use: dict = {}
 
 
 # ========== 各后端合成 helper（独立 async，失败返回 None，绝不抛异常） ==========
-async def synthesize_doubao(text: str, *, emotion: str = "",
-                            emotion_scale: int = 0) -> bytes | None:
+async def synthesize_doubao(text: str, *, style: dict | None = None) -> bytes | None:
     """豆包 Seed-TTS 双向 WS 合成（协议实现复用 ja_tts 插件）。返回 mp3 字节或 None。
 
-    emotion/emotion_scale：Seed-TTS 2.0 情感参数（实测 vv 音色支持；空串=默认语气）。
+    style：情绪风格 dict（emotion.py.resolve_emotion 的输出；None=默认语气）。
     """
     api_key = os.environ.get("DOUBAO_TTS_API_KEY", "").strip()
     if not api_key:
@@ -92,11 +91,14 @@ async def synthesize_doubao(text: str, *, emotion: str = "",
             text = await ensure_japanese(text)
         except Exception:
             pass
+    kw = {}
+    if style:
+        kw = {"emotion": style["emotion"], "emotion_scale": style["emotion_scale"],
+              "speech_rate": style["speech_rate"], "loudness_rate": style["loudness_rate"]}
     try:
         # 懒加载避免 import 本模块时连带注册 ja_tts 命令
         from junjun_skills.plugins.ja_tts.tools import synthesize as _ja_synthesize
-        return await _ja_synthesize(text, speaker,
-                                    emotion=emotion, emotion_scale=emotion_scale)
+        return await _ja_synthesize(text, speaker, **kw)
     except Exception as e:
         logger.warning(f"tts 豆包合成失败: {type(e).__name__}: {e}")
         return None
@@ -263,22 +265,21 @@ def _parse_args(args: str) -> tuple:
 
 
 async def _synthesize_with_fallback(text: str, backend: str, *,
-                                    emotion: str = "",
-                                    emotion_scale: int = 0) -> tuple:
+                                    style: dict | None = None) -> tuple:
     """先试指定后端，失败再依次试其他已配置后端。返回 (实际后端, 音频字节) 或 (None, None)。
 
-    emotion 是豆包码；降级到 gsv2p 时自动映射成中文情绪词，其他后端忽略。
+    style 是情绪风格 dict；降级到 gsv2p 时映射成中文情绪词，其他后端忽略。
     """
-    from .emotion import doubao_to_gsv2p
+    from .emotion import style_to_gsv2p
     order = [backend] + [b for b in BACKENDS if b != backend]
     for b in order:
         if b != backend and not _backend_configured(b):
             continue  # 未配置的后端不参与降级
         fn = globals()[f"synthesize_{b}"]  # 运行时取值，便于测试 monkeypatch
         if b == "doubao":
-            audio = await fn(text, emotion=emotion, emotion_scale=emotion_scale)
+            audio = await fn(text, style=style)
         elif b == "gsv2p":
-            audio = await fn(text, emotion_zh=doubao_to_gsv2p(emotion))
+            audio = await fn(text, emotion_zh=style_to_gsv2p(style["style"]) if style else "默认")
         else:
             audio = await fn(text)
         if audio:
@@ -291,17 +292,18 @@ async def _synthesize_with_fallback(text: str, backend: str, *,
 
 async def _synthesize_to_file(text: str, backend: str, *, chat_id: str = "",
                               llm_emotion: str = "") -> Path | None:
-    """口播清洗 -> 定案情绪 -> 合成（带降级）-> 落盘，返回文件路径；失败 None。"""
+    """口播清洗 -> 定案情绪风格 -> 合成（带降级）-> 落盘，返回文件路径；失败 None。"""
     from .emotion import resolve_emotion
     from .speakable import make_speakable
     text = make_speakable(text, _MAX_TEXT_LEN)
     if not text:
         return None
-    emotion, scale = resolve_emotion(chat_id, llm_emotion)
-    if emotion:
-        logger.info(f"tts 情绪: {emotion}(scale={scale}) chat={chat_id}")
-    used, audio = await _synthesize_with_fallback(
-        text, backend, emotion=emotion, emotion_scale=scale)
+    style = resolve_emotion(chat_id, llm_emotion)
+    if style:
+        logger.info(f"tts 情绪: {style['style']}"
+                    f"(rate={style['speech_rate']:+d} loud={style['loudness_rate']:+d})"
+                    f" chat={chat_id}")
+    used, audio = await _synthesize_with_fallback(text, backend, style=style)
     if not audio:
         return None
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
