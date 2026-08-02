@@ -71,7 +71,7 @@ def _plugin(monkeypatch, tmp_path):
 def _patch_ok(monkeypatch, tts, backend, captured=None):
     """把指定后端的 synthesize helper 替换为成功假实现。"""
 
-    async def _fake(text):
+    async def _fake(text, **kw):
         if captured is not None:
             captured.append(text)
         return _FAKE_MP3
@@ -80,7 +80,7 @@ def _patch_ok(monkeypatch, tts, backend, captured=None):
 
 
 def _patch_none(monkeypatch, tts, backend):
-    async def _none(text):
+    async def _none(text, **kw):
         return None
 
     monkeypatch.setattr(tts, f"synthesize_{backend}", _none)
