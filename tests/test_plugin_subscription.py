@@ -43,7 +43,7 @@ def _mk_sub(sub, **kw):
     return m.Subscription.create(**defaults)
 
 
-def _stub_pixiv(monkeypatch, works: dict, author="某作者", called=None):
+def _stub_pixiv(monkeypatch, works: dict, author="某作者", called=None, r18_ids=()):
     """桩 pixiv._fetch_json：profile/all 返回小说 ID 表，profile/novels 返回标题表。"""
     from junjun_skills.plugins.pixiv_novel import tools as pixiv
 
@@ -52,7 +52,8 @@ def _stub_pixiv(monkeypatch, works: dict, author="某作者", called=None):
             called.append(1)
         if "profile/all" in url:
             return {"novels": {nid: {} for nid in works}}
-        return {"works": {nid: {"title": t, "userName": author}
+        return {"works": {nid: {"title": t, "userName": author,
+                                "xRestrict": 2 if nid in r18_ids else 0}
                           for nid, t in works.items()}}
 
     monkeypatch.setattr(pixiv, "_fetch_json", _fetch)
@@ -131,8 +132,8 @@ class TestSubscribeFlow:
     async def test_baseline_no_history_spam(self, _env, monkeypatch):
         """订阅当下以最新内容为基线——首次检查不会轰炸历史内容。"""
         _stub_pixiv(monkeypatch, {"105": "最新", "104": "次新"})
-        baseline, name, latest = await _env._baseline_for("pixiv_author", "16689973")
-        assert baseline == "105" and name == "某作者" and latest == "最新"
+        baseline, name, latest, r18 = await _env._baseline_for("pixiv_author", "16689973")
+        assert baseline == "105" and name == "某作者" and latest == "最新" and not r18
 
         sub = _mk_sub(_env, last_seen=baseline, last_checked=0)
         sent = []
@@ -193,6 +194,55 @@ class TestNotifyFormat:
         sub = SimpleNamespace(kind="bili_up", target_name="某UP", target_id="42")
         text = _env._fmt_notify(sub, [{"seen": "1", "title": "新视频", "url": "http://x"}])
         assert "某UP" in text and "《新视频》" in text and "http://x" in text
+
+    def test_fmt_masks_r18(self, _env):
+        """R18 标题打码（链接保留），健全内容照常显示。"""
+        sub = SimpleNamespace(kind="pixiv_author", target_name="某作者", target_id="1")
+        text = _env._fmt_notify(sub, [
+            {"seen": "2", "title": "很羞的标题", "url": "http://r18", "r18": True},
+            {"seen": "1", "title": "健全新篇", "url": "http://safe", "r18": False},
+        ])
+        assert "很羞的标题" not in text and "标题已打码" in text
+        assert "http://r18" in text and "《健全新篇》" in text
+
+
+class TestBaselineRepair:
+    @pytest.mark.asyncio
+    async def test_zero_baseline_silent_calibration(self, _env, monkeypatch):
+        """断流期坏基线（last_seen="0"）：静默校准不轰炸历史。"""
+        _stub_pixiv(monkeypatch, {"115": "新3", "110": "新2", "105": "新1"})
+        sub = _mk_sub(_env, last_seen="0")
+        sent = []
+
+        async def _notify(s, items):
+            sent.append(items)
+        monkeypatch.setattr(_env, "_notify", _notify)
+        await _env.check_subscriptions()
+        assert not sent  # 一条都不推
+        assert m.Subscription.get_by_id(sub.id).last_seen == "115"
+
+    @pytest.mark.asyncio
+    async def test_normal_baseline_still_pushes(self, _env, monkeypatch):
+        """正常基线不受影响：有新内容照推。"""
+        _stub_pixiv(monkeypatch, {"115": "新3", "110": "新2"})
+        sub = _mk_sub(_env, last_seen="100")
+        sent = []
+
+        async def _notify(s, items):
+            sent.append(items)
+        monkeypatch.setattr(_env, "_notify", _notify)
+        await _env.check_subscriptions()
+        assert len(sent) == 1 and len(sent[0]) == 2
+
+
+class TestSubscriptionsBlock:
+    def test_block_lists_active(self, _env):
+        _mk_sub(_env, target_name="爱丽丝猫猫酱")
+        block = _env.subscriptions_block("qq:999:group")
+        assert "爱丽丝猫猫酱" in block and "照实说" in block
+
+    def test_block_empty_chat(self, _env):
+        assert _env.subscriptions_block("qq:nobody:group") == ""
 
 
 class TestDoSubscribe:

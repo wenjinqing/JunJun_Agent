@@ -68,7 +68,11 @@ async def _fetch_pixiv_latest(uid: str, limit: int = 15) -> tuple:
     for nid in ids:
         w = works.get(nid) or {}
         author = author or str(w.get("userName") or "")
-        items.append({"id": nid, "title": str(w.get("title") or "(无标题)")})
+        try:
+            r18 = bool(int(w.get("xRestrict") or 0) >= 1)
+        except (TypeError, ValueError):
+            r18 = False
+        items.append({"id": nid, "title": str(w.get("title") or "(无标题)"), "r18": r18})
     return items, author
 
 
@@ -87,6 +91,7 @@ async def _check_pixiv_author(sub) -> tuple:
             fresh.append({
                 "seen": nid,
                 "title": item["title"],
+                "r18": item.get("r18", False),
                 "url": f"https://www.pixiv.net/novel/show.php?id={nid}",
             })
     return fresh, name
@@ -177,11 +182,12 @@ def _chat_sub_count(chat_id: str) -> int:
 
 
 async def _baseline_for(kind: str, target_id: str) -> tuple:
-    """订阅当下的基线 + 显示名 + 最新作品标题（回执里证明「盯上了」）。"""
+    """订阅当下的基线 + 显示名 + 最新作品标题/r18（回执里证明「盯上了」，R18 打码）。"""
     fake = type("Sub", (), {"target_id": target_id, "last_seen": "0"})()
     items, name = await _CHECKERS[kind](fake)
     return (items[-1]["seen"] if items else "0"), name, \
-        (items[-1]["title"] if items else "")
+        (items[-1]["title"] if items else ""), \
+        (items[-1].get("r18", False) if items else False)
 
 
 # ---------------------------------------------------------------- 调度检查
@@ -190,7 +196,10 @@ def _fmt_notify(sub, items: list) -> str:
     lines = [f"「订阅更新」你盯的{_KIND_NAMES.get(sub.kind, sub.kind)}「{sub.target_name or sub.target_id}」"
              f"有 {len(items)} 条新内容："]
     for it in items[:_NOTIFY_CAP]:
-        lines.append(f"《{it['title']}》\n{it['url']}")
+        # R18 标题打码（2026-08-02 用户要求）：标题原样发群有观感/合规风险，
+        # 链接保留——要点开的人自己做主
+        title = "（R18，标题已打码）" if it.get("r18") else f"《{it['title']}》"
+        lines.append(f"{title}\n{it['url']}")
     return "\n".join(lines)
 
 
@@ -224,7 +233,12 @@ async def check_subscriptions() -> None:
             items, name = await checker(sub)
             if name and name != sub.target_name:
                 sub.target_name = name
-            if items:
+            if items and (not sub.last_seen or sub.last_seen == "0"):
+                # 断流期/坏基线自动校准：last_seen="0" 会把全部历史当更新轰炸，
+                # 静默对齐到最新，只盯往后新发的（2026-08-02 用户实锤断流修复配套）
+                sub.last_seen = items[-1]["seen"]
+                logger.info(f"订阅 #{sub.id} 坏基线静默校准 -> {sub.last_seen}")
+            elif items:
                 await _notify(sub, items)
                 sub.last_seen = items[-1]["seen"]
                 logger.info(f"订阅 #{sub.id}（{sub.kind}:{sub.target_id}）推送 {len(items)} 条更新")
@@ -264,11 +278,16 @@ async def _do_subscribe(source: str, target: str, chat_id: str,
         if not target_id:
             return f"没找到叫「{target}」的 UP 主，可以直接给我 ta 的 mid（空间 URL 里的数字）。"
 
-    baseline, name, latest = await _baseline_for(kind, target_id)
+    baseline, name, latest, latest_r18 = await _baseline_for(kind, target_id)
     sub = _create(kind, target_id, chat_id, user_id, nickname,
                   baseline, name or found_name)
     display = sub.target_name or target_id
-    latest_line = f"ta 最新的是《{latest}》。" if latest else ""
+    if latest_r18:
+        latest_line = "ta 最新的是 R18 内容（标题打码）。"
+    elif latest:
+        latest_line = f"ta 最新的是《{latest}》。"
+    else:
+        latest_line = ""
     return (f"订阅好了：{_KIND_NAMES[kind]}「{display}」（#{sub.id}）。{latest_line}"
             f"每 {sub.interval_minutes} 分钟查一次，有更新我会主动来说。"
             f"现有内容不会轰炸你，只盯新发的。想取消说「取消订阅 {sub.id}」。")
@@ -303,6 +322,26 @@ def _do_list(chat_id: str) -> str:
         lines.append(f"- #{s.id} {_KIND_NAMES.get(s.kind, s.kind)}「{s.target_name or s.target_id}」"
                      f"（{s.user_nickname or s.user_id} 订的，每 {s.interval_minutes} 分钟查）")
     return "\n".join(lines)
+
+
+def subscriptions_block(chat_id: str) -> str:
+    """processor 注入用：你在盯的订阅（重启后 Agent 依然知道自己在盯梢）。
+
+    治「重启就没了」的观感：订阅一直在 DB 里、调度也一直在跑，但 Agent
+    上下文里没有任何痕迹，被问「你还在盯吗」只能说没有——看起来像丢了。
+    """
+    try:
+        from junjun_core.database.models import Subscription
+        subs = list(Subscription.select().where(
+            (Subscription.chat_id == chat_id) & (Subscription.enabled == True)).limit(5))  # noqa: E712
+        if not subs:
+            return ""
+        lines = [f"- #{s.id} {_KIND_NAMES.get(s.kind, s.kind)}「{s.target_name or s.target_id}」"
+                 f"（{s.user_nickname or s.user_id} 拜托的）" for s in subs]
+        return ("你正在盯的订阅（真实生效中，被问起照实说，不要说没有）：\n"
+                + "\n".join(lines))
+    except Exception:
+        return ""
 
 
 def _do_unsub(sub_id: str, caller: str) -> str:
