@@ -288,3 +288,44 @@ class TestJaTtsWire:
         ap = req["audio_params"]
         assert "emotion" not in ap
         assert ap["speech_rate"] == 0 and ap["loudness_rate"] == 0
+
+
+class TestJaTtsStyle:
+    @pytest.mark.asyncio
+    async def test_ja_path_passes_mood_style(self, monkeypatch, tmp_path):
+        """ja_tts 自己的合成链路也带心情风格（日语音色实测吃速率/音量参数）。"""
+        import junjun_skills.plugins.ja_tts.tools as ja
+        monkeypatch.setattr(ja, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(ja, "_JA_ONLY_SPEAKERS", set())  # 跳过翻译
+        from junjun_express.mood import mood_manager
+        monkeypatch.setattr(mood_manager, "get_mood", lambda cid: "生气")
+        captured = {}
+
+        async def _synth(text, speaker="", **kw):
+            captured.update(kw)
+            return b"audio"
+        monkeypatch.setattr(ja, "synthesize", _synth)
+
+        path = await ja._synthesize_to_file("テスト", "spk", chat_id="c1")
+        assert path is not None
+        assert captured["emotion"] == "angry"
+        assert captured["speech_rate"] == 20
+
+    @pytest.mark.asyncio
+    async def test_ja_path_calm_no_style(self, monkeypatch, tmp_path):
+        """平静时不带任何风格参数（保持旧行为）。"""
+        import junjun_skills.plugins.ja_tts.tools as ja
+        monkeypatch.setattr(ja, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(ja, "_JA_ONLY_SPEAKERS", set())
+        from junjun_express.mood import mood_manager
+        monkeypatch.setattr(mood_manager, "get_mood", lambda cid: "平静")
+        monkeypatch.setattr(mood_manager, "get_self_mood", lambda: "平静")
+        captured = {}
+
+        async def _synth(text, speaker="", **kw):
+            captured.update(kw)
+            return b"audio"
+        monkeypatch.setattr(ja, "synthesize", _synth)
+
+        await ja._synthesize_to_file("テスト", "spk", chat_id="c1")
+        assert captured == {}
