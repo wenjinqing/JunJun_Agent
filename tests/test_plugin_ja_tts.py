@@ -64,7 +64,7 @@ def _plugin(monkeypatch, tmp_path):
 
 
 def _patch_synth(monkeypatch, ja, captured=None):
-    async def _fake(text, speaker=""):
+    async def _fake(text, speaker="", **kw):
         if captured is not None:
             captured.append((text, speaker))
         return _FAKE_MP3
@@ -121,7 +121,7 @@ class TestJaTTSCommand:
     async def test_synth_failure_degrades(self, _fake_gateway, _plugin, monkeypatch):
         ja = _plugin
 
-        async def _none(text, speaker=""):
+        async def _none(text, speaker="", **kw):
             return None
 
         monkeypatch.setattr(ja, "synthesize", _none)
