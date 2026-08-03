@@ -228,3 +228,154 @@ class TestSummaryTool:
 
 async def _async_return(v):
     return v
+
+
+# ---------------------------------------------------------------- 深看（video_watch 抖音分支）
+
+import junjun_skills.plugins.bilibili.tools as bili_tools  # noqa: E402
+from junjun_skills.plugins.bilibili import watch  # noqa: E402
+
+_DY_MATERIAL = {
+    "info": {"aweme_id": "7669014018669006089", "desc": "猫猫视频", "author": "铲屎官",
+             "music": "原声", "digg": 100, "comments": 20, "shares": 5,
+             "duration_s": 60, "play_url": "https://aweme.snssdk.com/playwm/?video_id=abc",
+             "page_url": "https://www.douyin.com/video/7669014018669006089"},
+    "material": "文案：猫猫视频\n作者：铲屎官\n时长：60秒",
+    "source": "文案数据",
+    "page_url": "https://www.douyin.com/video/7669014018669006089",
+}
+
+
+class _Synth:
+    """捕获综述 prompt 的假模型。"""
+
+    def __init__(self, text="抖音观后报告"):
+        self._text = text
+        self.captured = ""
+
+    async def ainvoke(self, messages, config=None):
+        self.captured = str(messages[-1].content)
+        return type("R", (), {"content": self._text})()
+
+
+def _job():
+    return type("J", (), {"job_id": "w1", "chat_id": "qq:999:group",
+                          "title": "看视频", "kind": "video_watch"})()
+
+
+class TestWatchDouyin:
+    @pytest.fixture
+    def watch_env(self, monkeypatch, tmp_path):
+        """深看打桩：ffmpeg 可用、tmp 隔离、默认不抽帧。"""
+        monkeypatch.setattr(bili_tools, "TMP_DIR", tmp_path)
+        monkeypatch.setattr(bili_tools, "_ffmpeg_path", lambda: "/usr/bin/ffmpeg")
+        monkeypatch.setattr(watch, "_vlm_available", lambda: False)
+        return monkeypatch
+
+    @pytest.mark.asyncio
+    async def test_dispatch_routes_douyin(self, watch_env, monkeypatch):
+        """video_watch_handler 收到抖音链接时走抖音分支。"""
+        called = {}
+
+        async def _fake(url, **kw):
+            called["url"] = url
+            return "报告"
+
+        monkeypatch.setattr(watch, "_watch_douyin", _fake)
+        out = await watch.video_watch_handler(
+            _job(), {"url": "https://v.douyin.com/abc/"}, synth_model=_Synth())
+        assert out == "报告" and "douyin.com" in called["url"]
+
+    @pytest.mark.asyncio
+    async def test_live_rejected(self, watch_env, monkeypatch):
+        monkeypatch.setattr(dc, "get_material",
+                            lambda url: _async_return({"type": "live"}))
+        with pytest.raises(RuntimeError, match="直播"):
+            await watch.video_watch_handler(
+                _job(), {"url": "https://v.douyin.com/xyz/"}, synth_model=_Synth())
+
+    @pytest.mark.asyncio
+    async def test_material_missing(self, watch_env, monkeypatch):
+        monkeypatch.setattr(dc, "get_material", lambda url: _async_return(None))
+        with pytest.raises(RuntimeError, match="拿不到"):
+            await watch.video_watch_handler(
+                _job(), {"url": "https://v.douyin.com/xyz/"}, synth_model=_Synth())
+
+    @pytest.mark.asyncio
+    async def test_too_long_rejected(self, watch_env, monkeypatch):
+        import copy
+        m = copy.deepcopy(_DY_MATERIAL)
+        m["info"]["duration_s"] = 7200
+        monkeypatch.setattr(dc, "get_material", lambda url: _async_return(m))
+        with pytest.raises(RuntimeError, match="太长"):
+            await watch.video_watch_handler(
+                _job(), {"url": "https://v.douyin.com/abc/"}, synth_model=_Synth())
+
+    @pytest.mark.asyncio
+    async def test_full_pipeline(self, watch_env, monkeypatch, tmp_path):
+        """直链下载 -> 抽音频 -> ASR -> 抽帧 -> VLM -> 综述（prompt 带「抖音」）。"""
+        from pathlib import Path
+        monkeypatch.setattr(dc, "get_material", lambda url: _async_return(dict(_DY_MATERIAL)))
+
+        async def _dl(url, path):
+            assert "playwm" in url
+            path.write_bytes(b"\x00" * 64)
+            return True
+
+        async def _ffmpeg(args):
+            if "-vn" in args:
+                Path(args[-1]).write_bytes(b"audio")
+            elif "-vf" in args:
+                out_dir = Path(args[-1]).parent
+                out_dir.mkdir(parents=True, exist_ok=True)
+                (out_dir / "f_001.jpg").write_bytes(b"jpg")
+            return True
+
+        async def _fake_asr(path):
+            return "喵喵喵转写全文"
+
+        async def _fake_describe(data, *, model, prompt):
+            return "一只猫在跳舞"
+
+        import junjun_memory.vision as vision_mod
+        monkeypatch.setattr(watch, "_download_douyin", _dl)
+        monkeypatch.setattr(bili_tools, "_run_ffmpeg", _ffmpeg)
+        monkeypatch.setattr(vision_mod, "_describe", _fake_describe)
+
+        synth = _Synth()
+        out = await watch.video_watch_handler(
+            _job(), {"url": "https://v.douyin.com/abc/"},
+            synth_model=synth, asr=_fake_asr, vlm=object())
+        assert out == "抖音观后报告"
+        assert "你在认真看一个抖音视频" in synth.captured
+        assert "喵喵喵转写全文" in synth.captured
+        assert "一只猫在跳舞" in synth.captured
+        assert "猫猫视频" in synth.captured
+        assert not list(tmp_path.glob("watch_dy_*"))  # 临时目录已清理
+
+    @pytest.mark.asyncio
+    async def test_no_play_url_fallback(self, watch_env, monkeypatch):
+        """无直链：降级文案综述，不下载不算失败。"""
+        import copy
+        m = copy.deepcopy(_DY_MATERIAL)
+        m["info"]["play_url"] = ""
+        monkeypatch.setattr(dc, "get_material", lambda url: _async_return(m))
+
+        async def _boom(*a, **kw):
+            raise AssertionError("不该走到下载")
+        monkeypatch.setattr(watch, "_download_douyin", _boom)
+
+        out = await watch.video_watch_handler(
+            _job(), {"url": "https://v.douyin.com/abc/"}, synth_model=_Synth())
+        assert out == "抖音观后报告"
+
+    @pytest.mark.asyncio
+    async def test_download_failure_degrades(self, watch_env, monkeypatch):
+        """下载失败：用文案材料综述兜底，job 不失败。"""
+        monkeypatch.setattr(dc, "get_material", lambda url: _async_return(dict(_DY_MATERIAL)))
+        monkeypatch.setattr(watch, "_download_douyin",
+                            lambda url, path: _async_return(False))
+        synth = _Synth()
+        out = await watch.video_watch_handler(
+            _job(), {"url": "https://v.douyin.com/abc/"}, synth_model=synth)
+        assert out == "抖音观后报告" and "猫猫视频" in synth.captured

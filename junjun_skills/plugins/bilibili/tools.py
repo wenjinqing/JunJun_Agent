@@ -642,20 +642,21 @@ async def bilibili_summary(url: str) -> str:
 
 @tool
 def watch_video(url: str) -> str:
-    """认真看完一个 B 站视频再汇报观后感：后台下载后听语音（ASR 转写）+ 看画面关键帧，
-    比 bilibili_summary 深得多但要几分钟，完成后你会主动发消息汇报。
-    对方说「你认真看看这个视频/看完跟我讲讲」，或 bilibili_summary 看不懂
-    （没字幕的实拍/游戏/综艺）时用本工具。
+    """认真看完一个 B 站/抖音视频再汇报观后感：后台下载后听语音（ASR 转写）+ 看画面关键帧，
+    比 bilibili_summary/douyin_summary 深得多但要几分钟，完成后你会主动发消息汇报。
+    对方说「你认真看看这个视频/看完跟我讲讲」，或摘要工具看不懂
+    （没字幕的实拍/游戏/综艺、抖音只有文案）时用本工具。抖音直播看不了。
 
     Args:
-        url: B 站视频链接（bilibili.com/video/BVxxx 或 b23.tv 短链）
+        url: 视频链接（bilibili.com/video/BVxxx、b23.tv 短链，或抖音 v.douyin.com 短链、
+             douyin.com/video/xxx 链接）
     """
     from junjun_agent.loop import async_jobs
     from junjun_skills.builtin.memory_skills import current_chat_id
     from junjun_core.security import current_user_id, current_nickname
     url = (url or "").strip()
     if not url:
-        return "给个 B 站链接我才能看。"
+        return "给个视频链接我才能看。"
     job, err = async_jobs.submit_job(
         "video_watch", title=f"看视频 {url[:60]}", payload={"url": url},
         chat_id=current_chat_id.get(),
