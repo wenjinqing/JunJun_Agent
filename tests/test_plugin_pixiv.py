@@ -105,10 +105,10 @@ class TestRank:
             assert "mode=daily" in url and "content=illust" in url
             return {"contents": [
                 {"rank": 1, "illust_id": 11, "title": "榜首", "user_name": "大佬",
-                 "illust_content_type": 0, "illust_page_count": "1",
+                 "illust_content_type": {"sexual": 0}, "illust_page_count": "1",
                  "width": 1000, "height": 800},
                 {"rank": 2, "illust_id": 12, "title": "R18榜眼", "user_name": "x",
-                 "illust_content_type": 1, "illust_page_count": "1",
+                 "illust_content_type": {"sexual": 2}, "illust_page_count": "1",
                  "width": 1000, "height": 800},
             ]}
 
@@ -123,7 +123,7 @@ class TestRank:
             assert "mode=weekly" in url and "content=manga" in url
             return {"contents": [
                 {"rank": 1, "illust_id": 21, "title": "漫画王", "user_name": "y",
-                 "illust_content_type": 0, "illust_page_count": "4",
+                 "illust_content_type": {"sexual": 1}, "illust_page_count": "4",
                  "width": 1000, "height": 800},
             ]}
 
@@ -188,6 +188,11 @@ class TestDl:
                     "pageCount": 2, "urls": {"regular": "https://i.pximg.net/a_p0.jpg"}}
 
         monkeypatch.setattr(illust, "_fetch_json", _fetch)
+
+        async def _b64(urls):
+            return [f"base64://fake-{u}" for u in urls]  # 本侧代下（NapCat 拉不到图床）
+
+        monkeypatch.setattr(illust, "images_to_b64", _b64)
         illust._list_cache["12345"] = {
             "ts": __import__("time").time(),
             "items": [{"kind": "illust", "id": "147971647", "title": "某作品",
@@ -196,8 +201,8 @@ class TestDl:
         assert out is None  # 已发送
         segs = _fake_gateway[0].segments
         assert [s.type for s in segs].count("image") == 2
-        # 代理改写：i.pximg.net -> i.pixiv.re（NapCat 拉图不带 Referer）
-        assert all("i.pixiv.re" in s.data for s in segs if s.type == "image")
+        # 代下转 base64：NapCat 直连图床超时（2026-08-03 实锤），不再发 URL
+        assert all(s.data.startswith("base64://") for s in segs if s.type == "image")
         assert any("某作品" in (s.data or "") for s in segs if s.type == "text")
 
     @pytest.mark.asyncio
@@ -227,6 +232,11 @@ class TestIllustDirect:
                     "pageCount": 5}
 
         monkeypatch.setattr(illust, "_fetch_json", _fetch)
+
+        async def _b64(urls):
+            return [f"base64://fake-{u}" for u in urls]
+
+        monkeypatch.setattr(illust, "images_to_b64", _b64)
         out = await illust.pixiv_cmd(
             _ctx("/pixiv illust https://www.pixiv.net/artworks/147971647"))
         assert out is None
@@ -242,6 +252,42 @@ class TestIllustDirect:
         monkeypatch.setattr(illust, "_fetch_json", _fetch)
         out = await illust.pixiv_cmd(_ctx("/pixiv illust 123"))
         assert "R18" in out
+
+
+class TestImageB64:
+    @pytest.mark.asyncio
+    async def test_images_to_b64_skips_failures(self, monkeypatch):
+        from junjun_skills.plugins.pixiv import client
+
+        async def _one(url):
+            return "base64://ok" if "good" in url else ""
+
+        monkeypatch.setattr(client, "fetch_image_b64", _one)
+        out = await client.images_to_b64(["http://x/good1", "http://x/bad",
+                                          "http://x/good2"])
+        assert out == ["base64://ok", "base64://ok"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_image_b64_http_error(self, monkeypatch):
+        from junjun_skills.plugins.pixiv import client
+
+        class _Resp:
+            status_code = 404
+            content = b""
+
+        class _Sess:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, headers=None, timeout=None):
+                return _Resp()
+
+        import curl_cffi.requests as cc
+        monkeypatch.setattr(cc, "AsyncSession", lambda **kw: _Sess())
+        assert await client.fetch_image_b64("http://x/missing.jpg") == ""
 
 
 class TestCooldown:

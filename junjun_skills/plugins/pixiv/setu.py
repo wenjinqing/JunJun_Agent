@@ -20,7 +20,8 @@ from junjun_agent.commands import register_command
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 
-from .client import _cookie, _fetch_json, _fetch_raw, BASE_URL, pximg_proxy
+from .client import (_cookie, _fetch_json, _fetch_raw, BASE_URL,
+                     images_to_b64, pximg_proxy)
 
 logger = get_logger("plugin.pixiv.setu")
 
@@ -151,9 +152,10 @@ async def setu_cmd(ctx):
         info, urls = await _illust_image_urls(iid)
         if info:
             sent_info.append(info)
-        segs += [ReplySegment(type="image", data=u) for u in urls]
+        # NapCat 拉不到图床（被墙无代理），本侧代下转 base64
+        segs += [ReplySegment(type="image", data=b) for b in await images_to_b64(urls)]
     if len(segs) <= (1 if ctx.session.is_group else 0):
-        return "图拿到了但地址解析失败了，稍后再试试吧。"
+        return "图拿到了但下载失败了（图床得走代理），稍后再试试吧。"
     if sent_info:
         segs.append(ReplySegment(type="text", data="\n".join(sent_info)))
     await ctx.send(segs)

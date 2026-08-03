@@ -29,7 +29,8 @@ from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 
 from . import novel as novel_mod
-from .client import (_cookie, _fetch_json, _fetch_raw, BASE_URL, pximg_proxy)
+from .client import (_cookie, _fetch_json, _fetch_raw, BASE_URL,
+                     images_to_b64, pximg_proxy)
 from .setu import _ok_item
 
 logger = get_logger("plugin.pixiv.illust")
@@ -92,7 +93,16 @@ async def _ranking(mode: str, content: str) -> list:
         return []
     items = []
     for c in (body.get("contents") or []):
-        if (c.get("illust_content_type") or 0) != 0:  # 0=全年龄
+        # 2026-08-03 实测：illust_content_type 是标签分级 dict
+        # （{"sexual": 0|1|2, ...}），不是 0/1 整型——按整型比较会把
+        # 所有条目滤掉（排行榜永远空）。sexual>=2 才算 R18 级；
+        # 兼容旧的整型形态（0=全年龄 / 1=R18）。
+        ict = c.get("illust_content_type") or 0
+        try:
+            sexual = int(ict.get("sexual") or 0) if isinstance(ict, dict) else int(ict)
+        except (TypeError, ValueError):
+            sexual = 0
+        if sexual >= 2:
             continue
         items.append({"kind": "illust", "id": str(c.get("illust_id") or ""),
                       "title": c.get("title") or "(无标题)",
@@ -211,9 +221,13 @@ async def _send_illust(ctx, illust_id: str) -> str:
     urls = await _illust_page_urls(illust_id, pages)
     if not urls:
         return "图地址解析失败了，稍后再试试吧。"
-    cap = f"（共 {pages} 页，发前 {len(urls)} 页）" if pages > _ILLUST_IMG_MAX else ""
+    # NapCat 拉不到图床（被墙无代理），本侧代下转 base64
+    b64s = await images_to_b64(urls)
+    if not b64s:
+        return "图下载失败了（图床得走代理），稍后再试试吧。"
+    cap = f"（共 {pages} 页，发前 {len(b64s)} 页）" if pages > _ILLUST_IMG_MAX else ""
     segs = [ReplySegment(type="text", data=f"「{title}」by {author}{cap}")]
-    segs += [ReplySegment(type="image", data=u) for u in urls]
+    segs += [ReplySegment(type="image", data=b) for b in b64s]
     await ctx.send(segs)
     return None
 

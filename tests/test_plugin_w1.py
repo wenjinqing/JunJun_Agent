@@ -208,11 +208,16 @@ class TestSetu:
         async def _urls(iid):
             return f"「作品{iid}」by 作者", [f"http://x/{iid}.jpg"]
 
+        async def _b64(urls):
+            return [f"base64://fake-{u}" for u in urls]  # 本侧代下（NapCat 拉不到图床）
+
         monkeypatch.setattr(setu, "_pick_from_tags", _pick)
         monkeypatch.setattr(setu, "_illust_image_urls", _urls)
+        monkeypatch.setattr(setu, "images_to_b64", _b64)
         await setu.setu_cmd(_ctx("/setu 白丝"))
         segs = _fake_gateway[0].segments
         assert [s.type for s in segs].count("image") == 2
+        assert all(s.data.startswith("base64://") for s in segs if s.type == "image")
         assert any("作者" in (s.data or "") for s in segs if s.type == "text")
         # 冷却内第二次 -> 拒绝
         result = await setu.setu_cmd(_ctx("/setu 白丝"))

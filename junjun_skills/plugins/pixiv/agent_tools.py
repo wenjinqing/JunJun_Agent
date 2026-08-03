@@ -19,7 +19,7 @@ from junjun_skills.builtin.memory_skills import current_chat_id
 
 from . import illust as illust_mod
 from . import novel as novel_mod
-from .client import _cookie
+from .client import _cookie, images_to_b64
 
 _NO_COOKIE = "P 站功能还没配置 Pixiv Cookie，暂时不可用（让主人在 .env 里设置 PIXIV_COOKIE 吧）。"
 _DL_COOLDOWN = 60.0
@@ -139,12 +139,16 @@ async def pixiv_send_illust(illust_id: str) -> str:
     urls = await illust_mod._illust_page_urls(iid, pages)
     if not urls:
         return "图地址解析失败了，稍后再试。"
-    cap = f"（共 {pages} 页，发前 {len(urls)} 页）" if pages > 3 else ""
+    # NapCat 拉不到图床（被墙无代理），本侧代下转 base64
+    b64s = await images_to_b64(urls)
+    if not b64s:
+        return "图下载失败了（图床得走代理），稍后再试。"
+    cap = f"（共 {pages} 页，发前 {len(b64s)} 页）" if pages > 3 else ""
     from junjun_core.gateway.router import get_gateway
     await get_gateway().send_reply(ReplySet(
         platform=platform, target_user_id=cid,
         segments=[ReplySegment(type="text", data=f"「{title}」by {author}{cap}")]
-        + [ReplySegment(type="image", data=u) for u in urls],
+        + [ReplySegment(type="image", data=b) for b in b64s],
         should_reply=True))
     return f"已把「{title}」的图发出去了。"
 
