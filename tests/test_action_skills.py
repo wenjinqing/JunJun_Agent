@@ -54,25 +54,113 @@ class TestSendPoke:
 
 
 class TestQueryChatHistory:
-    def test_keyword_search(self, tmp_path, monkeypatch):
+    def _db(self, tmp_path):
         import peewee
         from junjun_core.database import models as m
         db = peewee.SqliteDatabase(str(tmp_path / "t.db"))
+        return db, m
+
+    def test_keyword_search(self, tmp_path, monkeypatch):
+        import time as _t
+        db, m = self._db(tmp_path)
         with db.bind_ctx([m.Messages]):
             db.create_tables([m.Messages])
-            m.Messages.create(chat_id="qq:1:group", user_nickname="甲", time=1.0, message_id="m1",
+            m.Messages.create(chat_id="qq:1:group", user_nickname="甲", time=_t.time(), message_id="m1",
                               processed_plain_text="今晚吃火锅吗", bot_id="10000001")
-            m.Messages.create(chat_id="qq:1:group", user_nickname="乙", time=2.0, message_id="m2",
+            m.Messages.create(chat_id="qq:1:group", user_nickname="乙", time=_t.time(), message_id="m2",
                               processed_plain_text="吃过了", bot_id="10000001")
 
             from junjun_skills.builtin.memory_skills import current_chat_id
             current_chat_id.set("qq:1:group")
-            from junjun_skills.builtin.action_skills import query_chat_history
+            from junjun_skills.builtin.action_skills import query_chat_history, _SEARCH_LOG
+            _SEARCH_LOG.clear()
             result = query_chat_history.invoke({"keyword": "火锅"})
             assert "火锅" in result and "甲" in result
             assert "吃过了" not in result
             empty = query_chat_history.invoke({"keyword": "不存在词"})
             assert "没有找到" in empty
+            _SEARCH_LOG.clear()
+
+    def test_user_and_days_filter(self, tmp_path, monkeypatch):
+        """user 只看某人发的；days 窗口过滤老消息，days=0 搜全部历史。"""
+        import time as _t
+        db, m = self._db(tmp_path)
+        with db.bind_ctx([m.Messages]):
+            db.create_tables([m.Messages])
+            now = _t.time()
+            m.Messages.create(chat_id="qq:1:group", user_nickname="甲", user_id="111",
+                              time=now, message_id="m1",
+                              processed_plain_text="店名叫老码头", bot_id="10000001")
+            m.Messages.create(chat_id="qq:1:group", user_nickname="乙", user_id="222",
+                              time=now, message_id="m2",
+                              processed_plain_text="店名我忘了", bot_id="10000001")
+            m.Messages.create(chat_id="qq:1:group", user_nickname="丙", user_id="333",
+                              time=now - 40 * 86400, message_id="m3",
+                              processed_plain_text="店名是陈年老店", bot_id="10000001")
+
+            from junjun_skills.builtin.memory_skills import current_chat_id
+            current_chat_id.set("qq:1:group")
+            from junjun_skills.builtin.action_skills import query_chat_history, _SEARCH_LOG
+            _SEARCH_LOG.clear()
+            # user 过滤：只剩甲
+            r = query_chat_history.invoke({"keyword": "店名", "user": "甲"})
+            assert "老码头" in r and "我忘了" not in r
+            # 默认 30 天窗口：40 天前的被滤掉
+            r = query_chat_history.invoke({"keyword": "店名"})
+            assert "老码头" in r and "陈年老店" not in r
+            # days=0 全历史
+            r = query_chat_history.invoke({"keyword": "店名", "days": 0})
+            assert "陈年老店" in r
+            _SEARCH_LOG.clear()
+
+    def test_limit_capped_at_8(self, tmp_path, monkeypatch):
+        import time as _t
+        db, m = self._db(tmp_path)
+        with db.bind_ctx([m.Messages]):
+            db.create_tables([m.Messages])
+            for i in range(12):
+                m.Messages.create(chat_id="qq:1:group", user_nickname="甲",
+                                  time=_t.time() + i, message_id=f"m{i}",
+                                  processed_plain_text=f"关键词 第{i}条", bot_id="10000001")
+            from junjun_skills.builtin.memory_skills import current_chat_id
+            current_chat_id.set("qq:1:group")
+            from junjun_skills.builtin.action_skills import query_chat_history, _SEARCH_LOG
+            _SEARCH_LOG.clear()
+            r = query_chat_history.invoke({"keyword": "关键词", "limit": 50})
+            assert r.count("\n- ") <= 8
+            _SEARCH_LOG.clear()
+
+    def test_rate_limit(self, tmp_path, monkeypatch):
+        import time as _t
+        db, m = self._db(tmp_path)
+        with db.bind_ctx([m.Messages]):
+            db.create_tables([m.Messages])
+            from junjun_skills.builtin.memory_skills import current_chat_id
+            current_chat_id.set("qq:1:group")
+            from junjun_skills.builtin.action_skills import query_chat_history, _SEARCH_LOG
+            _SEARCH_LOG.clear()
+            for _ in range(5):
+                query_chat_history.invoke({"keyword": "x"})
+            r = query_chat_history.invoke({"keyword": "x"})
+            assert "歇会儿" in r
+            _SEARCH_LOG.clear()
+
+    def test_privacy_current_chat_only(self, tmp_path, monkeypatch):
+        """群里搜不到私聊记录（隐私边界回归）。"""
+        import time as _t
+        db, m = self._db(tmp_path)
+        with db.bind_ctx([m.Messages]):
+            db.create_tables([m.Messages])
+            m.Messages.create(chat_id="qq:111:private", user_nickname="甲",
+                              time=_t.time(), message_id="m1",
+                              processed_plain_text="私聊的秘密店名", bot_id="10000001")
+            from junjun_skills.builtin.memory_skills import current_chat_id
+            current_chat_id.set("qq:1:group")
+            from junjun_skills.builtin.action_skills import query_chat_history, _SEARCH_LOG
+            _SEARCH_LOG.clear()
+            r = query_chat_history.invoke({"keyword": "店名", "days": 0})
+            assert "没有找到" in r and "秘密" not in r
+            _SEARCH_LOG.clear()
 
 
 class TestNoticePoke:

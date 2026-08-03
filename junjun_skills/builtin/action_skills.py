@@ -135,31 +135,61 @@ async def get_weather(city: str) -> str:
         return f"天气查询失败了（{e}），稍后再试试吧。"
 
 
+# 聊天搜索限流（P6-5）：防 LLM 每轮都搜（延迟+成本）。命中才占额度之外的
+# 粗暴防抖：不管有没有搜到都占——防「换个词再搜」连发。
+_SEARCH_LOG: dict = {}  # chat_id -> deque(搜索时间戳，10 分钟滑窗)
+_SEARCH_MAX = 5         # 每会话每 10 分钟最多 5 次
+_SEARCH_WINDOW = 600.0
+
+
+def _search_rate_limited(chat_id: str) -> bool:
+    from collections import deque
+    now = time.time()
+    dq = _SEARCH_LOG.setdefault(chat_id, deque())
+    while dq and now - dq[0] > _SEARCH_WINDOW:
+        dq.popleft()
+    if len(dq) >= _SEARCH_MAX:
+        return True
+    dq.append(now)
+    return False
+
+
 @tool
-def query_chat_history(keyword: str, limit: int = 10) -> str:
-    """搜索当前会话的聊天记录。被问"之前谁说过什么"、需要精确翻近期聊天原文时使用
-    （模糊的久远记忆用 recall_memory）。
+def query_chat_history(keyword: str, user: str = "", days: int = 30, limit: int = 8) -> str:
+    """搜索**当前会话**的聊天记录原文（精确事实查找）。被问「上次谁说过什么/
+    他发的那家店叫什么」这类需要翻原文的问题时使用；模糊的久远记忆用 recall_memory，
+    不要每轮都搜。
+    隐私边界写死：只能搜当前会话——群里搜不到任何私聊记录，私聊也搜不到群记录。
 
     Args:
         keyword: 要搜索的关键词
-        limit: 最多返回条数，默认 10
+        user: 只看某个人发的（昵称片段或 QQ 号，留空=所有人）
+        days: 搜最近几天的，默认 30；0 = 全部历史
+        limit: 最多返回条数，默认 8（上限 8）
     """
     from junjun_core.database.models import Messages
     chat_id = current_chat_id.get()
+    if _search_rate_limited(chat_id):
+        return "刚搜过好几次了，先歇会儿再查（每 10 分钟最多搜 5 次）。"
+    cond = ((Messages.chat_id == chat_id)
+            & (Messages.processed_plain_text.contains(keyword)))
+    if user:
+        cond &= (Messages.user_nickname.contains(user) | (Messages.user_id == user))
+    if days and days > 0:
+        cond &= (Messages.time >= time.time() - days * 86400)
     rows = (
         Messages.select()
-        .where(
-            (Messages.chat_id == chat_id)
-            & (Messages.processed_plain_text.contains(keyword))
-        )
+        .where(cond)
         .order_by(Messages.time.desc())
-        .limit(max(1, min(50, limit)))
+        .limit(max(1, min(8, limit)))
     )
+    scope = f"最近 {days} 天" if days and days > 0 else "全部历史"
+    who = f"{user} 发的" if user else ""
     if not rows:
-        return f"近期聊天记录里没有找到含「{keyword}」的消息。"
-    lines = [f"含「{keyword}」的最近消息："]
+        return f"{scope}的聊天记录里没有找到{who}含「{keyword}」的消息。"
+    lines = [f"{scope}含「{keyword}」的{who}最近消息："]
     for r in rows:
-        who = r.user_nickname or r.user_id or "我"
+        name = r.user_nickname or r.user_id or "我"
         when = time.strftime("%m-%d %H:%M", time.localtime(r.time))
-        lines.append(f"- [{when}] {who}: {r.processed_plain_text[:80]}")
+        lines.append(f"- [{when}] {name}: {r.processed_plain_text[:80]}")
     return "\n".join(lines)
