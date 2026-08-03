@@ -311,6 +311,13 @@ class LongTermMemory:
         logger.info(f"按条件删除 {removed} 条记忆（{len(keep_ids)} 条保留）")
         return removed
 
+    def pinned(self, chat_id: str, *, limit: int = 50) -> List[MemoryItem]:
+        """用户钉住的记忆（/记住、pin_memory，kind="pinned"）：每轮优先注入，
+        不占语义召回额度（P6-2 用户可控记忆）。"""
+        self.load()
+        out = [it for it in self._items if it.kind == "pinned" and it.chat_id == chat_id]
+        return out[-limit:]
+
     def _rebuild(self, keep_ids: list) -> None:
         """按保留下标重建 items + faiss 索引并落盘。向量条目从旧索引 reconstruct。"""
         import faiss

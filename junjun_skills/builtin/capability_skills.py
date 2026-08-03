@@ -134,18 +134,83 @@ def get_capabilities(query_type: str = "all") -> str:
 from junjun_agent.commands import register_command  # noqa: E402
 
 
+@register_command("remember", aliases=["记住"], plugin="builtin",
+                  description="钉住一条必须记住的事（每轮都会看到）")
+async def remember_cmd(ctx) -> str:
+    """/记住 <内容>：钉进最高优先级记忆（kind=pinned，每轮注入，不占召回额度）。"""
+    content = (ctx.args or "").strip()
+    if not content:
+        return "用法：/记住 <内容>"
+    from junjun_memory.long_term import get_long_term_memory
+    from junjun_core.config import get_global_config
+    chat_id = ctx.session.chat_id
+    ltm = get_long_term_memory()
+    try:
+        cap = int(get_global_config().raw.get("memory", {}).get("pinned_max_per_chat", 20))
+    except Exception:
+        cap = 20
+    if len(ltm.pinned(chat_id)) >= cap:
+        return f"钉住的记忆已经 {cap} 条到上限了，先 /忘掉 一些再钉。"
+    await ltm.add(content, chat_id, weight=1.5, kind="pinned")
+    return f"钉好了：{content}（之后每轮我都会直接看到）"
+
+
 @register_command("forget", aliases=["忘掉"], plugin="builtin",
-                  admin_only=True, description="删除含关键词的长期记忆")
+                  description="删除含关键词的记忆（管理员删全局，其他人限本会话+本人画像）")
 async def forget_cmd(ctx) -> str:
-    """/forget <关键词>：删除所有含该关键词的长期记忆（含向量索引重建）。"""
+    """/forget <关键词>：删除含该关键词的长期记忆（含向量索引重建）。
+
+    权限边界：管理员全局删除；其他人只删本会话的记忆（知识库/日记不动）
+    + 本人画像里的记忆点。可控记忆只碰事实性记忆，人设/安全规则不在
+    长期记忆库里，天然不可触及。
+    """
     kw = (ctx.args or "").strip()
     if not kw:
         return "用法：/forget <关键词>"
     from junjun_memory.long_term import get_long_term_memory
-    removed = get_long_term_memory().remove_where(lambda it: kw in it.text)
-    if removed:
-        return f"已删除 {removed} 条含「{kw}」的记忆。"
-    return f"没找到含「{kw}」的记忆。"
+    from junjun_core.security import is_admin
+    ltm = get_long_term_memory()
+    if is_admin(ctx.meta.user_id):
+        removed = ltm.remove_where(lambda it: kw in it.text)
+        if removed:
+            return f"已删除 {removed} 条含「{kw}」的记忆（全局）。"
+        return f"没找到含「{kw}」的记忆。"
+    chat_id = ctx.session.chat_id
+    removed = ltm.remove_where(
+        lambda it: kw in it.text and it.chat_id == chat_id
+        and it.chat_id not in ("knowledge", "self:diary"))
+    profile_removed = 0
+    try:
+        from junjun_memory.user_profile import get_profile_store
+        profile_removed = get_profile_store().remove_points_where(
+            ctx.session.platform, ctx.meta.user_id, kw)
+    except Exception:
+        pass
+    if removed or profile_removed:
+        parts = []
+        if removed:
+            parts.append(f"本会话记忆 {removed} 条")
+        if profile_removed:
+            parts.append(f"你的画像 {profile_removed} 条")
+        return f"已删除含「{kw}」的：{'、'.join(parts)}。"
+    return f"没找到含「{kw}」的记忆（只能删本会话的记忆和你自己的画像）。"
+
+
+@register_command("what_do_you_remember", aliases=["你记得我什么"], plugin="builtin",
+                  description="导出她记住的关于你的画像")
+async def what_do_you_remember_cmd(ctx) -> str:
+    """/你记得我什么：导出她记住的关于你的画像（只看自己的，按用户隔离）。"""
+    from junjun_memory.user_profile import get_profile_store
+    store = get_profile_store()
+    person = store.get_or_create(ctx.session.platform, ctx.meta.user_id)
+    points = store.get_points(ctx.session.platform, ctx.meta.user_id, top_k=20)
+    if not points and not person.person_name:
+        return "我还不太了解你呢——多跟我聊聊你自己，或者直接用 /记住 告诉我。"
+    lines = [f"我记得的关于你（{person.person_name or ctx.meta.nickname or '你'}）："]
+    for p in points:
+        lines.append(f"- {p['category']}: {p['content']}")
+    lines.append("想删掉某条：/忘掉 <关键词>")
+    return "\n".join(lines)
 
 
 @register_command("diary", aliases=["日记"], plugin="builtin",
