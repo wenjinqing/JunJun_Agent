@@ -143,6 +143,12 @@ interval_days = 7        # 蒸馏间隔（天）
 min_diaries = 3          # 攒够几篇新日记才蒸馏
 max_entries = 8          # 注入 persona 的条目上限
 
+# ---------- 跨场景用户档案（按用户聚合蒸馏事实，注入分场合过滤） ----------
+[scene_profile]
+enable = true
+min_messages = 10        # 近 24h 发言 ≥N 条才值得蒸馏（成本控制）
+max_facts = 3            # 每场景每次蒸馏事实上限
+
 # ---------- TTS 情绪语气（语音跟随君君的真实心情） ----------
 [tts]
 enable_emotion = true    # 语音自动带当前心情语气（豆包 emotion 参数，实测 vv 音色支持）

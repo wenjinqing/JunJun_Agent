@@ -172,26 +172,46 @@ async def forget_cmd(ctx) -> str:
     ltm = get_long_term_memory()
     if is_admin(ctx.meta.user_id):
         removed = ltm.remove_where(lambda it: kw in it.text)
-        if removed:
-            return f"已删除 {removed} 条含「{kw}」的记忆（全局）。"
+        scene_removed = 0
+        try:
+            from junjun_core.database.models import UserSceneProfile, _bot_id
+            scene_removed = (UserSceneProfile.delete()
+                             .where((UserSceneProfile.bot_id == _bot_id())
+                                    & (UserSceneProfile.content.contains(kw)))
+                             .execute())
+        except Exception:
+            pass
+        if removed or scene_removed:
+            extra = f"（另删跨场景档案 {scene_removed} 条）" if scene_removed else ""
+            return f"已删除 {removed} 条含「{kw}」的记忆（全局）。{extra}"
         return f"没找到含「{kw}」的记忆。"
     chat_id = ctx.session.chat_id
     removed = ltm.remove_where(
         lambda it: kw in it.text and it.chat_id == chat_id
         and it.chat_id not in ("knowledge", "self:diary"))
     profile_removed = 0
+    scene_removed = 0
     try:
         from junjun_memory.user_profile import get_profile_store
         profile_removed = get_profile_store().remove_points_where(
             ctx.session.platform, ctx.meta.user_id, kw)
     except Exception:
         pass
-    if removed or profile_removed:
+    try:
+        from junjun_memory.scene_profile import forget_user_facts
+        scene_removed = forget_user_facts(
+            ctx.session.platform, ctx.meta.user_id, kw,
+            admin=False, current_chat_id=chat_id)
+    except Exception:
+        pass
+    if removed or profile_removed or scene_removed:
         parts = []
         if removed:
             parts.append(f"本会话记忆 {removed} 条")
         if profile_removed:
             parts.append(f"你的画像 {profile_removed} 条")
+        if scene_removed:
+            parts.append(f"你的跨场景档案 {scene_removed} 条")
         return f"已删除含「{kw}」的：{'、'.join(parts)}。"
     return f"没找到含「{kw}」的记忆（只能删本会话的记忆和你自己的画像）。"
 
