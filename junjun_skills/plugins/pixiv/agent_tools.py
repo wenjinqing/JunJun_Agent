@@ -19,7 +19,7 @@ from junjun_skills.builtin.memory_skills import current_chat_id
 
 from . import illust as illust_mod
 from . import novel as novel_mod
-from .client import _cookie, images_to_b64, is_safe_item
+from .client import _cookie, images_to_b64, passes_policy
 
 _NO_COOKIE = "P 站功能还没配置 Pixiv Cookie，暂时不可用（让主人在 .env 里设置 PIXIV_COOKIE 吧）。"
 _DL_COOLDOWN = 60.0
@@ -65,10 +65,13 @@ async def pixiv_search_illusts(keyword: str) -> str:
     items = await illust_mod._search_illusts(keyword, group=(kind == "group"))
     if not items:
         return f"没找到和「{keyword}」相关的插画，换个关键词（比如换日文）试试。"
-    lines = [f"P 站插画搜索「{keyword}」推荐（{len(items)} 条）："]
+    lines = [f"P 站插画搜索「{keyword}」推荐（{len(items)} 条，按收藏排序）："]
     for i, it in enumerate(items, 1):
         pages = f"，{it['pages']}页" if (it.get("pages") or 1) > 1 else ""
-        lines.append(f"{i}. 「{it['title']}」by {it['author']}{pages}")
+        bm = it.get("bookmarks") or 0
+        bm_text = f"，{bm / 10000:.1f}万收藏" if bm >= 10000 else (f"，{bm}收藏" if bm else "")
+        r18 = "【R18】" if it.get("r18") else ""
+        lines.append(f"{i}. {r18}「{it['title']}」by {it['author']}{pages}{bm_text}")
         lines.append(f"   https://www.pixiv.net/artworks/{it['id']}")
     lines.append("（群聊里发链接推荐即可；私聊里对方想要哪张，用 pixiv_send_illust 发图）")
     return "\n".join(lines)
@@ -91,17 +94,20 @@ async def pixiv_search_novels(keyword: str) -> str:
     data_list = (result.get("novel") or {}).get("data") or []
     if not data_list:
         return f"没找到和「{keyword}」相关的小说，换个关键词试试。"
+    _, _, kind = _chat()
     items = [novel_mod._extract_search_item(it) for it in data_list[:6]]
-    items = [it for it in items if not it["r18"]]  # 推荐清单不含 R18
+    if kind == "group":
+        items = [it for it in items if not it["r18"]]  # 群聊推荐清单不含 R18
     if not items:
-        return f"「{keyword}」的结果全是 R18，不推荐发出来，换个词吧。"
+        return f"「{keyword}」的结果全是 R18，群里不推荐发出来，私聊我给你找。"
     lines = [f"P 站小说搜索「{keyword}」推荐（{len(items)} 条）："]
     for i, it in enumerate(items, 1):
+        r18 = "【R18】" if it["r18"] else ""
         if it["series_id"]:
-            lines.append(f"{i}. 「{it['display_title']}」（系列）by {it['author']}")
+            lines.append(f"{i}. {r18}「{it['display_title']}」（系列）by {it['author']}")
             lines.append(f"   https://www.pixiv.net/novel/series/{it['series_id']}")
         else:
-            lines.append(f"{i}. 「{it['display_title']}」（单篇）by {it['author']}")
+            lines.append(f"{i}. {r18}「{it['display_title']}」（单篇）by {it['author']}")
             lines.append(f"   https://www.pixiv.net/novel/show.php?id={it['id']}")
     lines.append("（群聊里发链接推荐即可；私聊里对方想要全文，用 pixiv_download_novel 下载 txt）")
     return "\n".join(lines)
@@ -113,6 +119,7 @@ async def pixiv_search_novels(keyword: str) -> str:
 async def pixiv_send_illust(illust_id: str) -> str:
     """把指定 P 站作品的图直接发出来（多页最多 3 张）。【仅私聊可用】——
     群聊里不要调用本工具：群聊想要图时用 pixiv_search_illusts 给链接推荐。
+    私聊可以发 R18（R-18G/グロ除外）。
 
     Args:
         illust_id: 作品 ID（pixiv_search_illusts 的结果里有，或作品链接里的数字）
@@ -129,8 +136,8 @@ async def pixiv_send_illust(illust_id: str) -> str:
     detail = await illust_mod._illust_detail(iid)
     if detail.get("error"):
         return f"获取作品失败：{detail['error']}"
-    if not is_safe_item(detail, group=False):
-        return "这个作品是 R18/擦边内容，发不了。可以推荐给 ta 别的全年龄作品。"
+    if not passes_policy(detail, group=False):
+        return "这个作品是 R-18G/グロ，发不了。可以推荐给 ta 别的作品。"
     title = detail.get("title") or "(无标题)"
     author = detail.get("userName") or ""
     pages = detail.get("pageCount") or 1

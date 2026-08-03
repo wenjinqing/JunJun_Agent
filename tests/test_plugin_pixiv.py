@@ -75,12 +75,14 @@ class TestSearch:
     @pytest.mark.asyncio
     async def test_search_list_and_r18_filtered(self, monkeypatch):
         async def _fetch(url, referer=""):
-            assert "mode=safe" in url
-            return {"illustManga": {"data": [
-                _illust_item(1, "好图"),
-                _illust_item(2, "R18图", r18=2),  # 必须被滤掉
-                _illust_item(3, "也好图"),
-            ]}}
+            if "search" in url:
+                assert "mode=safe" in url
+                return {"illustManga": {"data": [
+                    _illust_item(1, "好图"),
+                    _illust_item(2, "R18图", r18=2),  # 必须被滤掉
+                    _illust_item(3, "也好图"),
+                ]}}
+            return {"bookmarkCount": 100, "xRestrict": 0}  # attach_bookmarks 详情
 
         # 搜索走 client.search_artworks（收藏分层池），patch client 层
         import junjun_skills.plugins.pixiv.client as pixiv_client
@@ -294,24 +296,113 @@ class TestImageB64:
 
 
 class TestSafetyFilter:
-    """R18 三层元数据过滤（2026-08-03 用户实锤 mode=safe 漏擦边/R18）。"""
+    """内容政策（2026-08-03 用户定）：群聊全年龄严格；私聊放开 R18、堵 R-18G。"""
 
-    def test_is_safe_item_matrix(self):
-        from junjun_skills.plugins.pixiv.client import is_safe_item
+    def test_passes_policy_matrix(self):
+        from junjun_skills.plugins.pixiv.client import passes_policy
         ok = {"xRestrict": 0, "sl": 2, "tags": ["原神"]}
-        assert is_safe_item(ok, group=True) and is_safe_item(ok, group=False)
-        # xRestrict 双保险
-        assert not is_safe_item({"xRestrict": 2}, group=True)
-        assert not is_safe_item({"xRestrict": 2}, group=False)
-        # tag 黑名单（私聊也拦）
-        assert not is_safe_item({"xRestrict": 0, "tags": ["R-18"]}, group=False)
+        assert passes_policy(ok, group=True) and passes_policy(ok, group=False)
+        # 私聊放开 R18（xRestrict=1）
+        r18 = {"xRestrict": 1, "tags": ["R-18"]}
+        assert passes_policy(r18, group=False)
+        assert not passes_policy(r18, group=True)  # 群聊照旧堵
+        # R-18G：私聊也堵
+        assert not passes_policy({"xRestrict": 2}, group=False)
+        assert not passes_policy({"xRestrict": 1, "tags": ["グロ"]}, group=False)
+        # tag 黑名单（群聊拦错标漏标的）
+        assert not passes_policy({"xRestrict": 0, "tags": ["R-18"]}, group=True)
         # 详情形态 tags（dict 包 list[dict]）
         detail = {"xRestrict": 0, "tags": {"tags": [{"tag": "NSFW"}]}}
-        assert not is_safe_item(detail, group=False)
+        assert not passes_policy(detail, group=True)
+        assert passes_policy(detail, group=False)  # 私聊 NSFW tag 不拦（xRestrict=0）
         # sl 擦边：群聊拦、私聊放
         border = {"xRestrict": 0, "sl": 4, "tags": []}
-        assert not is_safe_item(border, group=True)
-        assert is_safe_item(border, group=False)
+        assert not passes_policy(border, group=True)
+        assert passes_policy(border, group=False)
+
+    def test_ugly_tags(self):
+        from junjun_skills.plugins.pixiv.client import has_ugly_tag
+        assert has_ugly_tag({"tags": ["原神", "落書き"]})
+        assert has_ugly_tag({"tags": {"tags": [{"tag": "AIイラスト"}]}})
+        assert has_ugly_tag({"tags": ["MMD"]})
+        assert not has_ugly_tag({"tags": ["原神", "女の子"]})
+
+    @pytest.mark.asyncio
+    async def test_attach_bookmarks_sorts_desc(self, monkeypatch):
+        from junjun_skills.plugins.pixiv import client
+
+        async def _fetch(url, referer=""):
+            iid = url.rsplit("/", 1)[-1]
+            return {"bookmarkCount": {"1": 100, "2": 9000, "3": 500}[iid],
+                    "xRestrict": 0}
+
+        monkeypatch.setattr(client, "_fetch_json", _fetch)
+        items = [{"id": "1"}, {"id": "2"}, {"id": "3"}]
+        out = await client.attach_bookmarks(items)
+        assert [i["id"] for i in out] == ["2", "3", "1"]  # 按收藏降序
+        assert out[0]["bookmarks"] == 9000
+
+    @pytest.mark.asyncio
+    async def test_search_private_includes_r18_marked(self, monkeypatch):
+        """私聊搜索：mode=all 进 R18，列表打【R18】标；群聊不出。"""
+        import junjun_skills.plugins.pixiv.client as pixiv_client
+        seen_modes = []
+
+        async def _fetch(url, referer=""):
+            if "mode=all" in url:
+                seen_modes.append("all")
+            elif "mode=safe" in url:
+                seen_modes.append("safe")
+            if "/ajax/illust/" in url:  # attach_bookmarks 详情
+                iid = url.rsplit("/", 1)[-1].split("?")[0]
+                return {"bookmarkCount": 5000,
+                        "xRestrict": 2 if iid == "2" else 0}
+            return {"illustManga": {"data": [
+                _illust_item(1, "健全图"),
+                _illust_item(2, "大人图", r18=1),
+            ]}}
+
+        monkeypatch.setattr(pixiv_client, "_fetch_json", _fetch)
+        out = await illust.pixiv_cmd(_ctx("/pixiv search 原神", is_group=False))
+        assert "all" in seen_modes
+        assert "【R18】" in out and "大人图" in out  # 私聊 R18 进列表带标记
+
+        seen_modes.clear()
+        out = await illust.pixiv_cmd(
+            _ctx("/pixiv search 原神", is_group=True, user_id="999"))
+        assert "safe" in seen_modes
+        assert "大人图" not in out  # 群聊不出 R18
+
+    @pytest.mark.asyncio
+    async def test_send_illust_private_allows_r18(self, _fake_gateway, monkeypatch):
+        async def _fetch(url, referer=""):
+            if "/pages" in url:
+                return [{"urls": {"regular": "https://i.pximg.net/a_p0.jpg"}}]
+            return {"title": "大人图", "userName": "x", "xRestrict": 1,
+                    "pageCount": 1}
+
+        async def _b64(urls):
+            return [f"base64://fake-{u}" for u in urls]
+
+        monkeypatch.setattr(illust, "_fetch_json", _fetch)
+        monkeypatch.setattr(illust, "images_to_b64", _b64)
+        out = await illust.pixiv_cmd(_ctx("/pixiv illust 123", is_group=False))
+        assert out is None  # 私聊 R18 放行
+        assert _fake_gateway
+        # 群聊同一张图 -> 拒（换 user 避开冷却）
+        _fake_gateway.clear()
+        out = await illust.pixiv_cmd(
+            _ctx("/pixiv illust 123", is_group=True, user_id="999"))
+        assert "R18" in out
+
+    @pytest.mark.asyncio
+    async def test_send_illust_private_blocks_gore(self, monkeypatch):
+        async def _fetch(url, referer=""):
+            return {"title": "G图", "userName": "x", "xRestrict": 2, "pageCount": 1}
+
+        monkeypatch.setattr(illust, "_fetch_json", _fetch)
+        out = await illust.pixiv_cmd(_ctx("/pixiv illust 123", is_group=False))
+        assert "R-18G" in out
 
     @pytest.mark.asyncio
     async def test_ranking_group_drops_sexual_1(self, monkeypatch):
@@ -353,7 +444,8 @@ class TestSafetyFilter:
         assert "热门图" in info and urls
 
     @pytest.mark.asyncio
-    async def test_setu_detail_r18_tag_dropped(self, monkeypatch):
+    async def test_setu_detail_r18_tag_policy(self, monkeypatch):
+        """R-18 tag：群聊详情层刷掉；私聊放行（2026-08-03 私聊放开 R18）。"""
         from junjun_skills.plugins.pixiv import setu
         monkeypatch.setattr(setu, "_min_bookmarks", lambda: 0)
 
@@ -363,7 +455,9 @@ class TestSafetyFilter:
                     "urls": {"regular": "http://x/c.jpg"}}
 
         monkeypatch.setattr(setu, "_fetch_json", _fetch)
-        assert await setu._illust_image_urls("3", group=False) == ("", [])
+        assert await setu._illust_image_urls("3", group=True) == ("", [])
+        info, urls = await setu._illust_image_urls("3", group=False)
+        assert "漏网" in info and urls
 
 
 class TestCooldown:

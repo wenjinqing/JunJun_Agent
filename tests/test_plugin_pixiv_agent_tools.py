@@ -100,15 +100,25 @@ class TestSearchNovels:
         ]}}
 
     @pytest.mark.asyncio
-    async def test_recommend_filters_r18_and_links(self, monkeypatch):
+    async def test_recommend_group_filters_r18(self, monkeypatch):
         async def _search(keyword, page=1):
             return self._novel_result()
 
         monkeypatch.setattr(novel_mod, "_search_novels", _search)
+        _group()
         out = await at.pixiv_search_novels.ainvoke({"keyword": "原神"})
         assert "某单篇" in out and "show.php?id=61" in out
-        assert "某R18" not in out  # R18 不进推荐清单
+        assert "某R18" not in out  # 群聊推荐清单不含 R18
         assert "某系列" in out and "（系列）" in out and "series/555" in out
+
+    @pytest.mark.asyncio
+    async def test_recommend_private_marks_r18(self, monkeypatch):
+        async def _search(keyword, page=1):
+            return self._novel_result()
+
+        monkeypatch.setattr(novel_mod, "_search_novels", _search)
+        out = await at.pixiv_search_novels.ainvoke({"keyword": "原神"})  # 默认私聊
+        assert "【R18】" in out and "某R18" in out  # 私聊保留 R18 并打标
 
     @pytest.mark.asyncio
     async def test_error_result(self, monkeypatch):
@@ -156,10 +166,20 @@ class TestSendIllust:
         assert any("某画师" in (s.data or "") for s in rs.segments if s.type == "text")
 
     @pytest.mark.asyncio
-    async def test_r18_rejected(self, monkeypatch):
+    async def test_r18_allowed_gore_rejected(self, monkeypatch):
+        # 私聊放开 R18（xRestrict=1 放行）
+        self._stubs(monkeypatch, xrestrict=1)
+
+        async def _b64(urls):
+            return ["base64://x"]
+
+        monkeypatch.setattr(at, "images_to_b64", _b64)
+        out = await at.pixiv_send_illust.ainvoke({"illust_id": "111"})
+        assert "已把" in out
+        # R-18G（xRestrict=2）私聊也拒
         self._stubs(monkeypatch, xrestrict=2)
         out = await at.pixiv_send_illust.ainvoke({"illust_id": "111"})
-        assert "R18" in out
+        assert "R-18G" in out
 
     @pytest.mark.asyncio
     async def test_bad_id(self):
