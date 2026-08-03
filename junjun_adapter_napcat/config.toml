@@ -20,3 +20,9 @@ private_list_type = "blacklist"
 private_list = []
 ban_user_id = []
 ban_qq_bot = false
+# 戳一戳防刷屏：同人同会话 60s 只回一次；全会话 20s 地板；连戳被挡 5 次
+# 放一条「（连续戳了你好几下）」让她吐槽一次，然后冷却 600s
+poke_min_interval = 60
+poke_chat_min_interval = 20
+poke_escalate_count = 5
+poke_escalate_cooldown = 600
