@@ -41,6 +41,10 @@
 ### 1.5 插件规范固化
 - `junjun_skills/plugins/` 静态加载：启动扫描目录，`_manifest.json`（name/version/skills/依赖探测）；依赖缺失禁用该插件并 WARN，不崩启动。
 - 热加载不做（留 WebUI 阶段按需评估）。
+- 工具分组登记（P5-2 三层动态子集，2026-08-03 起）：新插件的工具必须在
+  `registry._TOPIC_KEYWORDS` 登记话题触发词，否则闲聊轮会被掩码裁掉；
+  多工具配套的强意图工作流（如订阅三件套）追加登记 `_INTENT_GROUPS`
+  （触发词/挂载组/必调主工具），agent 意图自检共用这份元数据。
 
 ---
 

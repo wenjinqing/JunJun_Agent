@@ -23,38 +23,44 @@ class TestIntentNudge:
         """「帮我盯着p站16689973」只调了 save_memory -> 追问 subscribe_updates。"""
         msgs = [_ai_with_tools("save_memory")]
         nudge = _intent_nudge("@君君 帮我盯着p站作者16689973", msgs, ALL_TOOLS)
-        assert nudge and "subscribe_updates" in nudge
+        assert nudge and "subscribe_updates" in nudge[0]
+        assert nudge[1] is False  # 工具可用，普通补救轮
 
     def test_no_nudge_when_tool_called(self):
         """已正确调用 subscribe_updates -> 不追问。"""
         msgs = [_ai_with_tools("subscribe_updates")]
         assert _intent_nudge("帮我盯着p站作者16689973", msgs, ALL_TOOLS) is None
 
-    def test_no_nudge_when_tool_unavailable(self):
-        """工具被掩码裁掉 -> 不追问（问了也调不了）。"""
+    def test_full_bind_when_tool_masked_out(self):
+        """工具被掩码裁掉（漏绑）-> 追问 + 全绑补救轮（P5-2 兜底）。
+
+        2026-08-01 实战：模型被追问一个没绑定的工具，如实答「没有这个工具」。
+        """
         msgs = [_ai_with_tools("save_memory")]
-        assert _intent_nudge("帮我盯着p站16689973", msgs, {"save_memory"}) is None
+        nudge = _intent_nudge("帮我盯着p站16689973", msgs, {"save_memory"})
+        assert nudge and "subscribe_updates" in nudge[0]
+        assert nudge[1] is True  # full_bind：补救轮用全量工具重建 agent
 
     def test_unsubscribe_takes_priority(self):
         """「取消订阅」含「订阅」——必须先命中 unsubscribe 规则。"""
         msgs = [_ai_with_tools()]
         nudge = _intent_nudge("取消订阅 3", msgs, ALL_TOOLS)
-        assert nudge and "unsubscribe" in nudge
+        assert nudge and "unsubscribe" in nudge[0]
 
     def test_reminder_intent(self):
         msgs = [_ai_with_tools()]
         nudge = _intent_nudge("明天早上八点提醒我开会", msgs, ALL_TOOLS)
-        assert nudge and "set_reminder" in nudge
+        assert nudge and "set_reminder" in nudge[0]
 
     def test_research_intent_goes_background(self):
         """「调研」「深研」命中深度研究规则：只做了内联搜索 -> 追问 deep_research。"""
         tools = ALL_TOOLS | {"deep_research"}
         msgs = [_ai_with_tools("web_search")]
         nudge = _intent_nudge("帮我调研一下绝区零丹的攻略", msgs, tools)
-        assert nudge and "deep_research" in nudge
+        assert nudge and "deep_research" in nudge[0]
         # 2026-08-01 trace：用户口语缩写「深研」未命中关键词，当场内联查完
         nudge = _intent_nudge("帮我深研一下绝区零丹的配队", msgs, tools)
-        assert nudge and "deep_research" in nudge
+        assert nudge and "deep_research" in nudge[0]
 
     def test_research_no_nudge_when_submitted(self):
         tools = ALL_TOOLS | {"deep_research"}
@@ -110,6 +116,28 @@ class TestAgentRebuild:
         assert calls == []  # 构造时不再绑工具
         await agent.process("甲: 你好")
         assert calls  # process 时按当前会话状态实时构建
+
+    def test_full_bind_rebuild_uses_all_tools(self, monkeypatch):
+        """漏绑补救轮：_build_agent(full=True) 用全量工具（get_tools 不带 session）。"""
+        import junjun_agent.agent as agent_mod
+        from junjun_core.gateway.session_manager import ChatSession
+
+        sessions = []
+        real_get_tools = agent_mod.get_tools
+
+        def counting(session=None):
+            sessions.append(session)
+            return real_get_tools(session)
+        monkeypatch.setattr(agent_mod, "get_tools", counting)
+        monkeypatch.setattr(agent_mod, "create_agent",
+                            lambda model, tools, middleware=None: object())
+
+        session = ChatSession("qq:1:private", "qq", user_id="1")
+        agent = agent_mod.JunJunAgent(session, model=object())
+        agent._build_agent(full=True)
+        assert sessions and sessions[-1] is None  # 全量
+        agent._build_agent()
+        assert sessions[-1] is session            # 按会话掩码
 
 
 class TestAddressedFallback:

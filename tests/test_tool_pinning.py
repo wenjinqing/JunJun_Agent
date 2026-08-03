@@ -76,3 +76,58 @@ class TestKeywordPinning:
         """「取消订阅 3」→ unsubscribe 命中（订阅工具顺带命中无妨，取消流程同样需要）。"""
         pinned = registry._pinned_by_keywords([subscribe_updates, unsubscribe], "取消订阅 3")
         assert unsubscribe in pinned
+
+
+def _named_tool(name):
+    @tool(name)
+    def _t(x: str) -> str:
+        """凑数工具。
+
+        Args:
+            x: 任意输入
+        """
+        return "ok"
+    return _t
+
+
+class TestThreeLayerSubset:
+    """P5-2 三层工具子集：CORE 瘦身 / INTENT 整组挂载 / 稳定序。"""
+
+    def test_core_slimmed_to_eight(self):
+        """CORE ≤8：原 CORE 的 set_reminder/ai_draw/send_feed 等无话题时不常驻。"""
+        ex_core = [_named_tool(n) for n in
+                   ("set_reminder", "list_reminders", "ai_draw", "unified_tts",
+                    "ja_tts", "send_feed", "read_feed", "find_user_id")]
+        core_now = [_named_tool(n) for n in registry._CORE_TOOLS]
+        # 凑数工具在前：同分（0）时稳定序让它们占满补位名额，隔离 CORE 常驻性验证
+        tools = _make_fillers(20) + core_now + ex_core
+        session = _session_with("今天天气真好啊")
+        kept = registry._mask_by_relevance(tools, session)
+        names = {t.name for t in kept}
+        assert len(registry._CORE_TOOLS) <= 8
+        for n in registry._CORE_TOOLS:
+            assert n in names  # CORE 永不掩码
+        for n in ("set_reminder", "ai_draw", "send_feed"):
+            assert n not in names  # 旧 CORE 无话题时被裁
+
+    def test_intent_mounts_whole_group(self):
+        """INTENT 层：「明天提醒我开会」-> 提醒三件套整组挂载（cancel 无关键词也带上）。"""
+        trio = [_named_tool(n) for n in
+                ("set_reminder", "list_reminders", "cancel_reminder_task")]
+        tools = trio + _make_fillers(20)
+        session = _session_with("明天早上八点提醒我开会")
+        kept = registry._mask_by_relevance(tools, session)
+        names = {t.name for t in kept}
+        assert {"set_reminder", "list_reminders", "cancel_reminder_task"} <= names
+
+    def test_intent_no_hit_no_mount(self):
+        """闲聊不挂意图组。"""
+        assert registry._intent_mounted("今天天气真好") == []
+        assert registry._intent_mounted("") == []
+
+    def test_canonical_order_stable(self):
+        """稳定序：同一子集任意输入顺序 -> 相同输出（CORE 固定序 + 其余字典序）。"""
+        a, b, c = _named_tool("ai_draw"), _named_tool("get_time"), _named_tool("web_search")
+        o1 = [t.name for t in registry._canonical_order([a, b, c])]
+        o2 = [t.name for t in registry._canonical_order([c, a, b])]
+        assert o1 == o2 == ["get_time", "web_search", "ai_draw"]  # CORE 在前

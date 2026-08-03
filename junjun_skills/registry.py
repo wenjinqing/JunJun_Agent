@@ -220,6 +220,70 @@ def list_skills() -> List[dict]:
             for n, s in _registry.items()]
 
 
+# ---------------------------------------------------------------- 三层工具子集（P5-2）
+
+# CORE 层：任何对话都可能用的刚需工具，永不掩码，≤8 个（Berkeley
+# Function-Calling Leaderboard：工具越多模型越难选对）。顺序即绑定顺序。
+_CORE_TOOLS = (
+    "do_not_reply",   # 沉默决策
+    "send_message",   # 回复
+    "send_emoji",     # 表情
+    "get_time",       # 时间感知
+    "recall_memory",  # 记忆读
+    "save_memory",    # 记忆写
+    "manage_mood",    # 心情
+    "web_search",     # 搜索（答疑兜底）
+)
+_CORE_SET = frozenset(_CORE_TOOLS)
+
+# INTENT 层：当前消息命中强意图 -> 整组挂载。元数据同时驱动 agent 意图自检
+# （primary = 「必须真调」的工具，None = 只挂载不追问）。
+# 顺序敏感：先长后短（「取消订阅」含「订阅」，必须先匹配）。
+_INTENT_GROUPS = [
+    (("取消订阅", "别盯", "退订", "不用盯"),
+     ("unsubscribe", "list_subscriptions"), "unsubscribe"),
+    (("盯", "订阅", "更新了告诉", "出新了告诉", "出新叫我"),
+     ("subscribe_updates", "list_subscriptions"), "subscribe_updates"),
+    (("提醒我", "记得提醒", "到点叫", "到时候叫"),
+     ("set_reminder", "list_reminders", "cancel_reminder_task"), "set_reminder"),
+    # 调研/报告类必须派后台深度研究（当场埋头做会堵会话队列几十秒，对方干等）
+    (("调研", "深研", "深度研究", "研究报告", "整理一份报告"),
+     ("deep_research", "run_background_task", "list_background_tasks"), "deep_research"),
+    (("发个语音", "发语音", "语音说", "唱首", "唱一", "念给", "说日语", "日语说"),
+     ("unified_tts", "ja_tts"), None),
+    (("帮我画", "画个", "画一张", "画张", "生成图", "画幅"),
+     ("ai_draw",), None),
+]
+
+
+def intent_groups() -> list:
+    """INTENT 层元数据（agent 意图自检共用，单一数据源）。"""
+    return _INTENT_GROUPS
+
+
+def _intent_mounted(text: str) -> List[str]:
+    """当前消息命中的意图组 -> 挂载工具名（组定义序，去重）。"""
+    out: List[str] = []
+    if not text:
+        return out
+    for keywords, group, _primary in _INTENT_GROUPS:
+        if any(kw in text for kw in keywords):
+            for name in group:
+                if name not in out:
+                    out.append(name)
+    return out
+
+
+def _canonical_order(tools: List[BaseTool]) -> List[BaseTool]:
+    """稳定序列化：CORE 固定序 + 其余按名字典序。
+
+    同一子集每次绑定的字节完全一致——tools 是请求前缀的一部分，
+    顺序抖动会白白打穿 prompt 前缀缓存（P5-2 缓存护栏）。
+    """
+    rank = {name: i for i, name in enumerate(_CORE_TOOLS)}
+    return sorted(tools, key=lambda t: (rank.get(t.name, len(rank)), t.name))
+
+
 def get_tools(session=None) -> List[BaseTool]:
     """按会话取可用工具集。session=None 返回全量（不含已禁用）。
 
@@ -252,31 +316,34 @@ def get_tools(session=None) -> List[BaseTool]:
             mcp_kept.extend(ts[:3])  # 每组最多 3 个
         # 其他工具按话题相关性裁剪
         other_kept = _mask_by_relevance(other_tools, session) if len(other_tools) > 15 else other_tools
-        tools = other_kept + mcp_kept
+        tools = _canonical_order(other_kept + mcp_kept)
     return tools
 
 
 def _mask_by_relevance(tools: List[BaseTool], session) -> List[BaseTool]:
-    """按会话最近话题语义相关性过滤工具，保留 ≤12 个。
+    """三层工具子集（P5-2）：CORE 常驻 + INTENT 整组挂载 + TOPIC 关键词钉住，
+    余量按语义相关性补满。
 
-    核心工具永远保留；话题关键词命中的工具直接钉住（强词信号比 embedding
-    可靠，且 embedding 路径在 LangGraph 工作线程里实际走不通，兜底就是
-    关键词）；其余按「最近 3 条消息」与「工具 description」的 embedding
-    余弦相似度排序补满 8 个。embedding 不可用时降级纯关键词匹配。
+    - CORE（≤8，_CORE_TOOLS）：回复/表情/记忆/时间/心情/搜索，永不掩码
+    - INTENT：当前消息命中强意图（订阅/提醒/调研/语音…）整组挂载，防漏绑
+      （订阅要 subscribe+list 一起给，只给一个会空口答应）
+    - TOPIC：最近 3 条消息关键词命中钉住（上限 6，防关键词风暴）
+    - 补满：embedding 余弦排序（LangGraph 工作线程无事件循环时降级关键词）
     """
-    CORE = {"do_not_reply", "get_time", "recall_memory", "save_memory",
-            "set_reminder", "list_reminders", "manage_mood", "send_message",
-            "web_search", "search_knowledge", "ai_draw", "unified_tts", "ja_tts",
-            "send_feed", "read_feed", "delete_feed", "find_user_id"}  # 高频刚需永远保留，不参与掩码（空间=第三场景）
-    core_tools = [t for t in tools if t.name in CORE]
-    other_tools = [t for t in tools if t.name not in CORE]
+    core_tools = [t for t in tools if t.name in _CORE_SET]
+    other_tools = [t for t in tools if t.name not in _CORE_SET]
 
-    recent_text = ""
-    if session.memory:
-        recent_text = " ".join(e.text for e in session.memory.entries[-3:])
+    entries = session.memory.entries if session.memory else []
+    recent_text = " ".join(e.text for e in entries[-3:])
+    current_text = entries[-1].text if entries else ""
 
-    # 关键词钉住：消息里出现工具强触发词的直接保留（上限 6 防关键词风暴）
-    pinned = _pinned_by_keywords(other_tools, recent_text)[:6]
+    # INTENT 层：强意图整组挂载（不占 TOPIC 名额）
+    intent_names = set(_intent_mounted(current_text))
+    intent_tools = [t for t in other_tools if t.name in intent_names]
+    # TOPIC 层：关键词钉住（上限 6）
+    topic_tools = [t for t in _pinned_by_keywords(other_tools, recent_text)
+                   if t not in intent_tools][:6]
+    pinned = intent_tools + topic_tools
     fill_budget = max(0, 8 - len(pinned))
 
     def _fill(scored):
@@ -347,6 +414,11 @@ _TOPIC_KEYWORDS = {
     "send_emoji": ["表情", "emoji", "图"],
     "query_jargon": ["黑话", "梗", "什么意思", "缩写"],
     "manage_user_profile": ["记住", "我叫", "我喜欢", "我的"],
+    "set_reminder": ["提醒", "到点", "到时候叫"],
+    "list_reminders": ["提醒"],
+    "cancel_reminder_task": ["取消提醒", "别提醒", "不用提醒"],
+    "find_user_id": ["qq号", "谁的qq"],
+    "get_capabilities": ["你会什么", "你能干什么", "你会干啥", "有什么功能", "能做什么"],
     "vrchat_play_pose": ["动作", "跳舞", "挥手", "vrchat"],
     "unified_tts": ["语音", "说话", "念", "听", "声音", "唱"],
     "ja_tts": ["日语", "日文", "语音", "声音"],
