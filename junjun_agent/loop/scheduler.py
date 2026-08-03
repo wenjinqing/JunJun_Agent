@@ -177,6 +177,10 @@ def register_default_tasks() -> None:
         from junjun_express.identity import identity_tick
         await identity_tick()
 
+    async def scene_profile():
+        from junjun_memory.scene_profile import profile_tick
+        await profile_tick()
+
     from junjun_core.config import get_global_config
     raw = get_global_config().raw
     interval = int(raw.get("reminder", {}).get("check_interval_seconds", 60))
@@ -200,3 +204,4 @@ def register_default_tasks() -> None:
     scheduler.add(ScheduledTask("expression_reflect", expression_reflect, interval=5 * 60))
     scheduler.add(ScheduledTask("diary", diary, interval=30 * 60))
     scheduler.add(ScheduledTask("identity_distill", identity, interval=3600))
+    scheduler.add(ScheduledTask("scene_profile", scene_profile, interval=2 * 3600))

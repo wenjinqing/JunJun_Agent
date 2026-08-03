@@ -189,6 +189,23 @@ class SelfIdentity(BaseModel):
     updated_at = FloatField(default=time.time)
 
 
+class UserSceneProfile(BaseModel):
+    """跨场景用户档案（P6-4）：按 user_id 聚合的蒸馏事实（不落原文），
+    每条带来源场景标签——隐私生命线：群聊注入前必须过滤私聊来源的条目，
+    多群之间默认隔离（A 群的事不在 B 群说）。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    person_id = CharField(index=True)     # platform:user_id
+    platform = CharField(default="qq")
+    user_id = CharField(index=True)
+    content = CharField(default="")       # 蒸馏事实（一句话，非原文）
+    source_scene = CharField(default="group")   # group / private
+    source_chat_id = CharField(default="", index=True)  # 来源会话（多群隔离）
+    weight = FloatField(default=1.0)
+    created_at = FloatField(default=time.time)
+    updated_at = FloatField(default=time.time)
+
+
 class AsyncJob(BaseModel):
     """异步任务：接单->后台跑->主动汇报的持久化队列（重启可恢复，区别见 tasks.py 注释）。"""
     id = AutoField()
@@ -227,7 +244,8 @@ class Subscription(BaseModel):
 
 
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
-              OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity]
+              OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity,
+              UserSceneProfile]
 
 
 def init_database() -> None:

@@ -629,6 +629,15 @@ def _build_relation_block(session: ChatSession, meta: InboundMeta) -> str:
             parts.append(block)
     except Exception:
         pass
+    # 跨场景用户档案（P6-4）：知道，但分得清场合——过滤逻辑在 build_scene_block 强制
+    try:
+        from junjun_memory.scene_profile import build_scene_block
+        sb = build_scene_block(session.platform, meta.user_id,
+                               session.chat_id, session.is_group)
+        if sb:
+            parts.append(sb)
+    except Exception:
+        pass
     return "\n".join(parts)
 
 
