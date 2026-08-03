@@ -136,6 +136,13 @@ self_mood_hours = 12   # 全局自我心境的有效时长（小时），过期�
 enable = true
 time = "23:30"           # 每天写日记的时间（当天没写才会补写）
 
+# ---------- Identity Core（每周从日记蒸馏自我认知，人设 drift 对冲） ----------
+[identity]
+enable = true
+interval_days = 7        # 蒸馏间隔（天）
+min_diaries = 3          # 攒够几篇新日记才蒸馏
+max_entries = 8          # 注入 persona 的条目上限
+
 # ---------- TTS 情绪语气（语音跟随君君的真实心情） ----------
 [tts]
 enable_emotion = true    # 语音自动带当前心情语气（豆包 emotion 参数，实测 vv 音色支持）

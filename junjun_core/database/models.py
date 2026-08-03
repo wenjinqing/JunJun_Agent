@@ -175,6 +175,20 @@ class DiaryEntry(BaseModel):
     created_at = FloatField(default=time.time)
 
 
+class SelfIdentity(BaseModel):
+    """Identity Core（P6-3）：从日记蒸馏出的自我认知条目（我喜欢/我看不惯/
+    我们的梗/最近在乎），人设漂移对冲的第二锚点。旧条目折叠归档不删。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    category = CharField(default="")      # 我喜欢 / 我看不惯 / 我们的梗 / 最近在乎
+    content = CharField(default="")
+    weight = FloatField(default=1.0)      # 未再确认则逐轮衰减
+    seen_count = IntegerField(default=1)  # 反复出现次数（防一次 emo 固化成人设）
+    archived = BooleanField(default=False)
+    created_at = FloatField(default=time.time)
+    updated_at = FloatField(default=time.time)
+
+
 class AsyncJob(BaseModel):
     """异步任务：接单->后台跑->主动汇报的持久化队列（重启可恢复，区别见 tasks.py 注释）。"""
     id = AutoField()
@@ -213,7 +227,7 @@ class Subscription(BaseModel):
 
 
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
-              OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob]
+              OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity]
 
 
 def init_database() -> None:
