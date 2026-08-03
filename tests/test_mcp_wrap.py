@@ -61,3 +61,65 @@ class TestWrapErrorDegradation:
 
         tool = _wrap(_ok)
         assert tool.name == "mcp_tavily_search"
+
+
+class TestDeterministicNoRetry:
+    """确定性 MCP 失败（-32602 参数错等）不重试——重试只是白等还刷服务端报错
+    （2026-08-03 实战：BV 号格式传错被重试 3 次）。"""
+
+    @pytest.mark.asyncio
+    async def test_invalid_params_not_retried(self):
+        calls = []
+
+        async def _bad_args(**kw):
+            calls.append(1)
+            raise Exception("McpError: MCP error -32602: 无效的视频ID格式，"
+                            "请提供BV号（如：BV1xx411c7mD）")
+
+        tool = _wrap(_bad_args)
+        content, artifact = await tool.coroutine()
+        assert len(calls) == 1, "参数错不该重试"
+        assert artifact is None
+        assert "工具拒绝了这次调用" in content
+        assert "BV" in content  # 服务端的正确用法提示原样喂回（模型自我纠正）
+
+    @pytest.mark.asyncio
+    async def test_method_not_found_not_retried(self):
+        calls = []
+
+        async def _no_method(**kw):
+            calls.append(1)
+            raise Exception("McpError: MCP error -32601: Method not found")
+
+        tool = _wrap(_no_method)
+        content, _ = await tool.coroutine()
+        assert len(calls) == 1
+        assert "工具拒绝了这次调用" in content
+
+    @pytest.mark.asyncio
+    async def test_transient_still_retried(self):
+        """瞬态错误（连接重置）保持原重试语义。"""
+        calls = []
+
+        async def _flaky(**kw):
+            calls.append(1)
+            raise ConnectionError("read ECONNRESET")
+
+        tool = _wrap(_flaky)
+        content, _ = await tool.coroutine()
+        assert len(calls) == 3
+        assert "失败" in content
+
+    @pytest.mark.asyncio
+    async def test_internal_error_still_retried(self):
+        """-32603 服务端内部错误不在确定性名单（可能瞬态），照常重试。"""
+        calls = []
+
+        async def _internal(**kw):
+            calls.append(1)
+            raise Exception("McpError: MCP error -32603: Internal error")
+
+        tool = _wrap(_internal)
+        await tool.coroutine()
+        assert len(calls) == 3
+

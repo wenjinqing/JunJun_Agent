@@ -112,6 +112,16 @@ class EmbeddingClient:
                 self._query_cache.popitem(last=False)
         return vec
 
+    def cached(self, text: str) -> Optional[List[float]]:
+        """同步读缓存（不触发网络）。供不能碰事件循环的同步路径零阻塞使用；
+        缓存由 async 预热（embed_one/embed）填充，未命中返回 None（上层降级）。"""
+        if not text:
+            return None
+        vec = self._query_cache.get(text)
+        if vec is not None:
+            self._query_cache.move_to_end(text)
+        return vec
+
 
 _client: Optional[EmbeddingClient] = None
 
