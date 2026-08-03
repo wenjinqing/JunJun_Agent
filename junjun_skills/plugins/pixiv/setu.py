@@ -23,8 +23,8 @@ from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 
 from .client import (_cookie, _fetch_json, _fetch_raw, _min_bookmarks,
-                     BASE_URL, has_r18_tag, images_to_b64, is_safe_item,
-                     pximg_proxy, quality_tiers, search_artworks)
+                     BASE_URL, has_r18_tag, has_ugly_tag, images_to_b64,
+                     passes_policy, pximg_proxy, quality_tiers, search_artworks)
 
 logger = get_logger("plugin.pixiv.setu")
 
@@ -59,8 +59,8 @@ def _parse_args(args: str) -> dict:
 
 
 def _ok_item(item: dict, exclude_ai: bool, square: bool, group: bool) -> bool:
-    """过滤：R18（xRestrict+tag 黑名单+群聊 sl）/ AI（可选）/ 方图（可选）。"""
-    if not is_safe_item(item, group):
+    """过滤：内容政策（群全年龄/私 R18 可 G 不可）+ 低质 tag + AI（可选）+ 方图。"""
+    if not passes_policy(item, group) or has_ugly_tag(item):
         return False
     if exclude_ai:
         try:
@@ -85,7 +85,8 @@ async def _pick_from_tags(tags: list, ratio: str, square: bool,
     kw = " ".join(tags)
     for t in quality_tiers():
         data = await search_artworks(f"{kw} {t}".strip(),
-                                     random.randint(1, 5), ratio)
+                                     random.randint(1, 5), ratio,
+                                     r18_ok=not group)
         picks = [d for d in data if _ok_item(d, exclude_ai, square, group)]
         if picks:
             random.shuffle(picks)
@@ -143,7 +144,7 @@ async def _illust_image_urls(illust_id: str, group: bool) -> tuple:
                              BASE_URL + f"/artworks/{illust_id}")
     if body.get("error"):
         return "", []
-    if not is_safe_item(body, group):
+    if not passes_policy(body, group) or has_ugly_tag(body):
         return "", []
     try:
         if int(body.get("bookmarkCount") or 0) < _min_bookmarks():

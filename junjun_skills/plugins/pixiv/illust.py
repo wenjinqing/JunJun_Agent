@@ -29,8 +29,9 @@ from junjun_core.observability import get_logger
 
 from . import novel as novel_mod
 from .client import (_cookie, _fetch_json, _fetch_raw, BASE_URL,
-                     has_r18_tag, images_to_b64, is_safe_item, pximg_proxy,
-                     quality_tiers, search_artworks)
+                     attach_bookmarks, has_r18_tag, has_ugly_tag,
+                     images_to_b64, passes_policy, pximg_proxy,
+                     quality_tiers, search_artworks, xrestrict)
 from .setu import _ok_item, _ranking_sexual
 
 logger = get_logger("plugin.pixiv.illust")
@@ -69,7 +70,8 @@ async def _search_illusts(keyword: str, group: bool = True) -> list:
     没结果逐级放宽到裸关键词——推荐列表质量接近人気順。
     """
     for tier in quality_tiers():
-        data = await search_artworks(f"{keyword.strip()} {tier}".strip(), 1)
+        data = await search_artworks(f"{keyword.strip()} {tier}".strip(), 1,
+                                     r18_ok=not group)
         items = []
         for d in data:
             if not _ok_item(d, exclude_ai=False, square=False, group=group):
@@ -77,10 +79,16 @@ async def _search_illusts(keyword: str, group: bool = True) -> list:
             items.append({"kind": "illust", "id": str(d.get("id") or ""),
                           "title": d.get("title") or "(无标题)",
                           "author": d.get("userName") or "",
-                          "pages": d.get("pageCount") or 1})
+                          "pages": d.get("pageCount") or 1,
+                          "xRestrict": d.get("xRestrict") or 0,
+                          "tags": d.get("tags") or []})
             if len(items) >= _LIST_MAX:
                 break
         if items:
+            # 补收藏数按降序排（推荐提质：最好的放前面），R18 打标
+            items = await attach_bookmarks(items)
+            for it in items:
+                it["r18"] = xrestrict(it) >= 1
             return items
     return []
 
@@ -209,8 +217,9 @@ async def _send_illust(ctx, illust_id: str) -> str:
         return f"获取作品失败：{detail['error']}"
     title = detail.get("title") or "(无标题)"
     author = detail.get("userName") or ""
-    if not is_safe_item(detail, bool(ctx.session.is_group)):
-        return "这个作品是 R18/擦边内容，发不了哦。"
+    if not passes_policy(detail, bool(ctx.session.is_group)):
+        return ("这个作品是 R18/擦边内容，群里发不了哦。"
+                if ctx.session.is_group else "这个作品是 R-18G/グロ，发不了。")
     pages = detail.get("pageCount") or 1
     urls = await _illust_page_urls(illust_id, pages)
     if not urls:
@@ -236,7 +245,11 @@ def _format_list(title: str, items: list, foot: str) -> str:
         extra.append(kind_name.get(it["kind"], it["kind"]))
         if it.get("pages") and it["pages"] != 1:
             extra.append(f"{it['pages']}页" if isinstance(it["pages"], int) else str(it["pages"]))
-        lines.append(f"{i}. {it['title']} [{'/'.join(extra)}]")
+        if it.get("bookmarks"):
+            bm = it["bookmarks"]
+            extra.append(f"{bm / 10000:.1f}万收藏" if bm >= 10000 else f"{bm}收藏")
+        r18 = "【R18】" if it.get("r18") else ""
+        lines.append(f"{i}. {r18}{it['title']} [{'/'.join(extra)}]")
         if it.get("author"):
             lines.append(f"   作者: {it['author']}")
     lines.append(foot)

@@ -161,6 +161,24 @@ _R18_TAGS = frozenset({
     "裸体", "ヌード", "全裸", "セックス", "性交", "中出し", "陵辱",
 })
 
+# R-18G / グロ：私聊放开 R18 后也写死堵（2026-08-03 用户政策：私聊可 R18，G 不行）
+_GORE_TAGS = frozenset({
+    "r-18g", "r18g", "グロ", "リョナ", "guro", "gore", "スカトロ", "四肢欠損",
+})
+
+# 低质/搜索污染 tag 黑名单（2026-08-03 联网调研：日英社区公认 mute 清单）：
+# 涂鸦练习系：落書き/らくがき/練習/ラフ/模写/トレス/途中
+# 截图系（非手绘，观感两极）：3DCG/MMD/コイカツ
+# AI 系（aiType 之外的文本标注）：AIイラスト/NovelAI/StableDiffusion
+_UGLY_TAGS = frozenset({
+    "落書き", "らくがき", "落描き", "練習", "ラフ", "ラフ画", "模写",
+    "トレス", "トレース", "途中", "wip", "3dcg", "mmd", "コイカツ", "恋活",
+    "aiイラスト", "ai生成", "noiai", "novelai", "stablediffusion",
+})
+
+# 查询级减号排除（pixiv 官方支持 -タグ）：服务器端就缩小污染池
+_QUERY_EXCLUDES = "-落書き -らくがき -練習 -ラフ -3DCG -MMD -AIイラスト"
+
 
 def item_tags(item: dict) -> list:
     """统一提取 tag 字符串列表：搜索条目是 list[str]，详情是 {"tags": [{"tag": ...}]}。"""
@@ -174,6 +192,14 @@ def has_r18_tag(item: dict) -> bool:
     return any(t.strip().lower() in _R18_TAGS for t in item_tags(item))
 
 
+def has_gore_tag(item: dict) -> bool:
+    return any(t.strip().lower() in _GORE_TAGS for t in item_tags(item))
+
+
+def has_ugly_tag(item: dict) -> bool:
+    return any(t.strip().lower() in _UGLY_TAGS for t in item_tags(item))
+
+
 def sl_value(item: dict) -> int:
     """搜索条目的 sl（露骨分级）：0/2 正常，4 擦边，6 露骨。拿不到按 0。"""
     try:
@@ -182,21 +208,25 @@ def sl_value(item: dict) -> int:
         return 0
 
 
-def is_safe_item(item: dict, group: bool) -> bool:
-    """R18 综合过滤（元数据层，0 额外请求）：
-    - 通用：xRestrict==0 + R18 tag 黑名单
-    - 群聊加码：sl<=2（sl 4/6 的擦边/露骨会带着 xRestrict=0 漏过 mode=safe）
-    """
+def xrestrict(item: dict) -> int:
     try:
-        if int(item.get("xRestrict") or 0) >= 1:
-            return False
+        return int(item.get("xRestrict") or 0)
     except (TypeError, ValueError):
-        pass
-    if has_r18_tag(item):
-        return False
-    if group and sl_value(item) > 2:
-        return False
-    return True
+        return 0
+
+
+def passes_policy(item: dict, group: bool) -> bool:
+    """内容政策（元数据层，0 额外请求）。
+
+    2026-08-03 用户定：群聊全年龄严格堵死；私聊放开 R18 但堵 R-18G/グロ。
+    - 群聊：xRestrict==0 + R18 tag 黑名单 + sl<=2（sl 4/6 擦边会带
+      xRestrict=0 漏过 mode=safe）
+    - 私聊：xRestrict<=1 + グロ系 tag 黑名单
+    """
+    if not group:
+        return xrestrict(item) <= 1 and not has_gore_tag(item)
+    return (xrestrict(item) == 0 and not has_r18_tag(item)
+            and sl_value(item) <= 2)
 
 
 def _min_bookmarks() -> int:
@@ -222,19 +252,49 @@ def quality_tiers() -> list:
     return list(dict.fromkeys(tiers))
 
 
-async def search_artworks(query: str, page: int, ratio: str = "") -> list:
-    """/ajax/search/artworks 封装（date_d + safe + s_tag），返回原始条目列表。
+async def search_artworks(query: str, page: int, ratio: str = "",
+                          r18_ok: bool = False) -> list:
+    """/ajax/search/artworks 封装（date_d + s_tag），返回原始条目列表。
 
-    注意不要用 popular_d：Premium 限定，非会员静默降级 date_d（2026-08-03 实锤）。
+    - 不要用 popular_d：Premium 限定，非会员静默降级 date_d（2026-08-03 实锤）
+    - r18_ok=True（私聊）走 mode=all 让 R18 进结果；群聊 mode=safe
+    - 查询级减号排除低质 tag（pixiv 官方 -タグ 语法），服务器端缩污染池
     """
-    enc = urllib.parse.quote(query)
+    q = f"{query} {_QUERY_EXCLUDES}"
+    enc = urllib.parse.quote(q)
+    mode = "all" if r18_ok else "safe"
     url = (BASE_URL + f"/ajax/search/artworks/{enc}?word={enc}"
-           f"&order=date_d&mode=safe&p={page}&s_mode=s_tag"
+           f"&order=date_d&mode={mode}&p={page}&s_mode=s_tag"
            + (f"&ratio={ratio}" if ratio else ""))
     body = await _fetch_json(url, BASE_URL + "/tags/")
     if body.get("error"):
         return []
     return (body.get("illustManga") or {}).get("data") or []
+
+
+async def attach_bookmarks(items: list, limit: int = 10) -> list:
+    """并发拉详情补 bookmarkCount/xRestrict/tags，按收藏降序（推荐提质）。
+
+    搜索结果本身不带收藏数，推荐列表「把最好的放前面」必须补详情——
+    并发 limit 个，失败的按 0 收兜底（不阻塞列表）。
+    """
+    async def _one(it):
+        det = await _fetch_json(BASE_URL + f"/ajax/illust/{it['id']}",
+                                BASE_URL + f"/artworks/{it['id']}")
+        if not det.get("error"):
+            try:
+                it["bookmarks"] = int(det.get("bookmarkCount") or 0)
+            except (TypeError, ValueError):
+                it["bookmarks"] = 0
+            it["xRestrict"] = det.get("xRestrict", it.get("xRestrict", 0))
+            if det.get("tags"):
+                it["tags"] = det["tags"]
+        else:
+            it.setdefault("bookmarks", 0)
+        return it
+
+    await asyncio.gather(*(_one(it) for it in items[:limit]))
+    return sorted(items, key=lambda x: -(x.get("bookmarks") or 0))
 
 
 # ------------------------------------------------------------------ 图片代下
