@@ -15,6 +15,7 @@ class TestActionSkillRegistration:
             "set_reminder", "list_reminders", "cancel_reminder_task", "manage_mood",
             "send_emoji", "search_knowledge", "import_knowledge",
             "send_message", "send_poke", "get_weather", "query_chat_history",
+            "peek_group_chat",
         }
         assert expected <= names
 
@@ -161,6 +162,91 @@ class TestQueryChatHistory:
             r = query_chat_history.invoke({"keyword": "店名", "days": 0})
             assert "没有找到" in r and "秘密" not in r
             _SEARCH_LOG.clear()
+
+
+class TestPeekGroupChat:
+    """跨群围观（2026-08-03 trace：私聊问「其他群在聊什么」被答「看不到没打通」）。
+    私聊限定 + 只读群聊（私聊记录永远拿不到）+ 限流。"""
+
+    def _db(self, tmp_path):
+        import peewee
+        from junjun_core.database import models as m
+        db = peewee.SqliteDatabase(str(tmp_path / "t.db"))
+        return db, m
+
+    def _seed(self, m):
+        import time as _t
+        now = _t.time()
+        m.Messages.create(chat_id="qq:100:group", group_id="100", user_nickname="甲",
+                          time=now - 30, message_id="a1",
+                          processed_plain_text="A群在聊新番", bot_id="10000001")
+        m.Messages.create(chat_id="qq:100:group", group_id="100", user_nickname="",
+                          is_bot=True, time=now - 20, message_id="a2",
+                          processed_plain_text="我也在看", bot_id="10000001")
+        m.Messages.create(chat_id="qq:200:group", group_id="200", user_nickname="乙",
+                          time=now - 10, message_id="b1",
+                          processed_plain_text="B群约饭", bot_id="10000001")
+        m.Messages.create(chat_id="qq:111:private", group_id="", user_nickname="丙",
+                          time=now, message_id="p1",
+                          processed_plain_text="私聊秘密暗号", bot_id="10000001")
+
+    def _invoke(self, group=""):
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        current_chat_id.set("qq:111:private")
+        from junjun_skills.builtin.action_skills import peek_group_chat, _PEEK_LOG
+        _PEEK_LOG.clear()
+        return peek_group_chat.invoke({"group": group})
+
+    def test_overview_lists_groups_no_private(self, tmp_path):
+        db, m = self._db(tmp_path)
+        with db.bind_ctx([m.Messages]):
+            db.create_tables([m.Messages])
+            self._seed(m)
+            out = self._invoke("")
+            assert "群 100" in out and "群 200" in out
+            assert "A群在聊新番" in out and "B群约饭" in out
+            assert "我: 我也在看" in out  # bot 群回复可见（公开内容）
+            assert "私聊秘密暗号" not in out  # 隐私铁律：私聊永远拿不到
+
+    def test_specific_group(self, tmp_path):
+        db, m = self._db(tmp_path)
+        with db.bind_ctx([m.Messages]):
+            db.create_tables([m.Messages])
+            self._seed(m)
+            out = self._invoke("100")
+            assert "A群在聊新番" in out and "B群约饭" not in out
+            assert "私聊秘密暗号" not in out
+
+    def test_unknown_group_guidance(self, tmp_path):
+        db, m = self._db(tmp_path)
+        with db.bind_ctx([m.Messages]):
+            db.create_tables([m.Messages])
+            self._seed(m)
+            out = self._invoke("999")
+            assert "没找到" in out and "群号" in out  # 引导先概览拿群号
+
+    def test_rate_limit(self, tmp_path):
+        db, m = self._db(tmp_path)
+        with db.bind_ctx([m.Messages]):
+            db.create_tables([m.Messages])
+            self._seed(m)
+            from junjun_skills.builtin.memory_skills import current_chat_id
+            current_chat_id.set("qq:111:private")
+            from junjun_skills.builtin.action_skills import peek_group_chat, _PEEK_LOG
+            _PEEK_LOG.clear()
+            for _ in range(3):
+                peek_group_chat.invoke({"group": ""})
+            assert "歇会儿" in peek_group_chat.invoke({"group": ""})
+            _PEEK_LOG.clear()
+
+    def test_private_only_gate(self):
+        """群聊场景不绑这个工具（A 群的事不在 B 群说）。"""
+        from types import SimpleNamespace
+        registry.load_builtin()
+        gate = registry._availability.get("peek_group_chat")
+        assert gate is not None
+        assert gate(SimpleNamespace(is_group=False)) is True
+        assert gate(SimpleNamespace(is_group=True)) is False
 
 
 class TestNoticePoke:

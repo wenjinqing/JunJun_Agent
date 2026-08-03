@@ -467,6 +467,7 @@ _TOPIC_KEYWORDS = {
     "decode_qrcode": ["二维码", "扫码"],
     "today_in_history": ["历史上的今天", "今天是什么日子"],
     "subscribe_updates": ["订阅", "盯", "关注", "更新了告诉", "出新", "up主", "p站", "pixiv"],
+    "peek_group_chat": ["别的群", "其他群", "其它群", "那个群", "群里在聊", "群里最近", "各群", "群里的消息"],
     "list_subscriptions": ["订阅", "盯"],
     "unsubscribe": ["取消订阅", "别盯", "退订", "不用盯"],
     "deep_research": ["调研", "深研", "深度研究", "研究报告", "整理一份", "报告", "系统查", "查资料"],
@@ -500,7 +501,7 @@ def load_builtin() -> None:
     from junjun_skills.builtin.express_skills import send_emoji
     from junjun_skills.builtin.knowledge_skills import search_knowledge, import_knowledge
     from junjun_skills.builtin.action_skills import (
-        send_message, send_poke, get_weather, query_chat_history,
+        send_message, send_poke, get_weather, query_chat_history, peek_group_chat,
     )
     from junjun_skills.builtin.capability_skills import get_capabilities, find_user_id
 
@@ -523,6 +524,8 @@ def load_builtin() -> None:
     register(send_poke)
     register(get_weather)
     register(query_chat_history)
+    # 跨群围观：私聊限定（A 群的事不在 B 群说，群聊场景直接不绑这个工具）
+    register(peek_group_chat, available_for=lambda s: not s.is_group)
     register(get_capabilities)
     register(find_user_id)
     logger.info(f"内置 skill 已加载: {[t.name for t in get_tools()]}")
