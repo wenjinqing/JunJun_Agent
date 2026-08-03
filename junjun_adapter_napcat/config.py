@@ -31,6 +31,11 @@ class ChatConfig:
     private_list: list = None
     ban_user_id: list = None
     ban_qq_bot: bool = False
+    # 戳一戳防刷屏（notice_handler 三层抑制）
+    poke_min_interval: int = 60        # 同一人同一会话最小响应间隔（秒）
+    poke_chat_min_interval: int = 20   # 会话地板：全会话最小放行间隔（秒）
+    poke_escalate_count: int = 5       # 连戳被抑制这么多次后放一条吐槽
+    poke_escalate_cooldown: int = 600  # 吐槽之后的冷却（秒）
 
 
 @dataclass
@@ -71,6 +76,10 @@ class AdapterConfig:
                 private_list=list(ch.get("private_list", [])),
                 ban_user_id=list(ch.get("ban_user_id", [])),
                 ban_qq_bot=ch.get("ban_qq_bot", False),
+                poke_min_interval=int(ch.get("poke_min_interval", 60)),
+                poke_chat_min_interval=int(ch.get("poke_chat_min_interval", 20)),
+                poke_escalate_count=int(ch.get("poke_escalate_count", 5)),
+                poke_escalate_cooldown=int(ch.get("poke_escalate_cooldown", 600)),
             ),
         )
 
