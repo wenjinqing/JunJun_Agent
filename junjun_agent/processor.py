@@ -425,6 +425,25 @@ def _warn_recall_throttled(e: BaseException) -> None:
                        f"{type(e).__name__}: {e}")
 
 
+# 「你忽然想起」注入限流（P6-1）：每会话每小时上限，防每轮都注入回忆块
+# 稀释人设 + 省 embedding 调用。命中注入才占额度（检索失败/空结果不占）。
+_RECALL_LOG: dict = {}  # chat_id -> deque(注入时间戳，1h 滑窗)
+
+
+def _recall_capped(chat_id: str, max_per_hour: int) -> bool:
+    """本小时注入额度是否已用完（只读检查，同时清过期）。"""
+    from collections import deque
+    now = time.time()
+    dq = _RECALL_LOG.setdefault(chat_id, deque())
+    while dq and now - dq[0] > 3600:
+        dq.popleft()
+    return len(dq) >= max_per_hour
+
+
+def _recall_consume(chat_id: str) -> None:
+    _RECALL_LOG[chat_id].append(time.time())
+
+
 async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> tuple:
     """被动记忆注入 + 感知在途清单。
 
@@ -534,25 +553,37 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> tuple:
             parts.append(sb)
     except Exception:
         pass
+    # 语义召回（P6-1）：faiss 向量检索（top-3 + 0.3 阈值）注入「你忽然想起」块，
+    # 每会话每小时限流（默认 5 次，[memory] recall_max_per_hour），超限整段跳过
     try:
-        import asyncio as _aio
-        import re as _re
-        from junjun_memory.long_term import get_long_term_memory
-        # 检索查询清洗：剥掉 [回复...]/[图片] 占位与 @昵称 前缀，避免噪声稀释相似度
-        query = _re.sub(r"\[[^\]]{0,220}\]", " ", meta.text or "")
-        query = _re.sub(r"@\S+\s*", " ", query).strip() or (meta.text or "")
-        items = await _aio.wait_for(
-            # chat_id 多值过滤：本会话记忆 + 知识库条目（"knowledge"）
-            # + 自我日记（"self:diary"，第一人称自我叙事）。
-            # 只传会话 id 时知识库永远召不回——导入的知识在日常聊天里是死功能
-            get_long_term_memory().search(query, top_k=3,
-                                          chat_id=(session.chat_id, "knowledge", "self:diary")),
-            timeout=1.5,
-        )
-        if items:
-            parts.append("相关记忆：\n" + "\n".join(f"- {it.text}" for it in items))
-    except Exception as e:
-        _warn_recall_throttled(e)
+        from junjun_core.config import get_global_config as _ggc
+        _max_recall = int(_ggc().raw.get("memory", {}).get("recall_max_per_hour", 5))
+    except Exception:
+        _max_recall = 5
+    if _max_recall <= 0 or not _recall_capped(session.chat_id, _max_recall):
+        try:
+            import asyncio as _aio
+            import re as _re
+            from junjun_memory.long_term import get_long_term_memory
+            # 检索查询清洗：剥掉 [回复...]/[图片] 占位与 @昵称 前缀，避免噪声稀释相似度
+            query = _re.sub(r"\[[^\]]{0,220}\]", " ", meta.text or "")
+            query = _re.sub(r"@\S+\s*", " ", query).strip() or (meta.text or "")
+            items = await _aio.wait_for(
+                # chat_id 多值过滤：本会话记忆 + 知识库条目（"knowledge"）
+                # + 自我日记（"self:diary"，第一人称自我叙事）。
+                # 只传会话 id 时知识库永远召不回——导入的知识在日常聊天里是死功能
+                get_long_term_memory().search(query, top_k=3,
+                                              chat_id=(session.chat_id, "knowledge", "self:diary")),
+                timeout=1.5,
+            )
+            if items:
+                _recall_consume(session.chat_id)
+                parts.append(
+                    "你忽然想起这些相关的事（可能不完全相关——和当前话题搭就顺着自然提一句，"
+                    "不搭就当没想起，别逐条转述）：\n"
+                    + "\n".join(f"- {it.text}" for it in items))
+        except Exception as e:
+            _warn_recall_throttled(e)
     try:
         from junjun_express.jargon import build_jargon_block
         jb = build_jargon_block(meta.text, session.chat_id)
