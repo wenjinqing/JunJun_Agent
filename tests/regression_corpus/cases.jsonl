@@ -1,0 +1,4 @@
+{"case": "P4 前的事故：图在途却说看不到", "trace": {"input": "[图片] 你看看这个", "output": "我看不到图片诶"}, "expect": ["percept_denial"]}
+{"case": "参数校验连错烧穿迭代", "trace": {"input": "[TOOL_ERROR kind=参数] a [TOOL_ERROR kind=参数] b [TOOL_ERROR kind=参数] c", "output": ""}, "expect": ["tool_error_storm"]}
+{"case": "口头答应盯梢没调工具", "trace": {"input": "帮我盯着p站16689973", "output": "好呀我帮你盯着"}, "expect": ["intent_missed:subscribe_updates"]}
+{"case": "正常聊天不误报", "trace": {"input": "今天天气真好", "output": "是呀适合出去走走"}, "expect": []}
