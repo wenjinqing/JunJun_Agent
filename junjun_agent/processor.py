@@ -663,6 +663,14 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
         user_id=meta.user_id or "", message_id=meta.message_id, at_bot=meta.at_bot,
     )
     _store_inbound(session, meta)
+    # 意向系统事件钩子（P7）：emo 规则预筛 -> 关心意向（0 token，
+    # [intention] enable=false 时零开销直接返回）
+    try:
+        from junjun_agent.loop.intention import spawn_care_if_needed
+        spawn_care_if_needed(session.chat_id, meta.user_id or "",
+                             meta.nickname or "", meta.text or "")
+    except Exception:
+        pass
 
     from junjun_agent.funnel.session_queue import session_queues
     session_queues.dispatch(session, meta, _handle)
