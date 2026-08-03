@@ -116,6 +116,18 @@ def get_capabilities(query_type: str = "all") -> str:
     if not parts:
         return "当前没有启用的功能模块。"
 
+    # 工具健康度（P5-4）：被问「你有什么功能」时如实上报故障中的功能
+    try:
+        from junjun_skills.health import degraded_tools
+        degraded = degraded_tools()
+        if degraded:
+            parts.append("## 故障中（最近持续失败，在修）")
+            for d in degraded:
+                parts.append(f"- {d['tool']}: {d['kind']}类故障，"
+                             f"连续失败 {d['fails']} 次")
+    except Exception:
+        pass
+
     return "\n".join(parts)
 
 

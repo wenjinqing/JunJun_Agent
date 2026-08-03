@@ -99,7 +99,7 @@ def build_system_prompt(
         f"<scene>\n{scene}\n当前时间：{now}\n</scene>",
     ]
 
-    # 动态块（情绪/记忆/关系）——并入 role 层，不单独成块（减少 XML 层级）
+    # 动态块（情绪/记忆/关系/工具健康）——并入 role 层，不单独成块（减少 XML 层级）
     dynamic = []
     if mood_block:
         dynamic.append(mood_block)
@@ -107,6 +107,14 @@ def build_system_prompt(
         dynamic.append(memory_block)
     if relation_block:
         dynamic.append(relation_block)
+    # 工具健康度（P5-4）：降级工具清单，让 Agent 有「我这个功能在修」的持续认知
+    try:
+        from junjun_skills.health import health_block
+        hb = health_block()
+        if hb:
+            dynamic.append(hb)
+    except Exception:
+        pass
     if dynamic:
         parts.append(f"<state>\n{' '.join(dynamic)}\n</state>")
 

@@ -151,25 +151,34 @@ def _tool_error_text(tool_name: str, e: BaseException) -> str:
 
 
 def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
-    """统一错误包装（最外层）：工具逃逸的异常 -> 结构化错误文本，不再抛给框架。"""
+    """统一错误包装（最外层）：工具逃逸的异常 -> 结构化错误文本，不再抛给框架。
+    同时上报工具健康度（P5-4）：异常记失败、正常返回记成功（自动恢复）。"""
     name = skill.name
     if getattr(skill, "coroutine", None) is not None:
         original = skill.coroutine
 
         async def wrapped(*args, _orig=original, **kwargs):
+            from junjun_skills import health
             try:
-                return await _orig(*args, **kwargs)
+                result = await _orig(*args, **kwargs)
             except Exception as e:
+                health.record_fail(name, _classify_error(e), str(e))
                 return _tool_error_text(name, e)
+            health.record_ok(name)
+            return result
         skill.coroutine = wrapped
     elif getattr(skill, "func", None) is not None:
         original_sync = skill.func
 
         def wrapped_sync(*args, _orig=original_sync, **kwargs):
+            from junjun_skills import health
             try:
-                return _orig(*args, **kwargs)
+                result = _orig(*args, **kwargs)
             except Exception as e:
+                health.record_fail(name, _classify_error(e), str(e))
                 return _tool_error_text(name, e)
+            health.record_ok(name)
+            return result
         skill.func = wrapped_sync
     return skill
 
