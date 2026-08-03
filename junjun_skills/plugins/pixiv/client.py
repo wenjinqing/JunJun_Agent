@@ -5,11 +5,16 @@
 - _fetch_raw ：顶层 JSON 端点（/ranking.php?format=json 无 body 包装）
 - 反爬：Cloudflare TLS 指纹检测 -> curl_cffi Chrome 指纹伪装；httpx 兜底
 - 403/429/5xx 重试 3 次；4xx 其他确定性错误不重试
+- fetch_image_b64：图片本侧代下转 base64://——NapCat 所在网络拉不到
+  图床（i.pixiv.re/i.pximg.net 均被墙，2026-08-03 实锤 Connect Timeout），
+  发图必须把字节交给 NapCat 而不是 URL
 
 配置：插件目录 config.toml（[network] proxy / [features] api_timeout）+
 PIXIV_COOKIE env（PHPSESSID）。
 """
 
+import asyncio
+import base64
 import os
 import re
 import tomllib
@@ -145,3 +150,38 @@ def pximg_proxy(url: str) -> str:
     """i.pximg.net 需要 Referer 才能下载，NapCat 拉图不带 Referer——
     改走公共代理 i.pixiv.re（lolicon 同款技巧）。"""
     return (url or "").replace("i.pximg.net", "i.pixiv.re")
+
+
+# ------------------------------------------------------------------ 图片代下
+
+async def fetch_image_b64(url: str) -> str:
+    """下载图片 -> "base64://..." 串；失败返回 ""。
+
+    2026-08-03 实锤：NapCat 直连图床 Connect Timeout（被墙+无代理），
+    发图必须本侧（有代理）下载后把字节交给 NapCat，而不是给 URL。
+    """
+    if not url:
+        return ""
+    proxy = _proxy() or None
+    headers = {"User-Agent": _UA, "Referer": BASE_URL + "/"}
+    try:
+        try:
+            from curl_cffi.requests import AsyncSession
+            async with AsyncSession(impersonate="chrome", proxy=proxy) as s:
+                resp = await s.get(url, headers=headers, timeout=_api_timeout())
+        except ImportError:
+            async with httpx.AsyncClient(timeout=_api_timeout(), proxy=proxy) as client:
+                resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            logger.warning(f"图片下载失败 HTTP {resp.status_code}: {url}")
+            return ""
+        return "base64://" + base64.b64encode(resp.content).decode()
+    except Exception as e:
+        logger.warning(f"图片下载异常: {type(e).__name__}: {e} ({url})")
+        return ""
+
+
+async def images_to_b64(urls: list) -> list:
+    """并发代下 -> base64:// 列表（保序，失败的跳过）。"""
+    results = await asyncio.gather(*(fetch_image_b64(u) for u in urls))
+    return [r for r in results if r]

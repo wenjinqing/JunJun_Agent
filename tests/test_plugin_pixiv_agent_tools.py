@@ -137,11 +137,18 @@ class TestSendIllust:
     @pytest.mark.asyncio
     async def test_private_sends_images(self, _fake_gateway, monkeypatch):
         self._stubs(monkeypatch)
+
+        async def _b64(urls):
+            return [f"base64://fake-{u}" for u in urls]  # 本侧代下
+
+        monkeypatch.setattr(at, "images_to_b64", _b64)
         out = await at.pixiv_send_illust.ainvoke({"illust_id": "111"})
         assert "已把" in out and "某作品" in out
         rs = _fake_gateway[0]
         assert rs.target_user_id == "12345" and rs.target_group_id is None
         assert [s.type for s in rs.segments].count("image") == 2
+        assert all(s.data.startswith("base64://")
+                   for s in rs.segments if s.type == "image")
         assert any("某画师" in (s.data or "") for s in rs.segments if s.type == "text")
 
     @pytest.mark.asyncio
