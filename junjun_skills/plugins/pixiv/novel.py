@@ -174,6 +174,51 @@ async def _search_novels(keyword: str, page: int = 1) -> dict:
     return await _fetch_json(url, BASE_URL + "/tags/")
 
 
+async def _search_user_by_name(name: str) -> tuple:
+    """作者名 -> (uid, 昵称)；找不到 ("", "")。
+
+    2026-08-03 实锤：按作者名搜索是 Premium 限定——/ajax/search/users 404、
+    /touch/ajax/search/users 非会员恒空（torino 都搜不出）、cps.php 只回 tag。
+    免会员解析链：
+    1) 作品搜索结果里找同名作者（作者给自己的作品打名字 tag 很常见）
+    2) touch 用户搜索零成本试（万一账号有会员）
+    3) 搜索引擎 site:pixiv.net/users 反查 uid（小作者可能索引不到，
+       兜底文案引导给主页链接/UID）
+    """
+    name = (name or "").strip()
+    if not name:
+        return "", ""
+    # 1) 作品搜索 -> 结果作者同名即命中
+    r = await _search_novels(name)
+    for it in (r.get("novel") or {}).get("data") or []:
+        uname = str(it.get("userName") or "")
+        if uname and uname.replace(" ", "").lower() == name.replace(" ", "").lower():
+            uid = str(it.get("userId") or "")
+            if uid:
+                return uid, uname
+    # 2) touch 用户搜索（Premium 限定，非会员恒空但零成本试一下）
+    enc = urllib.parse.quote(name)
+    body = await _fetch_json(BASE_URL + f"/touch/ajax/search/users?word={enc}",
+                             BASE_URL + "/search_user.php")
+    for u in (body.get("users") or []) if isinstance(body, dict) else []:
+        uid = str(u.get("user_id") or u.get("id") or "")
+        if uid:
+            return uid, str(u.get("user_name") or u.get("name") or name)
+    # 3) 搜索引擎反查（免会员兜底）
+    try:
+        from junjun_skills.plugins.google_search import tools as gsearch
+        results = await gsearch._search_with_fallback(
+            f'site:pixiv.net/users "{name}"', num_results=5)
+    except Exception as e:
+        logger.warning(f"作者名搜索引擎反查失败: {type(e).__name__}: {e}")
+        results = []
+    for r in results:
+        m = re.search(r"pixiv\.net(?:/[a-z]+)?/users/(\d+)", str(r.get("url") or ""))
+        if m:
+            return m.group(1), name
+    return "", ""
+
+
 async def _fetch_author_works(uid: str) -> dict:
     """作者作品总览：系列列表（带标题）+ 最新单篇（过滤掉系列内章节）。
 
@@ -361,13 +406,23 @@ async def _send_txt(ctx, path: Path) -> bool:
 # ------------------------------------------------------------------ 命令子流程
 
 async def _do_search(keyword: str, user_id: str) -> str:
-    """搜索并缓存结果，返回编号列表文本。"""
+    """搜索并缓存结果，返回编号列表文本。
+
+    空结果自动降级作者名反查（作者名搜索是 Premium 限定，见
+    _search_user_by_name）——「搜作者名搜不到」的观感修复。
+    """
     result = await _search_novels(keyword)
     if result.get("error"):
         return f"搜索失败了：{result['error']}，稍后再试试吧。"
     data_list = (result.get("novel") or {}).get("data") or []
     if not data_list:
-        return f"没找到和「{keyword}」相关的小说，换个关键词试试？"
+        uid, uname = await _search_user_by_name(keyword)
+        if uid:
+            out = await _do_author(uid, user_id)
+            return f"按作品没搜到，但找到了作者「{uname}」：\n{out}"
+        return (f"没找到和「{keyword}」相关的小说（按作者名也没查到——"
+                f"如果 ta 是作者，可以直接给我主页链接或 UID，用 /novel author）。"
+                f"换个关键词试试？")
     items = [_extract_search_item(it) for it in data_list[:_SEARCH_RESULT_MAX]]
     _search_cache[user_id] = {"ts": time.time(), "items": items}
     lines = [f"搜索「{keyword}」结果（共 {len(items)} 条）："]

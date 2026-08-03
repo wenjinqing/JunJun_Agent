@@ -40,6 +40,126 @@ def _fake_gateway(monkeypatch):
     return sent
 
 
+class TestAuthorFallback:
+    """作者名反查（Premium 限定绕过）：作品同名作者 -> touch -> 搜索引擎。"""
+
+    @pytest.mark.asyncio
+    async def test_works_author_hit(self, monkeypatch):
+        """第 1 级：作品搜索结果里有同名作者 -> 直接定位。"""
+        async def _search(keyword, page=1):
+            return {"novel": {"data": [
+                {"userName": "fdkgf", "userId": "80626680", "title": "别人的"},
+                {"userName": "爱丽丝猫猫酱", "userId": "16689973", "title": "她自己的"},
+            ]}}
+
+        monkeypatch.setattr(novel_mod, "_search_novels", _search)
+        uid, name = await novel_mod._search_user_by_name("爱丽丝猫猫酱")
+        assert uid == "16689973" and name == "爱丽丝猫猫酱"
+
+    @pytest.mark.asyncio
+    async def test_touch_hit(self, monkeypatch):
+        async def _search(keyword, page=1):
+            return {"novel": {"data": []}}  # 第 1 级不中
+
+        async def _fetch(url, referer=""):
+            assert "touch/ajax/search/users" in url
+            return {"users": [{"user_id": "12345", "user_name": "爱丽丝猫猫酱"}],
+                    "total": 1}
+
+        monkeypatch.setattr(novel_mod, "_search_novels", _search)
+        monkeypatch.setattr(novel_mod, "_fetch_json", _fetch)
+        uid, name = await novel_mod._search_user_by_name("爱丽丝猫猫酱")
+        assert uid == "12345" and name == "爱丽丝猫猫酱"
+
+    @pytest.mark.asyncio
+    async def test_google_fallback(self, monkeypatch):
+        async def _search(keyword, page=1):
+            return {"novel": {"data": []}}
+
+        async def _fetch(url, referer=""):
+            return {"users": [], "total": 0}  # touch 恒空（非会员）
+
+        monkeypatch.setattr(novel_mod, "_search_novels", _search)
+        monkeypatch.setattr(novel_mod, "_fetch_json", _fetch)
+
+        async def _gsearch(query, num_results=10):
+            assert "site:pixiv.net/users" in query
+            return [{"url": "https://www.pixiv.net/users/99887",
+                     "title": "爱丽丝猫猫酱"}]
+
+        import junjun_skills.plugins.google_search.tools as gsearch
+        monkeypatch.setattr(gsearch, "_search_with_fallback", _gsearch)
+        uid, name = await novel_mod._search_user_by_name("爱丽丝猫猫酱")
+        assert uid == "99887"
+
+    @pytest.mark.asyncio
+    async def test_not_found(self, monkeypatch):
+        async def _search(keyword, page=1):
+            return {"novel": {"data": []}}
+
+        async def _fetch(url, referer=""):
+            return {"users": [], "total": 0}
+
+        async def _gsearch(query, num_results=10):
+            return [{"url": "https://www.pixiv.net/novel/show.php?id=1",
+                     "title": "无关"}]
+
+        monkeypatch.setattr(novel_mod, "_search_novels", _search)
+        monkeypatch.setattr(novel_mod, "_fetch_json", _fetch)
+        import junjun_skills.plugins.google_search.tools as gsearch
+        monkeypatch.setattr(gsearch, "_search_with_fallback", _gsearch)
+        assert await novel_mod._search_user_by_name("不存在的人") == ("", "")
+
+    @pytest.mark.asyncio
+    async def test_cmd_search_falls_back_to_author(self, monkeypatch):
+        async def _search(keyword, page=1):
+            # 命令的 _do_search 调用为空（触发降级）；
+            # 反查的第 1 级再次调用也空（逼到 touch 级）
+            return {"novel": {"data": []}}
+
+        async def _fetch(url, referer=""):
+            return {"users": [{"user_id": "12345", "user_name": "猫猫"}]}
+
+        monkeypatch.setattr(novel_mod, "_search_novels", _search)
+        monkeypatch.setattr(novel_mod, "_fetch_json", _fetch)
+
+        async def _author(uid, user_id):
+            return f"作者「猫猫」的作品（系列 1 / 单篇 3）：..."
+
+        monkeypatch.setattr(novel_mod, "_do_author", _author)
+        out = await novel_mod._do_search("猫猫", "u1")
+        assert "找到了作者「猫猫」" in out and "单篇 3" in out
+
+    @pytest.mark.asyncio
+    async def test_tool_author_recommend(self, monkeypatch):
+        async def _search(keyword, page=1):
+            return {"novel": {"data": []}}
+
+        async def _fetch(url, referer=""):
+            return {"users": [{"user_id": "12345", "user_name": "猫猫"}]}
+
+        async def _works(uid):
+            return {"author": "猫猫",
+                    "series": [{"series_id": "555", "title": "某系列",
+                                "author": "猫猫", "r18": False}],
+                    "novels": [{"id": "61", "title": "某单篇", "author": "猫猫",
+                                "r18": False},
+                               {"id": "62", "title": "大人的", "author": "猫猫",
+                                "r18": True}]}
+
+        monkeypatch.setattr(novel_mod, "_search_novels", _search)
+        monkeypatch.setattr(novel_mod, "_fetch_json", _fetch)
+        monkeypatch.setattr(novel_mod, "_fetch_author_works", _works)
+        out = await at.pixiv_search_novels.ainvoke({"keyword": "猫猫"})  # 私聊
+        assert "找到了作者「猫猫」" in out
+        assert "series/555" in out and "show.php?id=61" in out
+        assert "【R18】" in out  # 私聊 R18 打标保留
+        _group()
+        monkeypatch.setattr(novel_mod, "_fetch_author_works", _works)
+        out = await at.pixiv_search_novels.ainvoke({"keyword": "猫猫"})
+        assert "大人的" not in out  # 群聊滤掉 R18
+
+
 class TestRegistration:
     def test_tools_registered(self):
         from junjun_skills.plugins.pixiv import tools as pkg
