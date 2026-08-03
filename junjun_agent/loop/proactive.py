@@ -86,6 +86,12 @@ class ProactiveChatManager:
         cfg = _cfg()
         if not cfg.get("enable", False):
             return False
+        try:
+            from junjun_agent.loop.intention import chat_muted
+            if chat_muted(session.chat_id):
+                return False  # 「别烦我」/ /安静（P7-4）：所有主动消息统一静音
+        except Exception:
+            pass
         if session.is_group and not cfg.get("enable_in_groups", False):
             return False
         if not session.is_group and not cfg.get("enable_in_private", True):

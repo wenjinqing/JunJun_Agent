@@ -233,6 +233,24 @@ async def what_do_you_remember_cmd(ctx) -> str:
     return "\n".join(lines)
 
 
+@register_command("quiet", aliases=["安静"], plugin="builtin",
+                  description="本会话安静模式：不再主动发消息（/热闹 解除）")
+async def quiet_cmd(ctx) -> str:
+    """/安静：本会话持久静音主动消息（意向+主动搭话统一生效；提醒类必达不受影响）。"""
+    from junjun_agent.loop.intention import mute_chat
+    mute_chat(ctx.session.chat_id, hours=0)  # 持久，/热闹 解除
+    return "好，我在这安静啦——不主动找你们了，想我热闹回来就说 /热闹。"
+
+
+@register_command("lively", aliases=["热闹"], plugin="builtin",
+                  description="解除安静模式，恢复主动消息")
+async def lively_cmd(ctx) -> str:
+    """/热闹：解除本会话安静模式。"""
+    from junjun_agent.loop.intention import unmute_chat
+    unmute_chat(ctx.session.chat_id)
+    return "好嘞，我又会主动来找你们啦～"
+
+
 @register_command("identity", aliases=["自我"], plugin="builtin",
                   description="看她从经历里长出来的自我认知")
 async def identity_cmd(ctx) -> str:

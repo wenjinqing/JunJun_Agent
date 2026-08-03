@@ -671,6 +671,17 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
                              meta.nickname or "", meta.text or "")
     except Exception:
         pass
+    # 「别烦我」（P7-4）：只有对 bot 说的才静音本会话 24h——群里两人互怼不能误伤
+    try:
+        from junjun_agent.loop.intention import detect_mute_request, mute_chat
+        from junjun_core.config import get_global_config as _ggc2
+        _nick = _ggc2().bot.nickname
+        _addr = meta.at_bot or (_nick and _nick in (meta.text or ""))
+        if _addr and detect_mute_request(meta.text):
+            mute_chat(session.chat_id, hours=24)
+            logger.info(f"[{session.chat_id}] 收到「别烦我」，主动消息静音 24h")
+    except Exception:
+        pass
 
     from junjun_agent.funnel.session_queue import session_queues
     session_queues.dispatch(session, meta, _handle)

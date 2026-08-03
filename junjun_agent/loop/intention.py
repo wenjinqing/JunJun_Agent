@@ -78,6 +78,47 @@ def _save_state(st: dict) -> None:
         logger.debug(f"intention 状态落盘失败（忽略）: {e}")
 
 
+# ---------------------------------------------------------------- 会话安静模式（P7-4 用户侧控制）
+# 与熔断共用 state 文件：mute = {chat_id: until_ts}，-1 = 持久（/热闹 解除）
+
+def mute_chat(chat_id: str, *, hours: float = 24) -> None:
+    """安静模式：期间意向/主动消息都不发（提醒类必达不受影响）。hours=0 表持久。"""
+    st = _load_state()
+    mute = st.setdefault("mute", {})
+    mute[chat_id] = -1 if hours <= 0 else time.time() + hours * 3600
+    _save_state(st)
+    logger.info(f"[{chat_id}] 安静模式开启（{'持久' if hours <= 0 else f'{hours}h'}）")
+
+
+def unmute_chat(chat_id: str) -> None:
+    st = _load_state()
+    if st.get("mute", {}).pop(chat_id, None) is not None:
+        _save_state(st)
+        logger.info(f"[{chat_id}] 安静模式解除")
+
+
+def chat_muted(chat_id: str) -> bool:
+    until = float(_load_state().get("mute", {}).get(chat_id, 0.0))
+    if until == -1:
+        return True
+    if until > time.time():
+        return True
+    if until:  # 过期顺手清理
+        unmute_chat(chat_id)
+    return False
+
+
+# 「别烦我」类自然语言（只有对 bot 说的才算——processor 侧按 at_bot/直呼过滤，
+#  群里两个人互怼「别烦我」不能误伤全群）
+_MUTE_REQUESTS = ("别烦我", "安静点", "别主动", "别来找我", "少说话", "勿扰",
+                  "不要主动", "消停点")
+
+
+def detect_mute_request(text: str) -> bool:
+    low = (text or "").strip()
+    return bool(low) and any(kw in low for kw in _MUTE_REQUESTS)
+
+
 def _circuit_open() -> bool:
     return time.time() < float(_load_state().get("pause_until", 0.0))
 
@@ -255,6 +296,8 @@ def evaluate(it, *, now: Optional[float] = None) -> tuple:
         return False, "disabled"
     if _circuit_open():
         return False, "circuit_open"
+    if chat_muted(it.chat_id):
+        return False, "chat_muted"
     if _in_quiet_hours():
         return False, "quiet_hours"
     if it.expires_at and it.expires_at <= now:
