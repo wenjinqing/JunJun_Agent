@@ -50,6 +50,29 @@ async def save_memory(content: str, importance: float = 0.8) -> str:
 
 
 @tool
+async def pin_memory(content: str) -> str:
+    """把对方**明确要求「记住」**的事钉成最高优先级记忆：之后每轮对话你都会直接看到，
+    不用检索。对方说「记住…/别忘了…/给我记住」时用本工具；自己判断值得记的琐事用 save_memory。
+
+    Args:
+        content: 要钉住的内容，一句完整的话，如"甲不吃香菜"
+    """
+    from junjun_memory.long_term import get_long_term_memory
+    chat_id = current_chat_id.get()
+    ltm = get_long_term_memory()
+    try:
+        from junjun_core.config import get_global_config
+        cap = int(get_global_config().raw.get("memory", {}).get("pinned_max_per_chat", 20))
+    except Exception:
+        cap = 20
+    if len(ltm.pinned(chat_id)) >= cap:
+        return (f"钉住的记忆已经 {cap} 条到上限了，再钉会互相稀释。"
+                "让对方用 /忘掉 <关键词> 清理掉不再需要的再钉。")
+    await ltm.add(content, chat_id, weight=1.5, kind="pinned")
+    return f"已钉住：{content}（之后每轮我都会直接看到，不会忘）"
+
+
+@tool
 def manage_user_profile(user_id: str, category: str, content: str) -> str:
     """更新对某个用户的了解。当用户透露自己的信息（名字、喜好、职业、关系）时使用。
 

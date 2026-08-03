@@ -100,6 +100,23 @@ class UserProfileStore:
         parsed.sort(key=lambda x: -x["weight"])
         return parsed[:top_k]
 
+    def remove_points_where(self, platform: str, user_id: str, kw: str) -> int:
+        """删掉本人画像里含关键词的记忆点（/忘掉 的用户可控面）。返回删除数。"""
+        from junjun_core.database import PersonInfo
+        person = PersonInfo.get_or_none(PersonInfo.person_id == make_person_id(platform, user_id))
+        if person is None:
+            return 0
+        try:
+            points = json.loads(person.memory_points or "[]")
+        except json.JSONDecodeError:
+            return 0
+        kept = [x for x in points if kw not in x]
+        removed = len(points) - len(kept)
+        if removed:
+            person.memory_points = json.dumps(kept, ensure_ascii=False)
+            person.save()
+        return removed
+
     def build_relation_block(self, platform: str, user_id: str, nickname: str = "") -> str:
         """拼 prompt 关系块；无画像返回空串。"""
         from junjun_core.database import PersonInfo
