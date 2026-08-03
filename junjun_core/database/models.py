@@ -206,6 +206,24 @@ class UserSceneProfile(BaseModel):
     updated_at = FloatField(default=time.time)
 
 
+class Intention(BaseModel):
+    """意向（P7 意向系统）：她想做的事——不是因为被 @。持久化队列，重启不丢。
+    生成源三类：事件（有人 emo/订阅更新）、定时（晨起巡检）、反思（日记复盘）。
+    评估门（quiet hours/日限额/去重/亲密度）过了才生成消息发出。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    kind = CharField(index=True)       # care_followup / diary_plan / morning_greet
+    chat_id = CharField(index=True)    # 目标会话
+    user_id = CharField(default="")    # 关心对象（群聊场景）
+    user_nickname = CharField(default="")
+    motive = CharField(default="")     # 动机摘要（生成消息的种子）
+    priority = IntegerField(default=5) # 1 最高 9 最低
+    status = CharField(index=True, default="pending")  # pending/fired/expired/dropped
+    created_at = FloatField(default=time.time)
+    expires_at = FloatField(default=0.0)   # 过期即焚
+    fired_at = FloatField(default=0.0)
+
+
 class AsyncJob(BaseModel):
     """异步任务：接单->后台跑->主动汇报的持久化队列（重启可恢复，区别见 tasks.py 注释）。"""
     id = AutoField()
@@ -245,7 +263,7 @@ class Subscription(BaseModel):
 
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
               OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity,
-              UserSceneProfile]
+              UserSceneProfile, Intention]
 
 
 def init_database() -> None:

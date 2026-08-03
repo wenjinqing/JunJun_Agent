@@ -111,6 +111,17 @@ cleanup_interval_hours = 24    # 清理任务执行间隔（小时）；只清 l
 enable_tool = true                       # ⏸️ 预留
 replyer_tool_precheck_with_llm = true    # ⏸️ 预留
 
+# ---------- 意向系统（她想做的事：emo 关心/晨检问早/日记复盘；护栏先行，默认关） ----------
+[intention]
+enable = false           # 总开关（灰度：先单群观察 ≥1 周再放量）
+quiet_hours = "23:00-08:00"  # 免打扰时段（硬编码防线，绝不主动发）
+max_pending_per_chat = 3 # 每会话同时存活意向上限（优先级淘汰，过期即焚）
+max_per_chat_per_day = 2 # 每会话每天主动发出上限
+max_global_per_day = 10  # 全局每天主动发出上限（QQ 风控防线）
+min_age_minutes = 60     # 意向最小沉淀时间（分钟）；emo 关心固定 180
+morning_time = "09:00"   # 晨检问早排意向的时间点（中午前有效）
+min_intimacy = 30        # 关心类意向的亲密度门槛（低分别硬贴）
+
 # ---------- 主动私聊（君君主动找话题） ----------
 [proactive_chat]
 enable = false  # 总开关（开启前确认 silent_hours/日限额）

@@ -189,6 +189,12 @@ async def write_diary(*, model=None, force: bool = False, callbacks=None) -> Opt
         if mood:
             mood_manager.set_self_mood(mood, reason="日记")
         logger.info(f"日记已写（{day}，{len(content)} 字，心情：{mood or '未标注'}）")
+        # 意向系统反思钩子（P7）：日记 -> 「明天想做的事」意向（enable=false 零开销）
+        try:
+            from junjun_agent.loop.intention import on_diary_written
+            await on_diary_written(content, model=model)
+        except Exception:
+            pass
         return content
     except Exception as e:
         logger.warning(f"写日记失败: {type(e).__name__}: {e}")
