@@ -47,6 +47,15 @@ _RESULT_MAX_CHARS = 2000
 _WATCHDOG_INTERVAL = 60.0  # 健康检查间隔（秒）
 _HEALTH_TIMEOUT = 5.0      # 健康检查超时（秒）
 
+import re as _re
+
+# JSON-RPC 确定性错误（请求无效/方法不存在/参数错）：重试无意义，直接降级
+_DETERMINISTIC_MCP_RE = _re.compile(r"MCP error -3260[012]")
+
+
+class _DeterministicMcpError(ValueError):
+    """确定性 MCP 失败的包装（ValueError 子类 → retry_async 的 _NO_RETRY 直接放行）。"""
+
 # 仅管理员可用的 MCP 工具（按工具原名匹配，注册时包权限门）
 # apply_relationship_penalty：惩罚处置行为，不能交给群友触发
 _ADMIN_TOOLS = {"apply_relationship_penalty"}
@@ -230,8 +239,16 @@ class MCPManager:
                 from junjun_core.retry import retry_async
 
                 async def _call():
-                    return await asyncio.wait_for(_holder["coro"](*args, **kwargs),
-                                                  timeout=_TOOL_TIMEOUT)
+                    try:
+                        return await asyncio.wait_for(_holder["coro"](*args, **kwargs),
+                                                      timeout=_TOOL_TIMEOUT)
+                    except Exception as e:
+                        # 确定性失败（-32600/-32601/-32602 参数/方法错）重试无意义，
+                        # 包装成 ValueError 让 retry_async 直接放行（2026-08-03 实战：
+                        # BV 号传错格式被重试 3 次，白等 3s+ 还刷 3 条服务端报错）
+                        if _DETERMINISTIC_MCP_RE.search(str(e)):
+                            raise _DeterministicMcpError(str(e)) from e
+                        raise
 
                 try:
                     # 瞬态失败（网络抖动/限流/ECONNRESET）重试 3 次再降级
@@ -239,6 +256,11 @@ class MCPManager:
                                                label=tool.name)
                 except asyncio.TimeoutError:
                     return "工具调用超时（30s），请换个方式或稍后再试。", None
+                except _DeterministicMcpError as e:
+                    # 参数类失败：服务端报错本身含正确用法，原样喂回让模型自我纠正
+                    logger.info(f"MCP 工具 {tool.name} 参数类失败（不重试）: {e}")
+                    return (f"工具拒绝了这次调用：{str(e)[:200]}。"
+                            f"按报错里的提示修正参数再试，或换其他方式回答。"), None
                 except Exception as e:
                     # 重试 3 次仍失败：降级为工具结果文本，
                     # 绝不外抛——ToolException 会炸掉整个 agent 轮次导致沉默

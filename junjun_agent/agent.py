@@ -122,6 +122,15 @@ class JunJunAgent:
         P5-2 兜底）。
         """
         tools = get_tools() if full else get_tools(self.session)
+        if not full:
+            # 后台预热 embedding 缓存：同步掩码路径只读缓存，这里喂它——
+            # 本轮可能来不及，下一轮起语义相关性补满生效（失败静默）
+            try:
+                import asyncio
+                from junjun_skills.registry import warm_tool_embeddings
+                asyncio.create_task(warm_tool_embeddings(self.session))
+            except Exception:
+                pass
         return create_agent(model=self._model, tools=tools,
                             middleware=[PlanMiddleware()])
 

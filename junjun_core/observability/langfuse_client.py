@@ -40,6 +40,10 @@ class LangfuseClient:
         if not (host and pk and sk):
             return
         try:
+            # v4 是 otel 链路：默认导出超时 10s，慢网络下批量导出超时刷
+            # "Failed to export span batch"（2026-08-03 实战日志）。放宽到 30s；
+            # 失败只丢 trace 不影响主流程（BatchSpanProcessor 本就异步）
+            os.environ.setdefault("OTEL_EXPORTER_OTLP_TIMEOUT", "30")
             self._client = Langfuse(host=host, public_key=pk, secret_key=sk)
             self._enabled = True
         except Exception:
