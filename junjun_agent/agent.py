@@ -199,7 +199,12 @@ class JunJunAgent:
                 latest_msg = line
             else:
                 background_lines.insert(0, line)
-        background = "\n".join(background_lines[-10:])  # 背景留最近 10 轮（记忆效果 vs 防分心平衡）
+        # 背景条数预算（[chat] background_context_lines，默认 30 对齐 processor 的
+        # render(limit=30)）。曾经硬编 10 行——processor 渲染的 30 条在这被砍到只剩
+        # 5-7 条可见（2026-08-03 用户实测反馈上下文太短）。群聊消息短，30 行约千级
+        # token，换上下文完整度值；弱模型分心就调低这个配置，别在代码里砍。
+        bg_budget = int(cfg.raw.get("chat", {}).get("background_context_lines", 30))
+        background = "\n".join(background_lines[-bg_budget:])
 
         messages = [SystemMessage(content=system)]
         if background:
