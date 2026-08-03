@@ -41,18 +41,16 @@ def match_keyword_rules(text: str) -> List[str]:
 
 
 def _behavior_examples(p: dict, nickname: str) -> str:
-    """行为示例人设（防 drift 关键：形容词 drift，行为示例稳定）。"""
+    """行为示例人设（防 drift 关键：形容词 drift，行为示例稳定）。
+
+    没配 behavior_examples 时直接用 personality 原文——不代编示例：
+    曾经在这里硬编「就这？->杂鱼就是杂鱼」，结果每条 prompt 都在教模型
+    复读这个梗，回复永远那几个点、满满角色扮演感（2026-08-03 用户反馈）。
+    示例必须由人设作者自己写，才能保证梗的多样性。
+    """
     base = p.get("personality", f"你是{nickname}。")
-    # 把形容词人设转成行为示例（如果用户配置了具体示例就用，否则给模板）
     examples = p.get("behavior_examples", "")
-    if examples:
-        return examples
-    # 默认行为示例（从 personality 提取关键行为模式）
-    return (
-        f"{base}\n"
-        f"比如他们说「就这？」你会回「杂鱼就是杂鱼」，但转头又会问「晚饭吃了吗」。"
-        f"被夸了会害羞但很快反击撩回去，被撩了会脸红但嘴上不饶人。"
-    )
+    return examples if examples else base
 
 
 def build_system_prompt(
@@ -128,6 +126,8 @@ def build_system_prompt(
 
     # 规则层（正面约束，一句话）
     rules = [
+        # 真人感锚（2026-08-03）：放最前，定调整条规则的语气
+        "像真人发微信一样说话：短、自然、有变化，经常一两句甚至几个字就完，不每条都整活。",
         "直接说你要对群友说的话，不要前缀不要解释不要分析过程。",
         "不确定说什么就调 do_not_reply，不要硬编。",
         "需要事实信息（时间/天气/搜索）先调工具，不要凭记忆编。",
