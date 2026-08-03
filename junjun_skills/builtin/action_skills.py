@@ -193,3 +193,70 @@ def query_chat_history(keyword: str, user: str = "", days: int = 30, limit: int 
         when = time.strftime("%m-%d %H:%M", time.localtime(r.time))
         lines.append(f"- [{when}] {name}: {r.processed_plain_text[:80]}")
     return "\n".join(lines)
+
+
+# 跨群围观念限流（独立于搜索额度）：每会话每 10 分钟最多 3 次
+_PEEK_LOG: dict = {}
+_PEEK_MAX = 3
+
+
+def _peek_rate_limited(chat_id: str) -> bool:
+    from collections import deque
+    now = time.time()
+    dq = _PEEK_LOG.setdefault(chat_id, deque())
+    while dq and now - dq[0] > _SEARCH_WINDOW:
+        dq.popleft()
+    if len(dq) >= _PEEK_MAX:
+        return True
+    dq.append(now)
+    return False
+
+
+@tool
+def peek_group_chat(group: str = "") -> str:
+    """看看别的群最近在聊什么（仅私聊可用）。对方私聊里好奇「其他群/某个群
+    最近在聊什么」时使用：留空给所有群的近况概览（每群最近几条 + 群号），
+    指定群号则看那个群最近 20 条。
+    隐私边界写死：只读群聊消息——任何私聊记录（你的/别人的）永远拿不到；
+    群聊里本工具不可用（A 群的事不在 B 群说），只在私聊满足好奇心。
+
+    Args:
+        group: 群号（留空 = 所有群概览，概览里能看到各群群号）
+    """
+    from junjun_core.database.models import Messages
+    chat_id = current_chat_id.get()
+    if _peek_rate_limited(chat_id):
+        return "刚看过好几眼了，歇会儿再看（每 10 分钟最多 3 次）。"
+    rows = list(
+        Messages.select()
+        .where(Messages.group_id != "")  # 只读群聊：私聊消息 group_id 恒为空
+        .order_by(Messages.time.desc())
+        .limit(200)
+    )
+    if not rows:
+        return "最近群里都没什么动静。"
+
+    def _fmt(r):
+        name = "我" if r.is_bot else (r.user_nickname or r.user_id or "?")
+        when = time.strftime("%m-%d %H:%M", time.localtime(r.time))
+        return f"- [{when}] {name}: {r.processed_plain_text[:60]}"
+
+    group = (group or "").strip()
+    if group:
+        picked = [r for r in rows if group in (r.group_id or "") or group in r.chat_id][:20]
+        if not picked:
+            return f"没找到群号含「{group}」的群（先留空调一次看看有哪些群和群号）。"
+        picked.reverse()  # 时间正序，读得顺
+        gid = picked[0].group_id
+        lines = [f"群 {gid} 最近的聊天："] + [_fmt(r) for r in picked]
+        return "\n".join(lines)
+
+    # 概览：最近活跃的 5 个群，每群最近 5 条
+    by_group: dict = {}
+    for r in rows:
+        by_group.setdefault(r.chat_id, []).append(r)  # rows 已是时间倒序
+    lines = ["各个群最近的动静（想看哪个群细节，再用群号调一次）："]
+    for cid, rs in list(by_group.items())[:5]:
+        lines.append(f"【群 {rs[0].group_id}】")
+        lines.extend(_fmt(r) for r in reversed(rs[:5]))
+    return "\n".join(lines)
