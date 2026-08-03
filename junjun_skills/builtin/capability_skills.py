@@ -294,3 +294,31 @@ async def diary_cmd(ctx) -> str:
         return f"还没有{'这一天' if day else ''}的日记（每天 {diary_mod._cfg().get('time', '23:30')} 自动写）。"
     mood_txt = f"\n心情：{row.mood}" if row.mood else ""
     return f"「{row.date}」的日记：\n{row.content}{mood_txt}"
+
+
+@register_command("patches", aliases=["补丁"], plugin="builtin", admin_only=True,
+                  description="技能补丁管理（/补丁 list|启用 N|回滚 N）")
+async def patches_cmd(ctx) -> str:
+    """/补丁（管理员，P8-2）：经验回放补丁的人工门控。
+    list 看候选与状态；启用 N 注入工具说明；回归就回滚 N。"""
+    from junjun_skills import patches as p_mod
+
+    arg = (ctx.args or "").strip()
+    if not arg or arg == "list":
+        rows = p_mod.list_patches()
+        if not rows:
+            return ("还没有技能补丁。工具失败攒够（默认 3 次/7 天）且 "
+                    "[evolution] enable=true 后，每周复盘会自动产出候选。")
+        icon = {"candidate": "🕐", "active": "✅", "rolled_back": "↩️", "merged": "🗜"}
+        lines = ["技能补丁（候选需 /补丁 启用 N 人工启用）："]
+        for r in rows:
+            lines.append(f"{icon.get(r['status'], '?')} #{r['id']} [{r['tool']}] v{r['version']} "
+                         f"{r['patch'][:36]}（{r['status']}）")
+        return "\n".join(lines)
+    for verb, fn in (("启用", p_mod.activate), ("回滚", p_mod.rollback)):
+        if arg.startswith(verb):
+            num = arg[len(verb):].strip()
+            if not num.isdigit():
+                return f"用法：/补丁 {verb} 编号"
+            return fn(int(num))
+    return "用法：/补丁 list | /补丁 启用 编号 | /补丁 回滚 编号"

@@ -122,6 +122,15 @@ min_age_minutes = 60     # 意向最小沉淀时间（分钟）；emo 关心固�
 morning_time = "09:00"   # 晨检问早排意向的时间点（中午前有效）
 min_intimacy = 30        # 关心类意向的亲密度门槛（低分别硬贴）
 
+# ---------- 经验回放与技能补丁（P8-2） ----------
+# 工具失败 -> JSONL 日志 -> 每周 agent 槽复盘 -> 补丁候选 -> 管理员 /补丁 启用 ->
+# 注入对应工具 description 后缀。enable=false 时只记日志不复盘（默认关）。
+[evolution]
+enable = false           # 总开关（日志记录不受此开关影响，只有复盘受影响）
+review_interval_days = 7 # 复盘周期（天）
+min_failures = 3         # 单工具近 7 天失败达到此次数才进复盘
+max_patches_per_tool = 3 # 单工具活跃补丁上限（超出自动合并成一条）
+
 # ---------- 主动私聊（君君主动找话题） ----------
 [proactive_chat]
 enable = false  # 总开关（开启前确认 silent_hours/日限额）

@@ -37,6 +37,11 @@ def register(skill: BaseTool, available_for: Optional[Callable] = None,
     _registry[skill.name] = skill
     _availability[skill.name] = available_for
     _skill_plugin[skill.name] = plugin
+    try:
+        from junjun_skills import patches
+        patches.apply_to_registry(skill.name)  # P8-2：已有活跃补丁注入新注册工具
+    except Exception:
+        pass
     logger.debug(f"注册 skill: {skill.name} [{plugin}]{' (admin)' if admin_only else ''}")
 
 
@@ -158,11 +163,12 @@ def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
         original = skill.coroutine
 
         async def wrapped(*args, _orig=original, **kwargs):
-            from junjun_skills import health
+            from junjun_skills import health, patches
             try:
                 result = await _orig(*args, **kwargs)
             except Exception as e:
                 health.record_fail(name, _classify_error(e), str(e))
+                patches.log_failure(name, _classify_error(e), str(e))
                 return _tool_error_text(name, e)
             health.record_ok(name)
             return result
@@ -171,11 +177,12 @@ def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
         original_sync = skill.func
 
         def wrapped_sync(*args, _orig=original_sync, **kwargs):
-            from junjun_skills import health
+            from junjun_skills import health, patches
             try:
                 result = _orig(*args, **kwargs)
             except Exception as e:
                 health.record_fail(name, _classify_error(e), str(e))
+                patches.log_failure(name, _classify_error(e), str(e))
                 return _tool_error_text(name, e)
             health.record_ok(name)
             return result
