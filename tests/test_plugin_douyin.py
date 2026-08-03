@@ -264,7 +264,7 @@ class TestManifest:
             (Path(dy.__file__).parent / "_manifest.json").read_text(encoding="utf-8"))
         assert manifest["name"] == "douyin"
         assert manifest["tools_attr"] == "TOOLS"
-        assert dy.TOOLS == []
+        assert [t.name for t in dy.TOOLS] == ["douyin_summary"]
         # 命令/拦截器的 plugin 参数与 manifest name 一致
         cmd_plugins = {c["name"]: c["plugin"] for c in commands.list_commands()}
         it_plugins = {i["name"]: i["plugin"] for i in interceptors.list_interceptors()}

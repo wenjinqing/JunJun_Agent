@@ -355,6 +355,7 @@ _TOPIC_KEYWORDS = {
     "bilibili_summary": ["b站", "bilibili", "视频讲", "讲了啥", "讲了什么", "bv", "视频内容", "什么视频"],
     "watch_video": ["认真看", "看完", "看看这个视频", "讲一下这个视频", "b站", "bilibili", "bv"],
     "douyin": ["抖音", "douyin"],
+    "douyin_summary": ["抖音", "douyin", "讲了啥", "讲了什么", "什么内容", "怎么样"],
     "music": ["音乐", "歌", "点歌"],
     "send_feed": ["说说", "空间", "qzone", "动态"],
     "read_feed": ["说说", "空间", "qzone", "动态"],

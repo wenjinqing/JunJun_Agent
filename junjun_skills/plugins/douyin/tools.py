@@ -17,6 +17,7 @@ import re
 import time
 
 import httpx
+from langchain_core.tools import tool
 
 from junjun_agent.commands import register_command
 from junjun_agent.interceptors import register_interceptor
@@ -275,11 +276,31 @@ async def douyin_cmd(ctx):
     return await _submit_parse(ctx.session.chat_id, url)
 
 
+# 链接之外的文本命中这些词 = 在问视频内容（而非求转发视频文件），对齐 bilibili 语义分流
+_QUESTION_HINTS = (
+    "讲了啥", "讲了什么", "讲了些啥", "讲的啥", "讲的什么", "什么内容",
+    "什么视频", "说啥", "说了啥", "怎么样", "好看吗", "讲讲", "总结",
+    "看看这个", "看下这个", "瞅瞅",
+)
+
+
 @register_interceptor(DOUYIN_URL_RE.pattern, name="douyin_link", plugin="douyin")
 async def douyin_hit(ctx) -> bool:
-    """自动识别消息中的抖音链接并解析（群聊不限制 @）；消费消息不再进 LLM 决策。"""
+    """自动识别消息中的抖音链接。
+
+    两种语义（对齐 bilibili）：
+    - 纯分享：消费消息，后台解析转发 + 后台「看懂」（材料预热 + 摘要进会话上下文）
+    - 提问（「这视频讲了啥 <链接>」）：不消费，只预热材料，交给 LLM 调 douyin_summary
+    """
     url = (ctx.args or "").rstrip(".,;!?，。；！？）】>")
     if not url:
+        return False
+
+    from junjun_skills.plugins.douyin import content
+    rest = (ctx.meta.text or "").replace(url, "")
+    if any(h in rest for h in _QUESTION_HINTS):
+        logger.info(f"抖音链接+提问，预热材料后交给 LLM: {url[:60]}")
+        content.prewarm_video(ctx.session.chat_id, url)
         return False
 
     remain = _check_rate_limit(ctx.session.chat_id)
@@ -288,9 +309,40 @@ async def douyin_hit(ctx) -> bool:
         return True
 
     logger.info(f"抖音解析(自动): url={url[:80]}")
+    content.prewarm_video(ctx.session.chat_id, url)  # 与解析转发并行，互不阻塞
     ack = await _submit_parse(ctx.session.chat_id, url)
     await ctx.reply(ack)
     return True
 
 
-TOOLS = []
+# ---------------------------------------------------------------- LLM 工具
+
+@tool
+async def douyin_summary(url: str) -> str:
+    """看懂一个抖音视频：解析文案/作者/BGM/互动数据后告诉你这个视频讲了什么。
+    对方发抖音链接问「讲了啥/什么内容/怎么样/好看吗」，或你想聊群里刚分享的抖音时使用。
+    直播链接看不了；想「认真看画面听声音」就用 watch_video（会后台下载细品）。
+
+    Args:
+        url: 抖音分享链接（v.douyin.com 短链或 douyin.com/video 链接）
+    """
+    from junjun_skills.plugins.douyin import content
+    m = await content.get_material((url or "").strip())
+    if m and m.get("type") == "live":
+        return "这是抖音直播/直播回放，我看不了直播内容，让对方讲讲呗。"
+    if not m or not m.get("material"):
+        return "没拿到这个抖音视频的资料（链接失效或被风控），让对方直接说说讲的啥吧。"
+    summary = ""
+    try:
+        summary = await content.summarize_material(m["material"], max_chars=150)
+    except Exception:
+        pass
+    info = m["info"]
+    out = f"抖音视频（作者：{info['author'] or '未知'}）\n"
+    if summary:
+        out += f"内容要点：{summary}\n"
+    out += f"资料详情：\n{m['material']}"
+    return out
+
+
+TOOLS = [douyin_summary]
