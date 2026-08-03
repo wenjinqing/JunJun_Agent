@@ -18,6 +18,7 @@ import base64
 import os
 import re
 import tomllib
+import urllib.parse
 from pathlib import Path
 
 import httpx
@@ -150,6 +151,90 @@ def pximg_proxy(url: str) -> str:
     """i.pximg.net 需要 Referer 才能下载，NapCat 拉图不带 Referer——
     改走公共代理 i.pixiv.re（lolicon 同款技巧）。"""
     return (url or "").replace("i.pximg.net", "i.pixiv.re")
+
+
+# ------------------------------------------------------------------ 内容安全（元数据层）
+
+# R18 tag 黑名单（2026-08-03 用户实锤：xRestrict=0 + mode=safe 也会漏擦边/R18）
+_R18_TAGS = frozenset({
+    "r-18", "r18", "r-18g", "r18g", "nsfw", "エロ", "えろ",
+    "裸体", "ヌード", "全裸", "セックス", "性交", "中出し", "陵辱",
+})
+
+
+def item_tags(item: dict) -> list:
+    """统一提取 tag 字符串列表：搜索条目是 list[str]，详情是 {"tags": [{"tag": ...}]}。"""
+    raw = item.get("tags") or []
+    if isinstance(raw, dict):
+        raw = raw.get("tags") or []
+    return [str(t.get("tag") or "") if isinstance(t, dict) else str(t) for t in raw]
+
+
+def has_r18_tag(item: dict) -> bool:
+    return any(t.strip().lower() in _R18_TAGS for t in item_tags(item))
+
+
+def sl_value(item: dict) -> int:
+    """搜索条目的 sl（露骨分级）：0/2 正常，4 擦边，6 露骨。拿不到按 0。"""
+    try:
+        return int(item.get("sl") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def is_safe_item(item: dict, group: bool) -> bool:
+    """R18 综合过滤（元数据层，0 额外请求）：
+    - 通用：xRestrict==0 + R18 tag 黑名单
+    - 群聊加码：sl<=2（sl 4/6 的擦边/露骨会带着 xRestrict=0 漏过 mode=safe）
+    """
+    try:
+        if int(item.get("xRestrict") or 0) >= 1:
+            return False
+    except (TypeError, ValueError):
+        pass
+    if has_r18_tag(item):
+        return False
+    if group and sl_value(item) > 2:
+        return False
+    return True
+
+
+def _min_bookmarks() -> int:
+    """随机发图的收藏数门槛（质量兜底，config [features] min_bookmarks）。"""
+    try:
+        return int(_cfg_section("features").get("min_bookmarks", 300))
+    except (TypeError, ValueError):
+        return 300
+
+
+# ------------------------------------------------------------------ 搜索（免会员质量方案）
+
+def quality_tiers() -> list:
+    """收藏分层 tag 序列：配置层 -> 逐级放宽 -> 裸关键词（去重保序）。
+
+    2026-08-03 实锤：popular_d（人気順）是 Premium 限定，非会员账号
+    【静默降级为最新优先】——出来的全是几小时前的新投稿（丑+低收藏）。
+    免会员替代：关键词 + 「1000users入り」收藏分层 tag（pixiv 自动给
+    高收藏作品打的标签）搜索，效果接近人気順。
+    """
+    tier = str(_cfg_section("features").get("quality_tier", "1000users入り") or "")
+    tiers = [tier, "500users入り", "100users入り", ""] if tier else [""]
+    return list(dict.fromkeys(tiers))
+
+
+async def search_artworks(query: str, page: int, ratio: str = "") -> list:
+    """/ajax/search/artworks 封装（date_d + safe + s_tag），返回原始条目列表。
+
+    注意不要用 popular_d：Premium 限定，非会员静默降级 date_d（2026-08-03 实锤）。
+    """
+    enc = urllib.parse.quote(query)
+    url = (BASE_URL + f"/ajax/search/artworks/{enc}?word={enc}"
+           f"&order=date_d&mode=safe&p={page}&s_mode=s_tag"
+           + (f"&ratio={ratio}" if ratio else ""))
+    body = await _fetch_json(url, BASE_URL + "/tags/")
+    if body.get("error"):
+        return []
+    return (body.get("illustManga") or {}).get("data") or []
 
 
 # ------------------------------------------------------------------ 图片代下

@@ -19,7 +19,7 @@ from junjun_skills.builtin.memory_skills import current_chat_id
 
 from . import illust as illust_mod
 from . import novel as novel_mod
-from .client import _cookie, images_to_b64
+from .client import _cookie, images_to_b64, is_safe_item
 
 _NO_COOKIE = "P 站功能还没配置 Pixiv Cookie，暂时不可用（让主人在 .env 里设置 PIXIV_COOKIE 吧）。"
 _DL_COOLDOWN = 60.0
@@ -61,7 +61,8 @@ async def pixiv_search_illusts(keyword: str) -> str:
     """
     if not _cookie():
         return _NO_COOKIE
-    items = await illust_mod._search_illusts(keyword)
+    _, _, kind = _chat()
+    items = await illust_mod._search_illusts(keyword, group=(kind == "group"))
     if not items:
         return f"没找到和「{keyword}」相关的插画，换个关键词（比如换日文）试试。"
     lines = [f"P 站插画搜索「{keyword}」推荐（{len(items)} 条）："]
@@ -128,11 +129,8 @@ async def pixiv_send_illust(illust_id: str) -> str:
     detail = await illust_mod._illust_detail(iid)
     if detail.get("error"):
         return f"获取作品失败：{detail['error']}"
-    try:
-        if int(detail.get("xRestrict") or 0) >= 1:
-            return "这个作品是 R18，发不了。可以推荐给 ta 别的全年龄作品。"
-    except (TypeError, ValueError):
-        pass
+    if not is_safe_item(detail, group=False):
+        return "这个作品是 R18/擦边内容，发不了。可以推荐给 ta 别的全年龄作品。"
     title = detail.get("title") or "(无标题)"
     author = detail.get("userName") or ""
     pages = detail.get("pageCount") or 1

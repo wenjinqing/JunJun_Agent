@@ -201,11 +201,12 @@ class TestSetu:
         setu._last_use.clear()
         monkeypatch.setattr(setu, "_cookie", lambda: "PHPSESSID=1_x")
 
-        async def _pick(tags, ratio, square, exclude_ai, num):
+        async def _pick(tags, ratio, square, exclude_ai, num, group):
             assert tags == ["白丝"]  # 裸词传到了搜索层
+            assert group is True
             return ["111", "222"]
 
-        async def _urls(iid):
+        async def _urls(iid, group):
             return f"「作品{iid}」by 作者", [f"http://x/{iid}.jpg"]
 
         async def _b64(urls):
@@ -214,13 +215,13 @@ class TestSetu:
         monkeypatch.setattr(setu, "_pick_from_tags", _pick)
         monkeypatch.setattr(setu, "_illust_image_urls", _urls)
         monkeypatch.setattr(setu, "images_to_b64", _b64)
-        await setu.setu_cmd(_ctx("/setu 白丝"))
+        await setu.setu_cmd(_ctx("/setu 2 白丝"))
         segs = _fake_gateway[0].segments
         assert [s.type for s in segs].count("image") == 2
         assert all(s.data.startswith("base64://") for s in segs if s.type == "image")
         assert any("作者" in (s.data or "") for s in segs if s.type == "text")
         # 冷却内第二次 -> 拒绝
-        result = await setu.setu_cmd(_ctx("/setu 白丝"))
+        result = await setu.setu_cmd(_ctx("/setu 2 白丝"))
         assert "秒后" in result
         setu._last_use.clear()
 
