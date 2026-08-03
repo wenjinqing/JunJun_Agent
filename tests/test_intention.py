@@ -246,3 +246,66 @@ class TestGenerators:
                           processed_plain_text="聊天", bot_id="1")
         assert itm.spawn_scheduled_checks() == 1
         assert itm.spawn_scheduled_checks() == 0  # 今天排过了
+
+
+class TestUserSideControl:
+    """P7-4：「别烦我」/安静 -> 24h（或持久）无主动消息。"""
+
+    def test_mute_unmute_cycle(self, env):
+        itm.mute_chat("qq:1:group", hours=24)
+        assert itm.chat_muted("qq:1:group") is True
+        assert itm.chat_muted("qq:2:group") is False  # 按会话隔离
+        itm.unmute_chat("qq:1:group")
+        assert itm.chat_muted("qq:1:group") is False
+
+    def test_persistent_mute(self, env):
+        itm.mute_chat("qq:1:group", hours=0)  # /安静：持久
+        assert itm.chat_muted("qq:1:group") is True
+
+    def test_expired_mute_auto_lifts(self, env, monkeypatch):
+        itm.mute_chat("qq:1:group", hours=1)
+        # 拨快时间：mute 记录过期后自动解除
+        st = itm._load_state()
+        st["mute"]["qq:1:group"] = time.time() - 10
+        itm._save_state(st)
+        assert itm.chat_muted("qq:1:group") is False
+
+    def test_muted_blocks_evaluate(self, env):
+        """验收：静音后意向不过闸（24h 无主动消息）。"""
+        _spawn()
+        _age(4)
+        itm.mute_chat("qq:1:group", hours=24)
+        ok, reason = itm.evaluate(m.Intention.get())
+        assert not ok and reason == "chat_muted"
+
+    def test_detect_mute_request(self, env):
+        assert itm.detect_mute_request("别烦我")
+        assert itm.detect_mute_request("你安静点行不行")
+        assert not itm.detect_mute_request("今晚吃啥")
+        assert not itm.detect_mute_request("")
+
+    @pytest.mark.asyncio
+    async def test_quiet_lively_commands(self, env):
+        from junjun_skills.builtin.capability_skills import quiet_cmd, lively_cmd
+        from types import SimpleNamespace
+        ctx = SimpleNamespace(args="", session=SimpleNamespace(chat_id="qq:1:group"),
+                              meta=SimpleNamespace(user_id="111", nickname="甲"))
+        out = await quiet_cmd(ctx)
+        assert "安静" in out and itm.chat_muted("qq:1:group") is True
+        out = await lively_cmd(ctx)
+        assert "主动" in out and itm.chat_muted("qq:1:group") is False
+
+    def test_proactive_respects_mute(self, env):
+        """旧主动搭话系统也吃同一个静音（「别烦我」语义覆盖所有主动消息）。"""
+        from junjun_agent.loop.proactive import proactive_manager
+        from types import SimpleNamespace
+        cfg_mod.global_config.raw["proactive_chat"] = {
+            "enable": True, "enable_in_private": True, "min_idle_minutes": 0}
+        session = SimpleNamespace(chat_id="qq:1:private", is_group=False,
+                                  platform="qq", user_id="111", group_id=None,
+                                  memory=SimpleNamespace(entries=[1]),
+                                  last_active_ts=time.time() - 99999)
+        itm.mute_chat("qq:1:private", hours=24)
+        assert proactive_manager.eligible(session) is False
+        itm.unmute_chat("qq:1:private")
+        assert proactive_manager.eligible(session) is True
