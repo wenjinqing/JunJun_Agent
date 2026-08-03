@@ -518,6 +518,14 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> tuple:
             parts.append(vb)
     except Exception:
         pass
+    # 抖音视频理解：群里最近分享的抖音摘要（douyin 插件后台「看懂」）
+    try:
+        from junjun_skills.plugins.douyin import content as _dy_content
+        db = _dy_content.render_recent_block(session.chat_id)
+        if db:
+            parts.append(db)
+    except Exception:
+        pass
     # 订阅感知：本会话生效中的订阅（重启后 Agent 依然知道自己在盯梢）
     try:
         from junjun_skills.plugins.subscription.tools import subscriptions_block

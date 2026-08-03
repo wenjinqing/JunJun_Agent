@@ -246,6 +246,10 @@ max_frames = 4     # 抽帧上限（每帧一次 VLM 调用）
 enable_understand = true   # 拦截器命中后后台「看懂」视频 + 摘要注入会话上下文
 subtitle_max_chars = 8000  # 字幕全文截断（长视频防综述输入爆炸）
 
+# ---------- 抖音内容理解（第一方 SSR 解析：文案/作者/BGM/互动数据，无第三方解析站） ----------
+[douyin]
+enable_understand = true   # 拦截器命中后后台「看懂」+ 摘要注入会话上下文
+
 # ---------- 认真看视频（video_watch job：下载 -> ASR 转写 -> 关键帧 -> 观后报告） ----------
 [video_watch]
 max_duration = 1800        # 能看的视频时长上限（秒，30 分钟）
