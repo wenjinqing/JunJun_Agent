@@ -224,6 +224,22 @@ class Intention(BaseModel):
     fired_at = FloatField(default=0.0)
 
 
+class SkillPatch(BaseModel):
+    """技能补丁（P8-2 Memento 思路，基座冻结）：从工具失败复盘出的 prompt
+    补丁，注入对应工具 description 后缀。版本化 + 可回滚 + 定期合并防膨胀。
+    门控：candidate 必须经管理员启用（人工即单测门控的审查环），
+    pytest 回放保证注入链路与 source_case 完备。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    tool = CharField(index=True)       # 目标工具名
+    patch = TextField()                # 注入 description 后缀的补丁文本
+    source_case = TextField(default="")  # 依据的失败模式摘要（无此不许激活）
+    version = IntegerField(default=1)
+    status = CharField(index=True, default="candidate")  # candidate/active/rolled_back/merged
+    created_at = FloatField(default=time.time)
+    updated_at = FloatField(default=time.time)
+
+
 class AsyncJob(BaseModel):
     """异步任务：接单->后台跑->主动汇报的持久化队列（重启可恢复，区别见 tasks.py 注释）。"""
     id = AutoField()
@@ -263,7 +279,7 @@ class Subscription(BaseModel):
 
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
               OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity,
-              UserSceneProfile, Intention]
+              UserSceneProfile, Intention, SkillPatch]
 
 
 def init_database() -> None:

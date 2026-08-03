@@ -185,6 +185,10 @@ def register_default_tasks() -> None:
         from junjun_agent.loop.intention import intention_tick
         await intention_tick()
 
+    async def patch_review():
+        from junjun_skills.patches import review_tick
+        await review_tick()
+
     from junjun_core.config import get_global_config
     raw = get_global_config().raw
     interval = int(raw.get("reminder", {}).get("check_interval_seconds", 60))
@@ -210,3 +214,4 @@ def register_default_tasks() -> None:
     scheduler.add(ScheduledTask("identity_distill", identity, interval=3600))
     scheduler.add(ScheduledTask("scene_profile", scene_profile, interval=2 * 3600))
     scheduler.add(ScheduledTask("intention", intention, interval=600))
+    scheduler.add(ScheduledTask("patch_review", patch_review, interval=3600))
