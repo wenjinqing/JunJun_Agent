@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger
-from junjun_skills.registry import get_tools, load_builtin
+from junjun_skills.registry import get_tools, load_builtin, intent_groups
 from junjun_skills.builtin.do_not_reply import SILENCE_TOOL_NAME
 from junjun_agent.loop.plan_tracker import (
     PlanMiddleware, detect_complexity, make_plan, set_plan, reset_plan,
@@ -35,15 +35,9 @@ def _called_silence_tool(messages: list) -> bool:
     return False
 
 
-# 意图自检规则：强意图词 -> 必须真正调用的工具（顺序敏感，先长后短，
-# 「取消订阅」含「订阅」，必须先匹配）
-_INTENT_RULES = [
-    (("取消订阅", "别盯", "退订", "不用盯"), "unsubscribe"),
-    (("盯", "订阅", "更新了告诉", "出新了告诉", "出新叫我"), "subscribe_updates"),
-    (("提醒我", "记得提醒", "到点叫", "到时候叫"), "set_reminder"),
-    # 调研/报告类必须派后台深度研究（当场埋头做会堵会话队列几十秒，对方干等）
-    (("调研", "深研", "深度研究", "研究报告", "整理一份报告"), "deep_research"),
-]
+# 意图自检规则：强意图词 -> 必须真正调用的工具。元数据与注册表 INTENT 层
+# 挂载共用单一数据源（顺序敏感，先长后短，「取消订阅」含「订阅」必须先匹配）。
+_INTENT_RULES = [(kws, primary) for kws, _group, primary in intent_groups() if primary]
 
 _NUDGE_PROMPT = (
     "（系统追问）对方的请求包含明确的「{intent}」意图，必须调用 {tool} 工具"
@@ -64,10 +58,12 @@ def _called_tool_names(messages: list) -> set:
 
 
 def _intent_nudge(latest_text: str, result_messages: list, available: set):
-    """强意图命中但对应工具没调 -> 返回系统追问文本（最多一条），否则 None。
+    """强意图命中但对应工具没调 -> (系统追问文本, 是否需全绑补救)，否则 None。
 
     背景：弱模型常把「帮我盯着xxx」当成记忆任务只调 save_memory 或纯口头
     答应——动作没生效用户却以为办好了。给它一次补救轮比换贵模型便宜。
+    工具被掩码裁掉（漏绑）时 full_bind=True：补救轮用全量工具重建 agent
+    （P5-2 兜底——2026-08-01 实战：模型被追问一个没绑定的工具，如实答「没有」）。
     """
     text = (latest_text or "").strip()
     if not text:
@@ -77,10 +73,9 @@ def _intent_nudge(latest_text: str, result_messages: list, available: set):
         if any(kw in text for kw in keywords):
             if tool_name in called:
                 return None            # 已正确调用
-            if tool_name not in available:
-                return None            # 工具被掩码裁掉，追问也调不了（掩码层的问题）
             intent = next(kw for kw in keywords if kw in text)
-            return _NUDGE_PROMPT.format(intent=intent, tool=tool_name)
+            return (_NUDGE_PROMPT.format(intent=intent, tool=tool_name),
+                    tool_name not in available)
     return None
 
 
@@ -114,7 +109,7 @@ class JunJunAgent:
             model = get_chat_model("agent")
         self._model = model  # 留引用：会话淘汰时关闭 httpx 连接池（防泄漏）
 
-    def _build_agent(self):
+    def _build_agent(self, full: bool = False):
         """每轮重建 agent 图：工具集按「当前」会话话题实时掩码。
 
         曾经只在 __init__ 绑一次——那时 memory 是空的，关键词钉不住任何工具，
@@ -123,8 +118,11 @@ class JunJunAgent:
         没绑定的工具（2026-08-01 实战 trace：模型如实回答「没有这个工具」）。
         重建成本是毫秒级图编译，相对秒级 LLM 调用可忽略；顺便让话题变化
         后掩码真正生效（设计本意就是按轮动态）。
+        full=True：漏绑补救轮用全量工具（意图自检发现目标工具被裁掉时，
+        P5-2 兜底）。
         """
-        return create_agent(model=self._model, tools=get_tools(self.session),
+        tools = get_tools() if full else get_tools(self.session)
+        return create_agent(model=self._model, tools=tools,
                             middleware=[PlanMiddleware()])
 
     async def aclose(self) -> None:
@@ -256,13 +254,16 @@ class JunJunAgent:
         if bool(cfg.raw.get("agent", {}).get("intent_retry", True)):
             try:
                 available = {t.name for t in get_tools(self.session)}
-                nudge = _intent_nudge(latest_text, messages, available)
+                nudge_info = _intent_nudge(latest_text, messages, available)
             except Exception:
-                nudge = None
-            if nudge:
-                logger.info(f"[{self.session.chat_id}] 意图自检：追问补调工具 [trace={trace_id}]")
+                nudge_info = None
+            if nudge_info:
+                nudge, full_bind = nudge_info
+                logger.info(f"[{self.session.chat_id}] 意图自检：追问补调工具"
+                            f"{'（全绑补救）' if full_bind else ''} [trace={trace_id}]")
                 try:
-                    retry = await agent.ainvoke(
+                    retry_agent = self._build_agent(full=True) if full_bind else agent
+                    retry = await retry_agent.ainvoke(
                         {"messages": messages + [HumanMessage(content=nudge)]},
                         config={
                             "callbacks": callbacks or [],

@@ -500,11 +500,12 @@ class TestRobustness:
         assert ja._SAMPLE_RATE == 16000
 
     def test_qzone_tools_in_core(self):
-        """空间 = 第三场景：send_feed/read_feed 进 CORE 永不掩码。"""
+        """空间 = 第三场景：send_feed/read_feed 有话题关键词钉住（P5-2 后 CORE
+        瘦身到 ≤8，空间工具改走 TOPIC 层——聊到「说说/空间/qzone」即挂载）。"""
         from junjun_skills import registry
-        src = open(registry.__file__, encoding="utf-8").read()
-        core_block = src[src.index("CORE = {"):src.index("}", src.index("CORE = {"))]
-        assert '"send_feed"' in core_block and '"read_feed"' in core_block
+        for name in ("send_feed", "read_feed", "delete_feed"):
+            assert name in registry._TOPIC_KEYWORDS
+            assert registry._TOPIC_KEYWORDS[name]
 
 
 
