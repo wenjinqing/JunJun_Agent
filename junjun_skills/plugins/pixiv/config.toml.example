@@ -10,6 +10,11 @@ allow_qq_list = ["你的QQ号"]
 cooldown_seconds = 5
 # Pixiv AJAX 请求超时（秒）
 api_timeout = 30
+# 标签搜图的质量层（收藏分层 tag，免 Premium 的人気順替代）：
+# 1000users入り = 只从千收以上作品池挑；冷门标签会自动逐级放宽到 500/100/不限
+quality_tier = "1000users入り"
+# 随机发图的收藏数门槛（质量兜底：低于该收藏数的图不发，0=不卡）
+min_bookmarks = 300
 # 抓取系列时最多下载的章节数
 max_chapters_per_series = 50
 # txt 文件保存目录（相对项目根目录，自动创建）

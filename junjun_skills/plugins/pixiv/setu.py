@@ -9,19 +9,22 @@
 - bug 修复：裸词（不带 #）以前被 _parse_args 静默丢弃 -> 永远随机图，
   现在裸词和 #标签 一视同仁都当标签
 - 带标签：popular_d 搜索（随机页 1-5）随机挑；不带标签：每日插画榜随机挑
-- R18 写死过滤（mode=safe + xRestrict 双保险）；noai 过滤 aiType==2
+- R18 三层元数据过滤（2026-08-03 用户实锤 mode=safe 会漏）：
+  xRestrict==0 + R18 tag 黑名单 + 群聊 sl<=2/排行榜 sexual==0
+- 质量：随机图过收藏数门槛（config [features] min_bookmarks，默认 300）——
+  详情请求本来就要发，零额外开销；候选过采样 3 倍，被门槛刷掉自动换下一张
 """
 
 import random
 import time
-import urllib.parse
 
 from junjun_agent.commands import register_command
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 
-from .client import (_cookie, _fetch_json, _fetch_raw, BASE_URL,
-                     images_to_b64, pximg_proxy)
+from .client import (_cookie, _fetch_json, _fetch_raw, _min_bookmarks,
+                     BASE_URL, has_r18_tag, images_to_b64, is_safe_item,
+                     pximg_proxy, quality_tiers, search_artworks)
 
 logger = get_logger("plugin.pixiv.setu")
 
@@ -55,13 +58,10 @@ def _parse_args(args: str) -> dict:
             "square": square, "exclude_ai": exclude_ai}
 
 
-def _ok_item(item: dict, exclude_ai: bool, square: bool) -> bool:
-    """过滤：R18 / AI（可选）/ 方图（可选）。"""
-    try:
-        if int(item.get("xRestrict") or 0) >= 1:
-            return False
-    except (TypeError, ValueError):
-        pass
+def _ok_item(item: dict, exclude_ai: bool, square: bool, group: bool) -> bool:
+    """过滤：R18（xRestrict+tag 黑名单+群聊 sl）/ AI（可选）/ 方图（可选）。"""
+    if not is_safe_item(item, group):
+        return False
     if exclude_ai:
         try:
             if int(item.get("aiType") or 1) == 2:
@@ -76,47 +76,80 @@ def _ok_item(item: dict, exclude_ai: bool, square: bool) -> bool:
 
 
 async def _pick_from_tags(tags: list, ratio: str, square: bool,
-                          exclude_ai: bool, num: int) -> list:
-    """带标签：popular_d 搜索随机页，随机挑 num 个作品 id。"""
+                          exclude_ai: bool, num: int, group: bool) -> list:
+    """带标签：收藏分层池随机页挑候选 id（3 倍过采样，给收藏门槛留余量）。
+
+    免会员质量方案（popular_d 是 Premium 限定，非会员静默降级最新优先）：
+    关键词 + 「1000users入り」收藏分层 tag 搜索，按层级逐级放宽兜底。
+    """
     kw = " ".join(tags)
-    enc = urllib.parse.quote(kw)
-    page = random.randint(1, 5)
-    url = (BASE_URL + f"/ajax/search/artworks/{enc}?word={enc}"
-           f"&order=popular_d&mode=safe&p={page}&s_mode=s_tag"
-           + (f"&ratio={ratio}" if ratio else ""))
-    body = await _fetch_json(url, BASE_URL + "/tags/")
-    if body.get("error"):
-        return []
-    data = (body.get("illustManga") or {}).get("data") or []
-    picks = [d for d in data if _ok_item(d, exclude_ai, square)]
-    random.shuffle(picks)
-    return [str(d.get("id")) for d in picks[:num] if d.get("id")]
+    for t in quality_tiers():
+        data = await search_artworks(f"{kw} {t}".strip(),
+                                     random.randint(1, 5), ratio)
+        picks = [d for d in data if _ok_item(d, exclude_ai, square, group)]
+        if picks:
+            random.shuffle(picks)
+            return [str(d.get("id")) for d in picks[:num * 3] if d.get("id")]
+    return []
 
 
-async def _pick_from_ranking(square: bool, exclude_ai: bool, num: int) -> list:
-    """不带标签：每日插画榜随机挑 num 个作品 id。"""
+def _ranking_sexual(content: dict) -> int:
+    """ranking 条目的露骨等级：illust_content_type 是 dict（{"sexual": 0|1|2}），
+    兼容旧整型形态（0=全年龄 1=R18）。"""
+    ict = content.get("illust_content_type") or 0
+    try:
+        return int(ict.get("sexual") or 0) if isinstance(ict, dict) else int(ict)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _pick_from_ranking(square: bool, exclude_ai: bool, num: int,
+                             group: bool) -> list:
+    """不带标签：每日插画榜随机挑候选 id（3 倍过采样）。
+
+    群聊 sexual==0 才收（sexual=1 的轻度擦边在群里也是雷区，2026-08-03 用户定）。
+    """
     body = await _fetch_raw(BASE_URL + "/ranking.php?mode=daily&content=illust&p=1&format=json",
                             BASE_URL + "/ranking.php")
     if body.get("error"):
         return []
     contents = body.get("contents") or []
-    items = [{"xRestrict": c.get("illust_content_type", 0),
-              "width": c.get("width"), "height": c.get("height"),
-              "id": c.get("illust_id"), "aiType": 1} for c in contents]
-    # ranking 的 illust_content_type: 0=全年龄 1=R18 2=??——只收 0
-    picks = [d for d in items if (d.get("xRestrict") or 0) == 0
-             and (not square or (d["width"] and d["height"]
-                                 and 0.8 <= d["width"] / d["height"] <= 1.25))]
+    ceiling = 1 if group else 2  # sexual < ceiling
+    picks = []
+    for c in contents:
+        if _ranking_sexual(c) >= ceiling or has_r18_tag(c):
+            continue
+        w, h = c.get("width") or 0, c.get("height") or 0
+        if square and (not w or not h or not (0.8 <= w / h <= 1.25)):
+            continue
+        if exclude_ai:
+            try:
+                if int(c.get("ai_illust") or 0) == 1:
+                    continue
+            except (TypeError, ValueError):
+                pass
+        if c.get("illust_id"):
+            picks.append(str(c["illust_id"]))
     random.shuffle(picks)
-    return [str(d["id"]) for d in picks[:num] if d.get("id")]
+    return picks[:num * 3]
 
 
-async def _illust_image_urls(illust_id: str) -> tuple:
-    """作品 -> (标题作者说明, [图片 URL 列表])（regular 尺寸，代理改写）。"""
+async def _illust_image_urls(illust_id: str, group: bool) -> tuple:
+    """作品 -> (标题作者说明, [图片 URL 列表])（regular 尺寸，代理改写）。
+
+    详情层终检：R18（xRestrict+tag）+ 收藏数门槛（质量兜底，搭既有请求的便车）。
+    """
     body = await _fetch_json(BASE_URL + f"/ajax/illust/{illust_id}",
                              BASE_URL + f"/artworks/{illust_id}")
     if body.get("error"):
         return "", []
+    if not is_safe_item(body, group):
+        return "", []
+    try:
+        if int(body.get("bookmarkCount") or 0) < _min_bookmarks():
+            return "", []
+    except (TypeError, ValueError):
+        pass
     title = body.get("title") or ""
     author = body.get("userName") or ""
     urls = (body.get("urls") or {}).get("regular")
@@ -135,27 +168,44 @@ async def setu_cmd(ctx):
         return _NO_COOKIE
 
     req = _parse_args(ctx.args)
-    if req["tags"]:
-        ids = await _pick_from_tags(req["tags"], req["ratio"], req["square"],
-                                    req["exclude_ai"], req["num"])
-    else:
-        ids = await _pick_from_ranking(req["square"], req["exclude_ai"], req["num"])
-    if not ids:
-        kw = " ".join(req["tags"])
-        return (f"没找到符合要求的图，换个标签试试？" if kw
-                else "图库请求失败了，稍后再试试吧。")
+    group = bool(ctx.session.is_group)
 
     _last_use[chat_id] = now
-    segs = [ReplySegment(type="text", data="看吧！涩批！")] if ctx.session.is_group else []
-    sent_info = []
-    for iid in ids:
-        info, urls = await _illust_image_urls(iid)
-        if info:
-            sent_info.append(info)
-        # NapCat 拉不到图床（被墙无代理），本侧代下转 base64
-        segs += [ReplySegment(type="image", data=b) for b in await images_to_b64(urls)]
-    if len(segs) <= (1 if ctx.session.is_group else 0):
-        return "图拿到了但下载失败了（图床得走代理），稍后再试试吧。"
+    segs = [ReplySegment(type="text", data="看吧！涩批！")] if group else []
+    sent_info, sent, saw_candidate = [], 0, False
+    # popular_d 是「近期人气」不是全时期——某些标签整页都是低收藏新作，
+    # 门槛会全刷掉，最多换 3 个随机页重试（排行榜库存足，单发即可）
+    for _attempt in range(3 if req["tags"] else 1):
+        if req["tags"]:
+            ids = await _pick_from_tags(req["tags"], req["ratio"], req["square"],
+                                        req["exclude_ai"], req["num"], group)
+        else:
+            ids = await _pick_from_ranking(req["square"], req["exclude_ai"],
+                                           req["num"], group)
+        for iid in ids:
+            saw_candidate = True
+            if sent >= req["num"]:
+                break
+            info, urls = await _illust_image_urls(iid, group)
+            if not urls:
+                continue  # 详情层被刷（安全/收藏门槛），换下一个候选
+            # NapCat 拉不到图床（被墙无代理），本侧代下转 base64
+            b64s = await images_to_b64(urls)
+            if not b64s:
+                continue
+            if info:
+                sent_info.append(info)
+            segs += [ReplySegment(type="image", data=b) for b in b64s]
+            sent += 1
+        if sent >= req["num"]:
+            break
+    if sent == 0:
+        kw = " ".join(req["tags"])
+        if not saw_candidate:
+            return (f"没找到符合要求的图，换个标签试试？" if kw
+                    else "图库请求失败了，稍后再试试吧。")
+        return (f"「{kw}」挑了几页都没过收藏门槛的图，换个热门点的标签？"
+                if kw else "挑到的图都没过收藏门槛（丑图过滤），再试一次？")
     if sent_info:
         segs.append(ReplySegment(type="text", data="\n".join(sent_info)))
     await ctx.send(segs)

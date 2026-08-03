@@ -82,7 +82,9 @@ class TestSearch:
                 _illust_item(3, "也好图"),
             ]}}
 
-        monkeypatch.setattr(illust, "_fetch_json", _fetch)
+        # 搜索走 client.search_artworks（收藏分层池），patch client 层
+        import junjun_skills.plugins.pixiv.client as pixiv_client
+        monkeypatch.setattr(pixiv_client, "_fetch_json", _fetch)
         out = await illust.pixiv_cmd(_ctx("/pixiv search 原神"))
         assert "好图" in out and "也好图" in out
         assert "R18图" not in out
@@ -93,7 +95,8 @@ class TestSearch:
         async def _fetch(url, referer=""):
             return {"illustManga": {"data": []}}
 
-        monkeypatch.setattr(illust, "_fetch_json", _fetch)
+        import junjun_skills.plugins.pixiv.client as pixiv_client
+        monkeypatch.setattr(pixiv_client, "_fetch_json", _fetch)
         out = await illust.pixiv_cmd(_ctx("/pixiv search 不存在的东西"))
         assert "没找到" in out
 
@@ -123,7 +126,7 @@ class TestRank:
             assert "mode=weekly" in url and "content=manga" in url
             return {"contents": [
                 {"rank": 1, "illust_id": 21, "title": "漫画王", "user_name": "y",
-                 "illust_content_type": {"sexual": 1}, "illust_page_count": "4",
+                 "illust_content_type": {"sexual": 0}, "illust_page_count": "4",
                  "width": 1000, "height": 800},
             ]}
 
@@ -288,6 +291,79 @@ class TestImageB64:
         import curl_cffi.requests as cc
         monkeypatch.setattr(cc, "AsyncSession", lambda **kw: _Sess())
         assert await client.fetch_image_b64("http://x/missing.jpg") == ""
+
+
+class TestSafetyFilter:
+    """R18 三层元数据过滤（2026-08-03 用户实锤 mode=safe 漏擦边/R18）。"""
+
+    def test_is_safe_item_matrix(self):
+        from junjun_skills.plugins.pixiv.client import is_safe_item
+        ok = {"xRestrict": 0, "sl": 2, "tags": ["原神"]}
+        assert is_safe_item(ok, group=True) and is_safe_item(ok, group=False)
+        # xRestrict 双保险
+        assert not is_safe_item({"xRestrict": 2}, group=True)
+        assert not is_safe_item({"xRestrict": 2}, group=False)
+        # tag 黑名单（私聊也拦）
+        assert not is_safe_item({"xRestrict": 0, "tags": ["R-18"]}, group=False)
+        # 详情形态 tags（dict 包 list[dict]）
+        detail = {"xRestrict": 0, "tags": {"tags": [{"tag": "NSFW"}]}}
+        assert not is_safe_item(detail, group=False)
+        # sl 擦边：群聊拦、私聊放
+        border = {"xRestrict": 0, "sl": 4, "tags": []}
+        assert not is_safe_item(border, group=True)
+        assert is_safe_item(border, group=False)
+
+    @pytest.mark.asyncio
+    async def test_ranking_group_drops_sexual_1(self, monkeypatch):
+        async def _raw(url, referer=""):
+            return {"contents": [
+                {"rank": 1, "illust_id": 11, "title": "健全", "user_name": "a",
+                 "illust_content_type": {"sexual": 0}, "illust_page_count": "1"},
+                {"rank": 2, "illust_id": 12, "title": "轻度擦边", "user_name": "b",
+                 "illust_content_type": {"sexual": 1}, "illust_page_count": "1"},
+                {"rank": 3, "illust_id": 13, "title": "露骨", "user_name": "c",
+                 "illust_content_type": {"sexual": 2}, "illust_page_count": "1"},
+            ]}
+
+        monkeypatch.setattr(illust, "_fetch_raw", _raw)
+        group_items = await illust._ranking("daily", "illust", group=True)
+        assert [i["title"] for i in group_items] == ["健全"]  # 群聊只留 sexual==0
+        priv_items = await illust._ranking("daily", "illust", group=False)
+        assert [i["title"] for i in priv_items] == ["健全", "轻度擦边"]
+
+    @pytest.mark.asyncio
+    async def test_setu_bookmark_threshold(self, monkeypatch):
+        """收藏门槛：低于 min_bookmarks 的图被详情层刷掉。"""
+        from junjun_skills.plugins.pixiv import setu
+        monkeypatch.setattr(setu, "_min_bookmarks", lambda: 300)
+
+        async def _fetch(url, referer=""):
+            return {"title": "冷门图", "userName": "新人", "xRestrict": 0,
+                    "bookmarkCount": 12, "urls": {"regular": "http://x/a.jpg"}}
+
+        monkeypatch.setattr(setu, "_fetch_json", _fetch)
+        assert await setu._illust_image_urls("1", group=False) == ("", [])
+
+        async def _fetch_hot(url, referer=""):
+            return {"title": "热门图", "userName": "大佬", "xRestrict": 0,
+                    "bookmarkCount": 5000, "urls": {"regular": "http://x/b.jpg"}}
+
+        monkeypatch.setattr(setu, "_fetch_json", _fetch_hot)
+        info, urls = await setu._illust_image_urls("2", group=False)
+        assert "热门图" in info and urls
+
+    @pytest.mark.asyncio
+    async def test_setu_detail_r18_tag_dropped(self, monkeypatch):
+        from junjun_skills.plugins.pixiv import setu
+        monkeypatch.setattr(setu, "_min_bookmarks", lambda: 0)
+
+        async def _fetch(url, referer=""):
+            return {"title": "漏网", "userName": "x", "xRestrict": 0,
+                    "bookmarkCount": 999, "tags": {"tags": [{"tag": "R-18"}]},
+                    "urls": {"regular": "http://x/c.jpg"}}
+
+        monkeypatch.setattr(setu, "_fetch_json", _fetch)
+        assert await setu._illust_image_urls("3", group=False) == ("", [])
 
 
 class TestCooldown:

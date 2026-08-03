@@ -57,7 +57,10 @@ class TestRegistration:
 class TestSearchIllusts:
     @pytest.mark.asyncio
     async def test_recommend_list_with_links(self, monkeypatch):
-        async def _search(keyword):
+        seen = {}
+
+        async def _search(keyword, group=True):
+            seen["group"] = group
             assert keyword == "原神"
             return [{"kind": "illust", "id": "111", "title": "好图",
                      "author": "画师甲", "pages": 3},
@@ -69,10 +72,11 @@ class TestSearchIllusts:
         out = await at.pixiv_search_illusts.ainvoke({"keyword": "原神"})
         assert "好图" in out and "画师甲" in out and "3页" in out
         assert "artworks/111" in out and "artworks/222" in out
+        assert seen["group"] is True  # 群聊场景透传严格过滤
 
     @pytest.mark.asyncio
     async def test_empty_result(self, monkeypatch):
-        async def _search(keyword):
+        async def _search(keyword, group=True):
             return []
 
         monkeypatch.setattr(illust, "_search_illusts", _search)

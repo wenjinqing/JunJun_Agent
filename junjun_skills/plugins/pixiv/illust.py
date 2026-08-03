@@ -22,7 +22,6 @@
 
 import re
 import time
-import urllib.parse
 
 from junjun_agent.commands import register_command
 from junjun_core.contracts import ReplySegment
@@ -30,8 +29,9 @@ from junjun_core.observability import get_logger
 
 from . import novel as novel_mod
 from .client import (_cookie, _fetch_json, _fetch_raw, BASE_URL,
-                     images_to_b64, pximg_proxy)
-from .setu import _ok_item
+                     has_r18_tag, images_to_b64, is_safe_item, pximg_proxy,
+                     quality_tiers, search_artworks)
+from .setu import _ok_item, _ranking_sexual
 
 logger = get_logger("plugin.pixiv.illust")
 
@@ -62,30 +62,31 @@ _RANK_CONTENTS = {"illust", "manga"}
 
 # ------------------------------------------------------------------ 抓取
 
-async def _search_illusts(keyword: str) -> list:
-    """插画搜索 -> 统一条目列表（kind=illust）。"""
-    enc = urllib.parse.quote(keyword.strip())
-    url = (BASE_URL + f"/ajax/search/artworks/{enc}?word={enc}"
-           "&order=popular_d&mode=safe&p=1&s_mode=s_tag")
-    body = await _fetch_json(url, BASE_URL + "/tags/")
-    if body.get("error"):
-        return []
-    data = (body.get("illustManga") or {}).get("data") or []
-    items = []
-    for d in data:
-        if not _ok_item(d, exclude_ai=False, square=False):
-            continue
-        items.append({"kind": "illust", "id": str(d.get("id") or ""),
-                      "title": d.get("title") or "(无标题)",
-                      "author": d.get("userName") or "",
-                      "pages": d.get("pageCount") or 1})
-        if len(items) >= _LIST_MAX:
-            break
-    return items
+async def _search_illusts(keyword: str, group: bool = True) -> list:
+    """插画搜索 -> 统一条目列表（kind=illust）。group=True 走群聊严格过滤。
+
+    收藏分层池（免会员质量方案，见 client.quality_tiers）：先搜高收藏层，
+    没结果逐级放宽到裸关键词——推荐列表质量接近人気順。
+    """
+    for tier in quality_tiers():
+        data = await search_artworks(f"{keyword.strip()} {tier}".strip(), 1)
+        items = []
+        for d in data:
+            if not _ok_item(d, exclude_ai=False, square=False, group=group):
+                continue
+            items.append({"kind": "illust", "id": str(d.get("id") or ""),
+                          "title": d.get("title") or "(无标题)",
+                          "author": d.get("userName") or "",
+                          "pages": d.get("pageCount") or 1})
+            if len(items) >= _LIST_MAX:
+                break
+        if items:
+            return items
+    return []
 
 
-async def _ranking(mode: str, content: str) -> list:
-    """排行榜 -> 统一条目列表。"""
+async def _ranking(mode: str, content: str, group: bool = True) -> list:
+    """排行榜 -> 统一条目列表。群聊 sexual==0 才收（轻度擦边也是雷区）。"""
     body = await _fetch_raw(
         BASE_URL + f"/ranking.php?mode={mode}&content={content}&p=1&format=json",
         BASE_URL + "/ranking.php")
@@ -97,12 +98,8 @@ async def _ranking(mode: str, content: str) -> list:
         # （{"sexual": 0|1|2, ...}），不是 0/1 整型——按整型比较会把
         # 所有条目滤掉（排行榜永远空）。sexual>=2 才算 R18 级；
         # 兼容旧的整型形态（0=全年龄 / 1=R18）。
-        ict = c.get("illust_content_type") or 0
-        try:
-            sexual = int(ict.get("sexual") or 0) if isinstance(ict, dict) else int(ict)
-        except (TypeError, ValueError):
-            sexual = 0
-        if sexual >= 2:
+        ceiling = 1 if group else 2  # sexual < ceiling
+        if _ranking_sexual(c) >= ceiling or has_r18_tag(c):
             continue
         items.append({"kind": "illust", "id": str(c.get("illust_id") or ""),
                       "title": c.get("title") or "(无标题)",
@@ -114,7 +111,7 @@ async def _ranking(mode: str, content: str) -> list:
     return items
 
 
-async def _follow_latest() -> list:
+async def _follow_latest(group: bool = True) -> list:
     """关注画师新图 -> 统一条目列表。"""
     body = await _fetch_json(BASE_URL + "/ajax/follow_latest/illust?p=1&mode=all",
                              BASE_URL + "/bookmark_new_illust.php")
@@ -123,7 +120,7 @@ async def _follow_latest() -> list:
     ill = ((body.get("thumbnails") or {}).get("illust")) or []
     items = []
     for d in ill:
-        if not _ok_item(d, exclude_ai=False, square=False):
+        if not _ok_item(d, exclude_ai=False, square=False, group=group):
             continue
         items.append({"kind": "illust", "id": str(d.get("id") or ""),
                       "title": d.get("title") or "(无标题)",
@@ -134,7 +131,7 @@ async def _follow_latest() -> list:
     return items
 
 
-async def _author_items(uid: str) -> tuple:
+async def _author_items(uid: str, group: bool = True) -> tuple:
     """作者作品合并（插画 + 小说）。返回 (author_name, items)。"""
     profile = await _fetch_json(BASE_URL + f"/ajax/user/{uid}/profile/all",
                                 BASE_URL + f"/users/{uid}")
@@ -158,7 +155,7 @@ async def _author_items(uid: str) -> tuple:
             w = wmap.get(iid)
             if not w:
                 continue
-            if not _ok_item(w, exclude_ai=False, square=False):
+            if not _ok_item(w, exclude_ai=False, square=False, group=group):
                 continue
             author = author or (w.get("userName") or "")
             items.append({"kind": "illust", "id": iid,
@@ -212,11 +209,8 @@ async def _send_illust(ctx, illust_id: str) -> str:
         return f"获取作品失败：{detail['error']}"
     title = detail.get("title") or "(无标题)"
     author = detail.get("userName") or ""
-    try:
-        if int(detail.get("xRestrict") or 0) >= 1:
-            return "这个作品是 R18，发不了哦。"
-    except (TypeError, ValueError):
-        pass
+    if not is_safe_item(detail, bool(ctx.session.is_group)):
+        return "这个作品是 R18/擦边内容，发不了哦。"
     pages = detail.get("pageCount") or 1
     urls = await _illust_page_urls(illust_id, pages)
     if not urls:
@@ -281,7 +275,7 @@ async def pixiv_cmd(ctx):
     if sub in ("search", "搜索", "搜"):
         if not rest:
             return "关键词呢？用法：/pixiv search <关键词>"
-        items = await _search_illusts(rest)
+        items = await _search_illusts(rest, bool(ctx.session.is_group))
         if not items:
             return f"没找到和「{rest}」相关的插画，换个关键词试试？"
         _list_cache[user_id] = {"ts": now, "items": items}
@@ -298,7 +292,7 @@ async def pixiv_cmd(ctx):
     if sub in ("rank", "排行", "榜"):
         mode = next((t for t in tokens[1:] if t.lower() in _RANK_MODES), "daily")
         content = next((t for t in tokens[1:] if t.lower() in _RANK_CONTENTS), "illust")
-        items = await _ranking(mode, content)
+        items = await _ranking(mode, content, bool(ctx.session.is_group))
         if not items:
             return "排行榜拉取失败了，稍后再试试吧。"
         _list_cache[user_id] = {"ts": now, "items": items}
@@ -311,7 +305,7 @@ async def pixiv_cmd(ctx):
         uid = novel_mod._extract_user_id(rest)
         if not uid:
             return "没识别到作者，用法：/pixiv author <作者URL或UID>"
-        author, items = await _author_items(uid)
+        author, items = await _author_items(uid, bool(ctx.session.is_group))
         if not items:
             return f"这位作者（uid:{uid}）没有公开作品（或主页不可见）。"
         _list_cache[user_id] = {"ts": now, "items": items}
@@ -319,7 +313,7 @@ async def pixiv_cmd(ctx):
                             "输入 /pixiv dl <编号> 发图（插画）或下载（小说，私聊）")
 
     if sub in ("new", "新图", "关注"):
-        items = await _follow_latest()
+        items = await _follow_latest(bool(ctx.session.is_group))
         if not items:
             return "关注的画师最近没新图（或登录态失效了）。"
         _list_cache[user_id] = {"ts": now, "items": items}
