@@ -229,6 +229,7 @@ config/bot_config.toml
 
 # pixiv_novel 插件真实配置（含 QQ 白名单，不入库）
 junjun_skills/plugins/pixiv_novel/config.toml
+junjun_skills/plugins/pixiv/config.toml
 
 # NapCat 看门狗（含本机路径/QQ号，本地专用）
 scripts/napcat_watchdog.py

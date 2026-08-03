@@ -1,8 +1,8 @@
-# pixiv_novel 插件配置模板（入库模板；复制为 config.toml 后填真实值）
+# pixiv 插件配置模板（入库模板；复制为 config.toml 后填真实值）
 # Cookie 不放这里：从 .env 的 PIXIV_COOKIE 读取（PHPSESSID=xxx 或整串 cookie 均可）
 
 [auth]
-# 允许使用 /novel 命令的 QQ 白名单；留空列表 = 所有人可用（不推荐，涉及内容管控）
+# 允许使用 /novel 与 /pixiv 命令的 QQ 白名单；留空列表 = 所有人可用（不推荐，涉及内容管控）
 allow_qq_list = ["你的QQ号"]
 
 [features]

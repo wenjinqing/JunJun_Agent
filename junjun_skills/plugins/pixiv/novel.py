@@ -1,53 +1,39 @@
-"""pixiv_novel 插件：Pixiv 小说抓取。
+"""Pixiv 小说（从 pixiv_novel 插件迁入，逻辑不变，共享层改用 client.py）。
 
-仅命令执行（不注册任何 LLM 工具，TOOLS=[]）：/novel 命令族全部走命令总线。
-仅提取旧插件的 API/协议知识用 httpx 重写：
-- AJAX 端点：
-    /ajax/novel/{id}                单篇元信息 + 正文（body.content 即全文）
-    /ajax/novel/series/{id}         系列元信息
-    /ajax/novel/series_content/{id}?limit=&last_order=&order_by=asc   系列分页章节
-    /ajax/search/novels/{kw}?word=&order=date_d&mode=all&p=&type=all&s_mode=s_tag&r18=off
-- 请求头：User-Agent + Referer + Cookie（PIXIV_COOKIE env）+ x-user-id（从 PHPSESSID 提取）
-- 系列合成：逐章抓目录+正文，合成一个 UTF-8 txt（章节分隔），NapCat 私聊发文件
+命令：/novel <系列URL或ID> | read <单篇> | list <系列> | search <关键词> |
+      author <作者URL或UID> | dl <编号>
+- AJAX 端点：/ajax/novel/{id} /ajax/novel/series/{id}
+  /ajax/novel/series_content/{id} /ajax/search/novels/{kw} /ajax/user/{uid}/profile/*
+- 系列合成：逐章抓目录+正文，合成一个 UTF-8 txt，NapCat 私聊发文件
 
 管控（对齐旧插件语义）：
 - 仅私聊可用（小说文件涉及内容风险，群聊统一拒绝）
-- 插件内部 config.toml 的 [auth] allow_qq_list 白名单，非白名单友好拒绝（不上报 security）
+- 插件内部 config.toml 的 [auth] allow_qq_list 白名单，非白名单友好拒绝
 - 每用户冷却 cooldown_seconds（内存 dict）
-
-配置：插件目录 config.toml（真实值，git 忽略）/ config.toml.example（入库模板）。
 """
 
 import asyncio
-import os
 import re
 import time
-import tomllib
 import urllib.parse
 from pathlib import Path
-
-import httpx
 
 from junjun_agent.commands import register_command
 from junjun_core import napcat_client
 from junjun_core.observability import get_logger
 
-logger = get_logger("plugin.pixiv_novel")
+from .client import _cfg_section, _cookie, _fetch_json, BASE_URL
+
+logger = get_logger("plugin.pixiv.novel")
 
 # ------------------------------------------------------------------ 常量
 
-_CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
-
-_BASE_URL = "https://www.pixiv.net"
-_AJAX_NOVEL = _BASE_URL + "/ajax/novel/{}"
-_AJAX_SERIES = _BASE_URL + "/ajax/novel/series/{}"
-_AJAX_SERIES_CONTENT = _BASE_URL + "/ajax/novel/series_content/{}"
-_AJAX_SEARCH = _BASE_URL + "/ajax/search/novels/{}"
-_AJAX_USER_PROFILE = _BASE_URL + "/ajax/user/{}/profile/all"
-_AJAX_USER_NOVELS = _BASE_URL + "/ajax/user/{}/profile/novels"
-
-_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+_AJAX_NOVEL = BASE_URL + "/ajax/novel/{}"
+_AJAX_SERIES = BASE_URL + "/ajax/novel/series/{}"
+_AJAX_SERIES_CONTENT = BASE_URL + "/ajax/novel/series_content/{}"
+_AJAX_SEARCH = BASE_URL + "/ajax/search/novels/{}"
+_AJAX_USER_PROFILE = BASE_URL + "/ajax/user/{}/profile/all"
+_AJAX_USER_NOVELS = BASE_URL + "/ajax/user/{}/profile/novels"
 
 _SERIES_PAGE_LIMIT = 30        # 系列目录单页条数（旧插件同款）
 _SEARCH_CACHE_TTL = 600        # 搜索结果缓存 10 分钟
@@ -68,7 +54,7 @@ _ILLEGAL_FILENAME_RE = re.compile(r'[\\/:*?"<>|]')
 _GROUP_REJECT = "这个命令只能在私聊用哦～"
 # 非白名单友好拒绝（功能白名单不是管理员面，不提白名单细节，不上报 security）
 _NOT_ALLOWED = "这个插件暂时没有对你开放哦～"
-_NO_COOKIE = "小说功能还没配置 Pixiv Cookie，暂时不可用（让主人在 .env 里设置 PIXIV_COOKIE 吧）。"
+_NO_COOKIE = "P 站功能还没配置 Pixiv Cookie，暂时不可用（让主人在 .env 里设置 PIXIV_COOKIE 吧）。"
 
 _HELP = """Pixiv 小说下载用法：
 /novel <系列URL或ID> - 抓取整个系列，合成 txt 发文件
@@ -90,25 +76,6 @@ _last_use: dict = {}
 _search_cache: dict = {}
 
 
-# ------------------------------------------------------------------ 插件内部配置
-
-def _load_config() -> dict:
-    """读取插件目录下的 config.toml；缺失/解析失败返回 {}（不炸）。"""
-    try:
-        with open(_CONFIG_PATH, "rb") as f:
-            return tomllib.load(f)
-    except FileNotFoundError:
-        logger.warning("pixiv_novel/config.toml 不存在，使用默认值")
-        return {}
-    except Exception as e:
-        logger.warning(f"pixiv_novel/config.toml 解析失败: {type(e).__name__}: {e}")
-        return {}
-
-
-def _cfg_section(name: str) -> dict:
-    return _load_config().get(name, {}) or {}
-
-
 def _allow_qq_list() -> list:
     return [str(x) for x in (_cfg_section("auth").get("allow_qq_list") or [])]
 
@@ -118,13 +85,6 @@ def _cooldown_seconds() -> float:
         return float(_cfg_section("features").get("cooldown_seconds", 5))
     except (TypeError, ValueError):
         return 5.0
-
-
-def _api_timeout() -> float:
-    try:
-        return float(_cfg_section("features").get("api_timeout", 30))
-    except (TypeError, ValueError):
-        return 30.0
 
 
 def _max_chapters() -> int:
@@ -139,87 +99,18 @@ def _save_dir() -> Path:
     return Path(raw)
 
 
-def _proxy() -> str:
-    return str(_cfg_section("network").get("proxy", "") or "").strip()
-
-
 def _is_allowed(user_id: str) -> bool:
     """白名单校验；白名单为空时所有人可用（对齐旧插件语义）。"""
     allow = _allow_qq_list()
     return not allow or str(user_id) in allow
 
 
-def _cookie() -> str:
-    """从 env 读 Pixiv Cookie；接受 PHPSESSID=xxx / 整串 cookie / 裸 session 值。"""
-    raw = os.environ.get("PIXIV_COOKIE", "").strip()
-    if raw and "=" not in raw:
-        raw = "PHPSESSID=" + raw
-    return raw
-
-
-# ------------------------------------------------------------------ 网络层（独立 helper，便于 monkeypatch）
-
-def _headers(referer: str = "") -> dict:
-    """构造 Pixiv AJAX 请求头（UA + Referer + Cookie + x-user-id）。"""
-    headers = {
-        "User-Agent": _UA,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ja-JP,ja;q=0.9,zh-CN;q=0.8,zh;q=0.7,en;q=0.6",
-        "Referer": referer or (_BASE_URL + "/"),
-    }
-    cookie = _cookie()
-    if cookie:
-        headers["Cookie"] = cookie
-        # 从 PHPSESSID=<uid>_xxx 提取用户 id（旧插件同款）
-        m = re.search(r"PHPSESSID=(\d+)_", cookie)
-        if m:
-            headers["x-user-id"] = m.group(1)
-    return headers
-
-
-async def _fetch_json(url: str, referer: str = "") -> dict:
-    """请求 Pixiv AJAX JSON。成功返回 body 字典；任何失败返回 {"error": ...}，绝不抛异常。
-
-    2026-07-29 反爬修复：Pixiv 上了 Cloudflare TLS 指纹检测，httpx 裸请求
-    一律 403（"Just a moment..." 挑战页，带不带 cookie 都一样）。
-    改 curl_cffi Chrome 指纹伪装（实测 200）；未安装 curl_cffi 回退 httpx。
-    403/429/5xx 重试 3 次（Cloudflare 抖动常见）。
-    """
-    proxy = _proxy() or None
-    timeout = _api_timeout()
-    last_status = 0
-    for attempt in (1, 2, 3):
-        try:
-            try:
-                from curl_cffi.requests import AsyncSession
-                async with AsyncSession(impersonate="chrome", proxy=proxy) as s:
-                    resp = await s.get(url, headers=_headers(referer), timeout=timeout)
-            except ImportError:
-                async with httpx.AsyncClient(timeout=timeout, proxy=proxy) as client:
-                    resp = await client.get(url, headers=_headers(referer))
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("error"):
-                    return {"error": str(data.get("message") or "Pixiv 返回错误")}
-                return data.get("body", {}) or {}
-            last_status = resp.status_code
-            if resp.status_code not in (403, 429, 500, 502, 503):
-                break  # 4xx 确定性错误不重试
-        except Exception as e:
-            logger.warning(f"Pixiv 请求异常（第 {attempt} 次）: {type(e).__name__}: {e}")
-            last_status = 0
-        if attempt < 3:
-            import asyncio
-            await asyncio.sleep(1.0 * attempt)
-    tip = "（Cloudflare 反爬挑战页，检查代理或稍后再试）" if last_status == 403 else ""
-    logger.warning(f"Pixiv 请求失败 HTTP {last_status}{tip}: {url}")
-    return {"error": f"HTTP {last_status}" if last_status else "网络请求失败"}
-
+# ------------------------------------------------------------------ 抓取
 
 async def _fetch_novel_full(novel_id: str) -> dict:
     """单篇元信息 + 正文（正文直接在 body.content，无需单独 content 接口）。"""
     url = _AJAX_NOVEL.format(novel_id)
-    referer = _BASE_URL + "/novel/show.php?id=" + str(novel_id)
+    referer = BASE_URL + "/novel/show.php?id=" + str(novel_id)
     meta = await _fetch_json(url, referer)
     if meta.get("error"):
         return meta
@@ -229,7 +120,7 @@ async def _fetch_novel_full(novel_id: str) -> dict:
 
 async def _fetch_series_meta(series_id: str) -> dict:
     url = _AJAX_SERIES.format(series_id)
-    return await _fetch_json(url, _BASE_URL + "/novel/series/" + str(series_id))
+    return await _fetch_json(url, BASE_URL + "/novel/series/" + str(series_id))
 
 
 async def _fetch_series_all_novels(series_id: str, max_count: int) -> tuple:
@@ -248,7 +139,7 @@ async def _fetch_series_all_novels(series_id: str, max_count: int) -> tuple:
     while len(novels) < cap:
         url = (_AJAX_SERIES_CONTENT.format(series_id)
                + f"?limit={_SERIES_PAGE_LIMIT}&last_order={last_order}&order_by=asc")
-        batch = await _fetch_json(url, _BASE_URL + "/novel/series/" + str(series_id))
+        batch = await _fetch_json(url, BASE_URL + "/novel/series/" + str(series_id))
         if batch.get("error"):
             return series_meta, novels
         page = batch.get("page") or {}
@@ -280,7 +171,7 @@ async def _search_novels(keyword: str, page: int = 1) -> dict:
     enc = urllib.parse.quote(kw)
     url = (_AJAX_SEARCH.format(enc) + f"?word={enc}&order=date_d&mode=all&p={page}"
            + "&type=all&s_mode=s_tag&r18=off")
-    return await _fetch_json(url, _BASE_URL + "/tags/")
+    return await _fetch_json(url, BASE_URL + "/tags/")
 
 
 async def _fetch_author_works(uid: str) -> dict:
@@ -292,7 +183,7 @@ async def _fetch_author_works(uid: str) -> dict:
     """
     uid = str(uid)
     profile = await _fetch_json(_AJAX_USER_PROFILE.format(uid),
-                                _BASE_URL + f"/users/{uid}")
+                                BASE_URL + f"/users/{uid}")
     if profile.get("error"):
         return profile
 
@@ -320,7 +211,7 @@ async def _fetch_author_works(uid: str) -> dict:
     if ids:
         query = "&".join(f"ids[]={i}" for i in ids)
         works_resp = await _fetch_json(_AJAX_USER_NOVELS.format(uid) + "?" + query,
-                                       _BASE_URL + f"/users/{uid}/novels")
+                                       BASE_URL + f"/users/{uid}/novels")
         if works_resp.get("error"):
             return works_resp
         works = works_resp.get("works") or {}
@@ -410,7 +301,7 @@ def _extract_search_item(item: dict) -> dict:
 def _format_chapter(idx: int, total: int, title: str, nid: str, text: str) -> str:
     """单章 txt 片段。"""
     lines = [f"第 {idx}/{total} 章  {title}", "-" * 40,
-             f"链接: {_BASE_URL}/novel/show.php?id={nid}", "-" * 40, "", text]
+             f"链接: {BASE_URL}/novel/show.php?id={nid}", "-" * 40, "", text]
     return "\n".join(lines)
 
 
@@ -422,7 +313,7 @@ def _build_series_txt(title: str, author: str, sid: str, chapters: list,
         f"作者: {author}" if author else "作者: (未知)",
         f"系列ID: {sid}",
         f"章节数: {success}/{total}",
-        f"来源: {_BASE_URL}/novel/series/{sid}",
+        f"来源: {BASE_URL}/novel/series/{sid}",
         f"抓取时间: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         "=" * 60,
     ])
@@ -435,7 +326,7 @@ def _build_single_txt(title: str, author: str, nid: str, text: str) -> str:
         "=" * 60, f"  {title}", "=" * 60,
         f"作者: {author}" if author else "作者: (未知)",
         f"小说ID: {nid}",
-        f"来源: {_BASE_URL}/novel/show.php?id={nid}",
+        f"来源: {BASE_URL}/novel/show.php?id={nid}",
         f"抓取时间: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         "=" * 60,
     ])
@@ -630,14 +521,14 @@ async def _do_list(series_id: str) -> str:
              f"共 {len(novels)} 章，目录："]
     for i, item in enumerate(novels, 1):
         lines.append(f"{i}. {item.get('title') or '(无标题)'} (id:{item.get('id')})")
-    lines.append(f"链接: {_BASE_URL}/novel/series/{sid}")
+    lines.append(f"链接: {BASE_URL}/novel/series/{sid}")
     lines.append("（仅列出目录，下载全文用 /novel <系列ID>）")
     return "\n".join(lines)
 
 
 # ------------------------------------------------------------------ 命令入口
 
-@register_command("novel", plugin="pixiv_novel",
+@register_command("novel", plugin="pixiv",
                   description="Pixiv 小说下载：/novel <系列ID> | read <单篇ID> | list <系列ID> | search <关键词> | author <作者URL或UID> | dl <编号>")
 async def novel_cmd(ctx):
     """/novel 命令总入口：群聊拒绝 -> 白名单 -> 帮助 -> Cookie -> 冷却 -> 子命令。"""
@@ -709,7 +600,3 @@ async def novel_cmd(ctx):
     if kind == "novel":
         return await _do_single(ctx, nid)
     return await _do_series(ctx, nid)
-
-
-# 仅命令执行，不注册任何 LLM 工具
-TOOLS = []

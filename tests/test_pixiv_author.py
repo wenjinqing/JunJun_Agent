@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from junjun_skills.plugins.pixiv_novel import tools
+from junjun_skills.plugins.pixiv import novel as tools
 
 
 def _profile_payload():

@@ -2,7 +2,7 @@
 
 import pytest
 
-from junjun_skills.plugins.pixiv_novel import tools
+from junjun_skills.plugins.pixiv import client as tools
 
 
 class _Resp:

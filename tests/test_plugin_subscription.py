@@ -45,7 +45,7 @@ def _mk_sub(sub, **kw):
 
 def _stub_pixiv(monkeypatch, works: dict, author="某作者", called=None, r18_ids=()):
     """桩 pixiv._fetch_json：profile/all 返回小说 ID 表，profile/novels 返回标题表。"""
-    from junjun_skills.plugins.pixiv_novel import tools as pixiv
+    from junjun_skills.plugins.pixiv import novel as pixiv
 
     async def _fetch(url, referer=""):
         if called is not None:
