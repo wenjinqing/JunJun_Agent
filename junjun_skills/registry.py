@@ -413,6 +413,7 @@ _TOPIC_KEYWORDS = {
     "search_knowledge": ["知识", "资料", "设定", "文档"],
     "send_emoji": ["表情", "emoji", "图"],
     "query_jargon": ["黑话", "梗", "什么意思", "缩写"],
+    "query_chat_history": ["上次", "之前说过", "那天说", "聊天记录", "翻一下", "搜一下记录"],
     "manage_user_profile": ["记住", "我叫", "我喜欢", "我的"],
     "set_reminder": ["提醒", "到点", "到时候叫"],
     "list_reminders": ["提醒"],
