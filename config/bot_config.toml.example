@@ -43,6 +43,7 @@ interest = "二次元（追番/漫画/游戏），刷视频看段子，夜宵零
 talk_value = 0.90              # 群聊非 @ 消息进入决策的概率 0~1（0=只回 @，1=条条都看；调低省 token）
 mentioned_bot_reply = true     # 被 @ 或直呼名字时必回（旁路 L2 语义门直达主 Agent）
 max_context_size = 80          # 短期记忆窗口条数（超出从最旧丢弃）
+background_context_lines = 30  # 实际注入模型的背景消息行数上限（≤max_context_size；调低省 token，调高看得更长）
 reply_message_quote = "llm"    # 引用回复模式："llm"=由 Agent 决定是否引用原消息 / "never"=永不引用
 enable_timing_gate = false     # Timing Gate：连发聚拢开关（true 时先等几秒聚拢再决策）
 timing_gate_wait_seconds = 5.0 # Timing Gate 等待秒数（窗口内只评估最新一条，上面开启才生效）
