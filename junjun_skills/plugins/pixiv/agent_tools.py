@@ -80,11 +80,12 @@ async def pixiv_search_illusts(keyword: str) -> str:
 @tool
 async def pixiv_search_novels(keyword: str) -> str:
     """搜索 P 站小说并给出推荐清单（标题/作者/类型/链接）。对方想找小说看、
-    让推荐某 CP 某题材的文时使用。群聊私聊都能推荐；下载 txt 只能在私聊
+    让推荐某 CP 某题材的文时使用；也支持作者名——作品搜不到时会自动反查作者
+    列出 ta 的小说。群聊私聊都能推荐；下载 txt 只能在私聊
     （用 pixiv_download_novel），群聊里给链接让对方自己看。
 
     Args:
-        keyword: 搜索关键词（作品名/CP/题材 tag，日文更准）
+        keyword: 搜索关键词（作品名/CP/题材 tag/作者名，日文更准）
     """
     if not _cookie():
         return _NO_COOKIE
@@ -92,9 +93,9 @@ async def pixiv_search_novels(keyword: str) -> str:
     if result.get("error"):
         return f"搜索失败了：{result['error']}，稍后再试。"
     data_list = (result.get("novel") or {}).get("data") or []
-    if not data_list:
-        return f"没找到和「{keyword}」相关的小说，换个关键词试试。"
     _, _, kind = _chat()
+    if not data_list:
+        return await _author_novel_recommend(keyword, kind)
     items = [novel_mod._extract_search_item(it) for it in data_list[:6]]
     if kind == "group":
         items = [it for it in items if not it["r18"]]  # 群聊推荐清单不含 R18
@@ -110,6 +111,40 @@ async def pixiv_search_novels(keyword: str) -> str:
             lines.append(f"{i}. {r18}「{it['display_title']}」（单篇）by {it['author']}")
             lines.append(f"   https://www.pixiv.net/novel/show.php?id={it['id']}")
     lines.append("（群聊里发链接推荐即可；私聊里对方想要全文，用 pixiv_download_novel 下载 txt）")
+    return "\n".join(lines)
+
+
+async def _author_novel_recommend(keyword: str, kind: str) -> str:
+    """作品搜索空结果的降级：按作者名反查（Premium 限定的绕过，见
+    novel._search_user_by_name），列出作者的小说作品。"""
+    uid, uname = await novel_mod._search_user_by_name(keyword)
+    if not uid:
+        return (f"没找到和「{keyword}」相关的小说，按作者名也没查到。"
+                f"（按作者名搜索是 P 站会员限定，我绕路用搜索引擎查的，"
+                f"可能不全——有作者主页链接或 UID 的话直接给我更准）")
+    works = await novel_mod._fetch_author_works(uid)
+    if works.get("error") or (not works["series"] and not works["novels"]):
+        return f"找到了作者「{uname}」（uid:{uid}），但没抓到 ta 的公开小说。"
+    group = kind == "group"
+    series = [s for s in works["series"] if not group or not s["r18"]]
+    novels = [n for n in works["novels"] if not group or not n["r18"]]
+    if not series and not novels:
+        return f"作者「{uname}」的小说全是 R18，群里不推荐发出来，私聊我给你找。"
+    author = works["author"] or uname
+    lines = [f"找到了作者「{author}」，ta 的小说作品："]
+    i = 0
+    for s in series[:5]:
+        i += 1
+        r18 = "【R18】" if s["r18"] else ""
+        lines.append(f"{i}. {r18}「{s['title']}」（系列）")
+        lines.append(f"   https://www.pixiv.net/novel/series/{s['series_id']}")
+    for n in novels[:5]:
+        i += 1
+        r18 = "【R18】" if n["r18"] else ""
+        lines.append(f"{i}. {r18}「{n['title']}」（单篇）")
+        lines.append(f"   https://www.pixiv.net/novel/show.php?id={n['id']}")
+    lines.append("（群聊里发链接推荐即可；私聊里想要全文用 pixiv_download_novel，"
+                 "系列传 \"series <系列ID>\"）")
     return "\n".join(lines)
 
 
