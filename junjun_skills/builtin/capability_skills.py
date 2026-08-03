@@ -213,6 +213,29 @@ async def what_do_you_remember_cmd(ctx) -> str:
     return "\n".join(lines)
 
 
+@register_command("identity", aliases=["自我"], plugin="builtin",
+                  description="看她从经历里长出来的自我认知")
+async def identity_cmd(ctx) -> str:
+    """/自我：查看她蒸馏出的自我认知条目（Identity Core）。"""
+    from junjun_express import identity as id_mod
+    rows = id_mod.get_entries(limit=20)
+    if not rows:
+        return "她还没攒够日记蒸馏自我认知（每周一次，至少 3 篇新日记）。"
+    lines = ["她的自我认知（从日记里长出来的）："]
+    for r in rows:
+        lines.append(f"- {r.category}：{r.content}")
+    return "\n".join(lines)
+
+
+@register_command("reset_identity", aliases=["重置自我"], plugin="builtin",
+                  admin_only=True, description="归档全部自我认知条目（重新长）")
+async def reset_identity_cmd(ctx) -> str:
+    """/重置自我（管理员）：自我认知长歪时的兜底——全部归档重来。"""
+    from junjun_express import identity as id_mod
+    n = id_mod.reset_identity()
+    return f"已归档 {n} 条自我认知，之后随日记蒸馏重新长。"
+
+
 @register_command("diary", aliases=["日记"], plugin="builtin",
                   admin_only=True, description="看日记（/diary now = 立即写今天的）")
 async def diary_cmd(ctx) -> str:
