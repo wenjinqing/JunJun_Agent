@@ -1,11 +1,12 @@
-"""pixiv_novel 插件测试：白名单/群聊/冷却、搜索缓存、dl、系列合成 txt、无 Cookie 降级。"""
+"""pixiv 插件小说模块测试：白名单/群聊/冷却、搜索缓存、dl、系列合成 txt、无 Cookie 降级。"""
 
 import re
 from types import SimpleNamespace
 
 import pytest
 
-import junjun_skills.plugins.pixiv_novel.tools as tools
+import junjun_skills.plugins.pixiv.client as pixiv_client
+import junjun_skills.plugins.pixiv.novel as tools
 from junjun_agent import commands
 
 
@@ -70,7 +71,7 @@ def _env(monkeypatch, tmp_path):
         f'save_dir = "{save_dir.as_posix()}"\n\n'
         '[network]\nproxy = ""\n',
         encoding="utf-8")
-    monkeypatch.setattr(tools, "_CONFIG_PATH", cfg)
+    monkeypatch.setattr(pixiv_client, "_CONFIG_PATH", cfg)
     monkeypatch.setenv("PIXIV_COOKIE", "PHPSESSID=111_abcd")
     monkeypatch.setattr(tools, "_CHAPTER_DELAY", 0)
     return save_dir

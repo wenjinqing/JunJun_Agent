@@ -1,4 +1,4 @@
-"""W1 插件测试：wife / news / lolicon_setu / image_viewer。"""
+"""W1 插件测试：wife / news / pixiv setu / image_viewer。"""
 
 from types import SimpleNamespace
 
@@ -175,40 +175,68 @@ class TestNews:
 
 
 class TestSetu:
+    """setu 官方 API 版（2026-08-03 从 Lolicon 迁移）：裸词修复 + 发图 + 冷却。"""
+
     def test_parse_args(self):
-        import junjun_skills.plugins.lolicon_setu.tools as setu
+        from junjun_skills.plugins.pixiv import setu
         r = setu._parse_args("3 #萝莉 #白丝 横图 noai")
-        assert r == {"num": 3, "tags": ["萝莉", "白丝"], "aspect": "pc", "exclude_ai": True}
+        assert r == {"num": 3, "tags": ["萝莉", "白丝"], "ratio": "-0.5",
+                     "square": False, "exclude_ai": True}
         assert setu._parse_args("")["num"] == 1
         assert setu._parse_args("99")["num"] == 5  # 上限
+        assert setu._parse_args("2 竖图 方图") == {
+            "num": 2, "tags": [], "ratio": "0.5", "square": True, "exclude_ai": False}
+
+    def test_parse_args_bare_words_are_tags(self):
+        """bug 修复：裸词（不带 #）以前被静默丢弃 -> 永远随机图。"""
+        from junjun_skills.plugins.pixiv import setu
+        r = setu._parse_args("白丝 原神")
+        assert r["tags"] == ["白丝", "原神"]
+        r = setu._parse_args("2 白丝 #黑丝 noai")
+        assert r["tags"] == ["白丝", "黑丝"] and r["num"] == 2
 
     @pytest.mark.asyncio
     async def test_send_and_cooldown(self, _fake_gateway, monkeypatch):
-        import junjun_skills.plugins.lolicon_setu.tools as setu
+        from junjun_skills.plugins.pixiv import setu
         setu._last_use.clear()
+        monkeypatch.setattr(setu, "_cookie", lambda: "PHPSESSID=1_x")
 
-        async def _fetch(**kw):
-            return ["http://x/1.jpg", "http://x/2.jpg"]
+        async def _pick(tags, ratio, square, exclude_ai, num):
+            assert tags == ["白丝"]  # 裸词传到了搜索层
+            return ["111", "222"]
 
-        monkeypatch.setattr(setu, "_fetch_setu", _fetch)
-        await setu.setu_cmd(_ctx("/setu 2"))
+        async def _urls(iid):
+            return f"「作品{iid}」by 作者", [f"http://x/{iid}.jpg"]
+
+        monkeypatch.setattr(setu, "_pick_from_tags", _pick)
+        monkeypatch.setattr(setu, "_illust_image_urls", _urls)
+        await setu.setu_cmd(_ctx("/setu 白丝"))
         segs = _fake_gateway[0].segments
         assert [s.type for s in segs].count("image") == 2
+        assert any("作者" in (s.data or "") for s in segs if s.type == "text")
         # 冷却内第二次 -> 拒绝
-        ctx = _ctx("/setu 2")
-        result = await setu.setu_cmd(ctx)
+        result = await setu.setu_cmd(_ctx("/setu 白丝"))
         assert "秒后" in result
+        setu._last_use.clear()
 
     @pytest.mark.asyncio
     async def test_empty_result(self, monkeypatch):
-        import junjun_skills.plugins.lolicon_setu.tools as setu
+        from junjun_skills.plugins.pixiv import setu
         setu._last_use.clear()
+        monkeypatch.setattr(setu, "_cookie", lambda: "PHPSESSID=1_x")
 
-        async def _fetch(**kw):
+        async def _pick(*a):
             return []
 
-        monkeypatch.setattr(setu, "_fetch_setu", _fetch)
-        assert "没有找到" in await setu.setu_cmd(_ctx("/setu"))
+        monkeypatch.setattr(setu, "_pick_from_tags", _pick)
+        assert "没找到" in await setu.setu_cmd(_ctx("/setu 白丝"))
+        setu._last_use.clear()
+
+    @pytest.mark.asyncio
+    async def test_no_cookie(self, monkeypatch):
+        from junjun_skills.plugins.pixiv import setu
+        monkeypatch.setattr(setu, "_cookie", lambda: "")
+        assert "Cookie" in await setu.setu_cmd(_ctx("/setu"))
 
 
 class TestImageViewer:

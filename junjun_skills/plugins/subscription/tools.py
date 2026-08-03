@@ -48,9 +48,9 @@ async def _fetch_pixiv_latest(uid: str, limit: int = 15) -> tuple:
     结果恒为空，订阅永远静默。盯更新必须盯全部新章节。
     返回 ([{id,title}] 最新在前, author)。
     """
-    from junjun_skills.plugins.pixiv_novel import tools as pixiv
+    from junjun_skills.plugins.pixiv import novel as pixiv
     profile = await pixiv._fetch_json(pixiv._AJAX_USER_PROFILE.format(uid),
-                                      pixiv._BASE_URL + f"/users/{uid}")
+                                      pixiv.BASE_URL + f"/users/{uid}")
     if not profile or profile.get("error"):
         return [], ""
     novels_map = profile.get("novels") or {}
@@ -62,7 +62,7 @@ async def _fetch_pixiv_latest(uid: str, limit: int = 15) -> tuple:
     query = "&".join(f"ids[]={i}" for i in ids)
     works_resp = await pixiv._fetch_json(
         pixiv._AJAX_USER_NOVELS.format(uid) + "?" + query,
-        pixiv._BASE_URL + f"/users/{uid}/novels")
+        pixiv.BASE_URL + f"/users/{uid}/novels")
     works = (works_resp or {}).get("works") or {}
     author, items = "", []
     for nid in ids:
