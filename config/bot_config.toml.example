@@ -355,4 +355,6 @@ intent_retry = true   # 意图自检：强意图词（盯着/订阅/提醒我…
 echo_guard = true     # 复读自检：回复与近期自身发言撞车时追问重说，仍撞车则沉默（防上下文自污染）
 # echo_similarity = 0.85   # 撞车相似度阈值（0~1，越低越敏感）
 # echo_recent_k = 8        # 与最近几条自身发言比对
+# echo_catchphrase_count = 3   # 口头禅检测：词组在 N 条不同发言里出现过即进黑名单
+# echo_catchphrase_k = 30      # 口头禅挖掘窗口（比整句撞车宽——口头禅是跨消息模式）
 

@@ -11,8 +11,34 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage
 
-from junjun_memory.echo import is_echo, normalize_echo
+from junjun_memory.echo import extract_catchphrases, is_echo, normalize_echo
 from junjun_memory.short_term import ShortTermMemory
+
+
+class TestExtractCatchphrases:
+    def test_phrase_in_three_messages_flagged(self):
+        texts = ["来，姐姐疼你", "今天姐姐疼你一次", "姐姐疼你还不乐意？"]
+        cps = extract_catchphrases(texts, min_count=3)
+        assert any("姐姐疼你" in cp for cp in cps)
+
+    def test_pure_laughter_exempt(self):
+        texts = ["哈哈哈哈笑死", "哈哈哈哈哈哈", "笑死哈哈哈哈"]
+        assert extract_catchphrases(texts, min_count=3) == []
+
+    def test_varied_speech_no_catchphrase(self):
+        texts = ["今晚吃什么呢", "昨天睡得好吗", "新番更新了", "这把排位稳了"]
+        assert extract_catchphrases(texts, min_count=3) == []
+
+    def test_below_threshold_not_flagged(self):
+        texts = ["姐姐疼你", "姐姐疼你哦"]
+        assert extract_catchphrases(texts, min_count=3) == []
+
+    def test_keeps_longest_representative(self):
+        texts = ["姐姐疼你一次", "姐姐疼你两次", "姐姐疼你三次"]
+        cps = extract_catchphrases(texts, min_count=3)
+        # 「姐姐疼你」被更长的「姐姐疼你一/两/三」包含时只留代表，不重复上报
+        assert len([cp for cp in cps if "姐姐疼你" in cp]) >= 1
+        assert all(not (a != b and a in b) for a in cps for b in cps)
 
 
 class TestNormalize:
@@ -145,6 +171,24 @@ class TestAgentEchoGuard:
         agent = agent_mod.JunJunAgent(session, model=object())
         out = await agent.process("甲: @君君 说话", addressed=True)
         assert out == "杂鱼就是杂鱼！"
+
+    @pytest.mark.asyncio
+    async def test_catchphrase_triggers_retry(self, monkeypatch):
+        """口头禅命中：整句不与任何历史相似，但嵌着近期用滥的词组 -> 追问。"""
+        import junjun_agent.agent as agent_mod
+
+        # 新稿和任何一条历史整句都不像，但都嵌着「姐姐疼你」
+        scripted = _ScriptedAgent(["姐姐疼你别哭", "我在呢，慢慢说"])
+        monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
+                            lambda self, full=False: scripted)
+        session = _session_with_memory()
+        session.memory.add_bot("来，姐姐疼你")
+        session.memory.add_bot("今天姐姐疼你一次")
+        session.memory.add_bot("姐姐疼你还不乐意？")
+        agent = agent_mod.JunJunAgent(session, model=object())
+        out = await agent.process("甲: 我心情不好")
+        assert out == "我在呢，慢慢说"
+        assert scripted.calls == 2
 
     @pytest.mark.asyncio
     async def test_fresh_text_no_retry(self, monkeypatch):
