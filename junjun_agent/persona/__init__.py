@@ -26,6 +26,26 @@ def strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub("", text)
 
 
+def persona_brief() -> str:
+    """一句话人设速写（供 utils 单发调用注入，2026-08-04 全面排查）。
+
+    主 system prompt 之外的单发调用（提醒/观后感/主动消息/任务汇报/意向生成）
+    由 utils 模型独立完成——它看不到主 prompt，只写「用你的口吻」就是通用
+    AI 腔，和群里的君君两个声音。统一从这里取速写：
+    [personality] persona_brief 配置 > personality 首行 > 中性风格兜底。
+    换人设只改一处，全场景声口一致。
+    """
+    p = get_global_config().raw.get("personality", {})
+    brief = (p.get("persona_brief") or "").strip()
+    if brief:
+        return brief
+    for line in (p.get("personality") or "").splitlines():
+        line = line.strip()
+        if line:
+            return line[:80]
+    return "中文口语短句，像跟熟人发微信"
+
+
 def match_keyword_rules(text: str) -> List[str]:
     """keyword_reaction 命中规则 -> reaction 提示列表（对齐原 [keyword_reaction]）。"""
     rules = get_global_config().raw.get("keyword_reaction", {}).get("keyword_rules", []) or []

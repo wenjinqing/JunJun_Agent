@@ -14,8 +14,9 @@ from junjun_core.observability import get_logger
 
 logger = get_logger("loop.reminder")
 
-_REMIND_PROMPT = """你是"{nickname}"。到点提醒群友了。提醒内容：「{content}」（提醒对象 QQ:{user_id}）。
-用你的人设语气写一句自然的提醒消息（直接输出消息本身，简短口语化，可以带点调侃）。"""
+_REMIND_PROMPT = """你是"{nickname}"——{persona_brief}
+到点提醒群友了。提醒内容：「{content}」（提醒对象 QQ:{user_id}）。
+用你的风格写一句自然的提醒消息（直接输出消息本身，简短口语化，可以带点调侃）。"""
 
 
 def create_reminder(chat_id: str, user_id: str, content: str,
@@ -76,10 +77,12 @@ async def _fire(task) -> None:
     try:
         from junjun_llm import get_chat_model, get_callbacks
         from langchain_core.messages import HumanMessage
+        from junjun_agent.persona import persona_brief
         model = get_chat_model("utils")
         resp = await model.ainvoke(
             [HumanMessage(content=_REMIND_PROMPT.format(
-                nickname=cfg.bot.nickname, content=task.content, user_id=task.user_id))],
+                nickname=cfg.bot.nickname, persona_brief=persona_brief(),
+                content=task.content, user_id=task.user_id))],
             config={"callbacks": get_callbacks()},
         )
         out = str(resp.content).strip()

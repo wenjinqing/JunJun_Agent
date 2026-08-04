@@ -33,7 +33,7 @@ _EMO_KEYWORDS = ("焦虑", "失眠", "崩溃", "考砸", "分手", "抑郁", "�
 # 各 kind 最小沉淀时间（分钟）：emo 关心不能当场追问，像真人隔几小时再问
 _MIN_AGE = {"care_followup": 180, "diary_plan": 60, "morning_greet": 0}
 
-_GEN_PROMPT = """你是「{nickname}」（群里的猫娘老婆：中文口语短句、禁止 emoji、可轻微毒舌但底色温柔）。
+_GEN_PROMPT = """你是「{nickname}」——{persona_brief}
 你现在想主动做一件事：{motive}
 {recent_block}
 写一两句自然的话去实现这个想法（像真人忽然想起来的语气，别解释你在做什么，
@@ -382,10 +382,11 @@ async def _generate_and_judge(it, *, gen_model=None, judge_model=None) -> str:
         gen_model = gen_model or get_chat_model("agent")
         judge_model = judge_model or get_chat_model("utils")
     from langchain_core.messages import HumanMessage
+    from junjun_agent.persona import persona_brief
     cfg = get_global_config()
     recent = _recent_context(it.chat_id)
     resp = await gen_model.ainvoke([HumanMessage(content=_GEN_PROMPT.format(
-        nickname=cfg.bot.nickname, motive=it.motive,
+        nickname=cfg.bot.nickname, persona_brief=persona_brief(), motive=it.motive,
         recent_block=recent))])
     message = str(resp.content).strip().splitlines()[0][:200]
     if not message:

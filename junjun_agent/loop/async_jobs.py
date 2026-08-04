@@ -249,7 +249,8 @@ def list_for_chat(chat_id: str, limit: int = 10) -> str:
 
 # ---------------------------------------------------------------- 完成汇报
 
-_LEAD_PROMPT = """你是"{nickname}"。你之前帮对方跑的后台任务{outcome}：「{title}」（委托人 QQ:{user_id}）。
+_LEAD_PROMPT = """你是"{nickname}"——{persona_brief}
+你之前帮对方跑的后台任务{outcome}：「{title}」（委托人 QQ:{user_id}）。
 用你的口吻写一句简短开场白：开头带 @{user_id} 提醒对方，说明任务{outcome}。
 结果正文会跟在这句后面发，不要在开场白里复述结果内容。只输出这一句，口语化。"""
 
@@ -262,11 +263,12 @@ async def _persona_lead(job, ok: bool) -> str:
     try:
         from junjun_llm import get_chat_model, get_callbacks
         from langchain_core.messages import HumanMessage
+        from junjun_agent.persona import persona_brief
         cfg = get_global_config()
         resp = await get_chat_model("utils").ainvoke(
             [HumanMessage(content=_LEAD_PROMPT.format(
-                nickname=cfg.bot.nickname, outcome=outcome,
-                title=job.title, user_id=job.user_id))],
+                nickname=cfg.bot.nickname, persona_brief=persona_brief(),
+                outcome=outcome, title=job.title, user_id=job.user_id))],
             config={"callbacks": get_callbacks()})
         out = str(resp.content).strip()
         if out:
