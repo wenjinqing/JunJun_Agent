@@ -168,12 +168,22 @@ def list_background_tasks() -> str:
 
 @tool
 def cancel_background_task(job_id: str) -> str:
-    """取消后台任务。用户说「那个任务别做了/取消任务」时使用。
+    """取消后台任务。用户说「那个任务别做了/别画了/取消任务」时使用。
 
     Args:
-        job_id: 任务编号（list_background_tasks 可查）
+        job_id: 任务编号（list_background_tasks 可查）；成品类任务（画图/语音等
+                没有编号）直接传类型名，如「ai_draw」「画图」「tts」
     """
     from junjun_core.security import current_user_id
+    # 成品任务（TaskManager）没有编号，按类型名取消（「别画了」-> ai_draw）
+    from junjun_agent.tasks import task_manager, _KIND_CN
+    from junjun_skills.builtin.memory_skills import current_chat_id
+    chat_id = current_chat_id.get()
+    kind = (job_id or "").strip()
+    if chat_id and (kind in _KIND_CN or kind in _KIND_CN.values()):
+        n = task_manager.cancel_for_chat(chat_id, kind)
+        if n:
+            return f"已取消进行中的{_KIND_CN.get(kind, kind)}任务。"
     return async_jobs.cancel_job(job_id, current_user_id.get())
 
 
