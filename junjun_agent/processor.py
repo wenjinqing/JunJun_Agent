@@ -102,10 +102,13 @@ def _quote_message_id(session: ChatSession, meta: InboundMeta) -> Optional[str]:
     return None
 
 
-async def _handle(session: ChatSession, meta: InboundMeta) -> None:
-    """会话队列内串行执行的核心处理。发送直接走 gateway（分条延迟）。"""
-    import uuid
-    trace_id = uuid.uuid4().hex[:12]  # 本轮决策 ID：结构化日志 + Langfuse metadata 互查
+async def _pre_decision(session: ChatSession, meta: InboundMeta) -> None:
+    """决策前段（0 token 段）：身份注入/反射器/命令总线/拦截器/复读/预热/批次记录。
+
+    会话队列合并连发消息时，被合并的消息也必须过这一段——否则斜杠命令、
+    链接拦截、图片/语音/视频预热会被静默吞掉（严厉审查 P1-7：
+    「/sub add xxx」+「你在吗」连发，命令被 drain 丢弃零日志）。
+    """
     cfg = _l1_config(session)
     frequency_control.note_message(session.chat_id)
     session.last_active_ts = time.time()  # 主动系统空闲判定
@@ -192,9 +195,11 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
             return  # 跟读本身就是本条消息的回应，不再进漏斗
 
     # ---- 中期记忆：批次记录，满批触发摘要 ----
+    # bot 自己的消息不喂摘要器——自己的话被蒸馏成「群里发生的事」固化进长期
+    # 记忆，是自我污染的第二条补给线（严厉审查 P0-3）
     from junjun_memory.summarizer import get_summarizer
     summarizer = get_summarizer()
-    if summarizer.note(session.chat_id, meta.nickname or meta.user_id or "?", meta.text):
+    if not meta.is_self and summarizer.note(session.chat_id, meta.nickname or meta.user_id or "?", meta.text):
         await summarizer.summarize(session.chat_id)
 
     # ---- 事件雷达：群消息里的未来安排自动登记（预过滤 0 token，不阻塞） ----
@@ -235,6 +240,16 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
             prewarm_videos(meta.video_urls)
         except Exception:
             pass
+
+    return
+
+
+async def _handle(session: ChatSession, meta: InboundMeta) -> None:
+    """会话队列内串行执行的核心处理。发送直接走 gateway（分条延迟）。"""
+    import uuid
+    await _pre_decision(session, meta)
+    trace_id = uuid.uuid4().hex[:12]  # 本轮决策 ID：结构化日志 + Langfuse metadata 互查
+    cfg = _l1_config(session)
 
     # ---- 决策门（0 token）：私聊直通，群聊仅 @/直呼进思考 ----
     if meta.is_self:
@@ -301,6 +316,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
             addressed=True,  # 只有 @/直呼才走到这里
             memory_block=memory_block, relation_block=relation_block,
             mood_block=mood_block, trace_id=trace_id,
+            system_prompt=_prompt_snapshot,  # 复用快照那份，不再构建第二次
         )
         # span output：回复内容或沉默标记，后台直接可见
         _span.update(output={"reply": text[:500] if text else None, "silenced": text is None})
@@ -674,10 +690,16 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
     """
     _ensure_session_ready(session)
     # 记忆与入库不排队：堆积消息也要进上下文
-    session.memory.add_user(
-        meta.text, meta.nickname,
-        user_id=meta.user_id or "", message_id=meta.message_id, at_bot=meta.at_bot,
-    )
+    if meta.is_self:
+        # bot 自己的消息（NapCat 回传）：以 bot 身份进短期记忆——以 user 身份
+        # 写入等于亲手把「自己说的话」伪装成「别人说的话」喂回模型，是自我
+        # 模仿/复读的输入侧补给线（严厉审查 P0-3）
+        session.memory.add_bot(meta.text)
+    else:
+        session.memory.add_user(
+            meta.text, meta.nickname,
+            user_id=meta.user_id or "", message_id=meta.message_id, at_bot=meta.at_bot,
+        )
     _store_inbound(session, meta)
     # 意向系统事件钩子（P7）：emo 规则预筛 -> 关心意向（0 token，
     # [intention] enable=false 时零开销直接返回）
@@ -700,5 +722,5 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
         pass
 
     from junjun_agent.funnel.session_queue import session_queues
-    session_queues.dispatch(session, meta, _handle)
+    session_queues.dispatch(session, meta, _handle, pre_handler=_pre_decision)
     return None

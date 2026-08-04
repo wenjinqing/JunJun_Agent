@@ -64,6 +64,7 @@ _STUB_RETURNS = {
     "recall_memory": "（桩）召回结果：未找到相关记忆。",
     "peek_group_chat": "（桩）该群最近聊天：大家在讨论新游戏发售。",
     "query_cross_scene_chat": "（桩）查询结果：该群最近在聊新游戏。",
+    "list_subscriptions": "（桩）当前订阅：1. [id=1] UP主影视飓风（bilibili）；2. [id=2] P站画师mignon。",
     "do_not_reply": "已沉默。",
 }
 _DEFAULT_STUB_RETURN = "（桩）操作成功。"

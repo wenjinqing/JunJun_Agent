@@ -29,9 +29,13 @@ def _timing_gate_wait() -> float:
 class SessionQueue:
     """单会话：一个 worker 协程串行消费。"""
 
-    def __init__(self, chat_id: str, handler):
+    def __init__(self, chat_id: str, handler, pre_handler=None):
         self.chat_id = chat_id
         self._handler = handler  # async (session, meta) -> None
+        # pre_handler: 决策前段（命令/拦截器/预热等 0 token 副作用）。
+        # 被合并的消息也必须过这一段——否则「/sub add xxx」+「你在吗」连发时
+        # 斜杠命令被静默吞掉零日志（严厉审查 P1-7）
+        self._pre_handler = pre_handler
         self._queue: asyncio.Queue = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
 
@@ -68,6 +72,10 @@ class SessionQueue:
                 except asyncio.QueueEmpty:
                     break
             if drained:
+                # 被合并的消息（首条 + 除最新外的 drain）先各过一遍决策前段：
+                # 命令/拦截器/预热不该因合并且丢（P1-7）
+                for m_old in [meta] + drained[:-1]:
+                    await self._run_pre(session, m_old)
                 # 最新消息替代原消息（上下文里已包含全部，只回最新一条）
                 meta = drained[-1]
                 logger.debug(f"[{self.chat_id}] 合并 {len(drained)} 条连发消息，只回最新一条")
@@ -80,6 +88,7 @@ class SessionQueue:
                     _, m2, ts2 = self._queue.get_nowait()
                     self._queue.task_done()
                     if time.time() - ts2 <= _STALE_SECONDS:
+                        await self._run_pre(session, meta)  # 被顶替的消息过前段
                         meta = m2  # 更新为最新
 
             try:
@@ -88,6 +97,15 @@ class SessionQueue:
                 logger.error(f"[{self.chat_id}] 会话处理异常: {type(e).__name__}: {e}")
             finally:
                 self._queue.task_done()
+
+    async def _run_pre(self, session, meta) -> None:
+        """对被合并的消息跑决策前段（无 pre_handler 时跳过，保持旧行为）。"""
+        if self._pre_handler is None:
+            return
+        try:
+            await self._pre_handler(session, meta)
+        except Exception as e:
+            logger.error(f"[{self.chat_id}] 合并消息前段处理异常: {type(e).__name__}: {e}")
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -103,14 +121,16 @@ class SessionQueueManager:
     def __init__(self):
         self._queues: Dict[str, SessionQueue] = {}
 
-    def dispatch(self, session, meta, handler) -> None:
+    def dispatch(self, session, meta, handler, pre_handler=None) -> None:
         q = self._queues.get(session.chat_id)
         # worker 已退出（5 分钟空闲超时）且队列空：旧条目回收重建，防只增不减
         if q is not None and q._task is not None and q._task.done() and q._queue.empty():
             q = None
         if q is None:
-            q = SessionQueue(session.chat_id, handler)
+            q = SessionQueue(session.chat_id, handler, pre_handler=pre_handler)
             self._queues[session.chat_id] = q
+        elif pre_handler is not None and q._pre_handler is None:
+            q._pre_handler = pre_handler
         q.put(session, meta)
 
     def drop(self, chat_id: str) -> None:

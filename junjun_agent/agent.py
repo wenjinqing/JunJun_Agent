@@ -95,7 +95,9 @@ def _intent_nudge(latest_text: str, result_messages: list, available: set):
     for keywords, tool_name in _INTENT_RULES:
         if any(kw in text for kw in keywords):
             if tool_name in called:
-                return None            # 已正确调用
+                continue             # 该意图组已调用——继续检查其余意图组
+                                       # （曾 return None 短路：「提醒我开会，顺便画只猫」
+                                       #  只查了第一个意图，ai_draw 没调也永不追问）
             intent = next(kw for kw in keywords if kw in text)
             return (_NUDGE_PROMPT.format(intent=intent, tool=tool_name),
                     tool_name not in available)
@@ -188,16 +190,19 @@ class JunJunAgent:
         memory_block: str = "",
         relation_block: str = "",
         trace_id: str = "",
+        system_prompt: str = "",
     ) -> Optional[str]:
         """跑一轮决策。返回回复文本；None 表示沉默。
 
         addressed: 被 @/直呼（mentioned_bot_reply 必回语义，禁用 do_not_reply）。
         trace_id: 本轮决策 ID（processor 生成），写结构化日志并进 Langfuse metadata，
                   供 WebUI 日志页与 Langfuse trace 互查。
+        system_prompt: processor 已构建好的 prompt（它要为 Langfuse 快照构建一次）——
+                  传入则复用，避免每轮构建两次且快照与实发不一致（严厉审查 P2-9）。
         """
         cfg = get_global_config()
         max_iter = int(cfg.raw.get("memory", {}).get("max_agent_iterations", 5))
-        system = build_system_prompt(
+        system = system_prompt or build_system_prompt(
             is_group=self.session.is_group,
             latest_text=latest_text,
             mood_block=mood_block,

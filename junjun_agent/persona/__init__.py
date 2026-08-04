@@ -144,7 +144,9 @@ def build_system_prompt(
     except Exception:
         pass
     if dynamic:
-        parts.append(f"<state>\n{' '.join(dynamic)}\n</state>")
+        # 换行分隔：单空格 join 会让多行块首尾粘连、块边界消失（严厉审查 P2-8）
+        state_body = "\n\n".join(dynamic)
+        parts.append(f"<state>\n{state_body}\n</state>")
 
     # 技能包索引（md skills，2026-08-04）：只放目录不占每轮 context，
     # 命中场景时模型调 use_skill 取全文——与 Claude Code skill 同一模式
