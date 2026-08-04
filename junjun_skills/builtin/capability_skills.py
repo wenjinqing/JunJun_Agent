@@ -188,7 +188,7 @@ async def forget_cmd(ctx) -> str:
     chat_id = ctx.session.chat_id
     removed = ltm.remove_where(
         lambda it: kw in it.text and it.chat_id == chat_id
-        and it.chat_id not in ("knowledge", "self:diary"))
+        and it.chat_id not in ("knowledge", "self:diary", "self:diary:private"))
     profile_removed = 0
     scene_removed = 0
     try:

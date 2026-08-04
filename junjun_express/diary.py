@@ -145,12 +145,17 @@ def _get_entry(day: str):
         (DiaryEntry.bot_id == _bot_id()) & (DiaryEntry.date == day))
 
 
-async def _index_to_memory(day: str, content: str) -> None:
-    """日记进长期记忆（self:diary 域），日常召回自然带出。"""
+async def _index_to_memory(day: str, content: str, *, private: bool = False) -> None:
+    """日记进长期记忆（self:diary 域），日常召回自然带出。
+
+    private=True（素材含私聊场景）时进 "self:diary:private" 域——
+    群聊召回域不含它，私聊内容不会经日记转述广播进群（严厉审查 P0-4）。
+    """
     try:
         from junjun_memory.long_term import get_long_term_memory
+        domain = "self:diary:private" if private else "self:diary"
         await get_long_term_memory().add(
-            f"[我的日记 {day}] {content}", chat_id="self:diary", weight=1.3, kind="diary")
+            f"[我的日记 {day}] {content}", chat_id=domain, weight=1.3, kind="diary")
     except Exception as e:
         logger.warning(f"日记写入长期记忆失败（已落库，不影响）: {e}")
 
@@ -172,11 +177,12 @@ async def write_diary(*, model=None, force: bool = False, callbacks=None) -> Opt
             model = get_chat_model("utils")
         from langchain_core.messages import HumanMessage
         from junjun_express.mood import mood_manager
+        material = _gather_material(day)
         prompt = _DIARY_PROMPT.format(
             nickname=get_global_config().bot.nickname,
             now=datetime.now().strftime("%Y-%m-%d %H:%M"),
             self_mood=mood_manager.get_self_mood() or "平静",
-            material=_gather_material(day),
+            material=material,
         )
         resp = await model.ainvoke([HumanMessage(content=prompt)],
                                    config={"callbacks": callbacks or []})
@@ -185,7 +191,7 @@ async def write_diary(*, model=None, force: bool = False, callbacks=None) -> Opt
             logger.warning("日记生成为空，跳过")
             return None
         _save_entry(day, content, mood)
-        await _index_to_memory(day, content)
+        await _index_to_memory(day, content, private="[私聊]" in material)
         if mood:
             mood_manager.set_self_mood(mood, reason="日记")
         logger.info(f"日记已写（{day}，{len(content)} 字，心情：{mood or '未标注'}）")
