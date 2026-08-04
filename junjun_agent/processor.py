@@ -615,11 +615,12 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> tuple:
                 # + 自我日记（"self:diary"，第一人称自我叙事）。
                 # 只传会话 id 时知识库永远召不回——导入的知识在日常聊天里是死功能。
                 # 含私聊素材的日记（"self:diary:private"）只在私聊会话召回——
-                # 私聊内容经日记转述进群聊是广播级泄露（严厉审查 P0-4）
+                # 私聊内容经日记转述进群聊是广播级泄露（严厉审查 P0-4）。
+                # 场景不明时按群聊处理（保守收紧，宁少召回不泄露）
                 get_long_term_memory().search(
                     query, top_k=3,
                     chat_id=((session.chat_id, "knowledge", "self:diary", "self:diary:private")
-                             if not session.is_group
+                             if not getattr(session, "is_group", True)
                              else (session.chat_id, "knowledge", "self:diary"))),
                 timeout=1.5,
             )

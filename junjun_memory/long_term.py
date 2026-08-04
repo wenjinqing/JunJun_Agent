@@ -43,6 +43,32 @@ def _chat_allowed(item_chat: str, chat_id) -> bool:
     return item_chat in chat_id
 
 
+def _effective_weight(it: "MemoryItem") -> float:
+    """时效衰减后的权重：每周 ×0.95（Ebbinghaus 式自然沉底）。
+
+    pinned 不衰减（用户显式钉住的事不该自然遗忘）；其余条目不复习就沉底，
+    被检索命中会 +0.05 复习强化（search 内）——「常用的记得牢，不用的慢慢忘」。
+    此前 weight 只增不减，「90 天+低权重」遗忘口永远不触发（严厉审查 P2-10）。
+    """
+    if it.kind == "pinned":
+        return it.weight
+    age_weeks = max(0.0, (time.time() - it.timestamp) / 604800.0)
+    return it.weight * (0.95 ** age_weeks)
+
+
+def _recall_min_score() -> float:
+    """向量召回相似度下限（[memory] recall_min_score，默认 0.55）。
+
+    曾用 0.3——bge-m3 对不相关中文文本的余弦相似度也有 0.4~0.6，
+    0.3 形同虚设，「你忽然想起」注的都是弱相关噪声（严厉审查 P2-10）。
+    """
+    try:
+        from junjun_core.config import get_global_config
+        return float(get_global_config().raw.get("memory", {}).get("recall_min_score", 0.55))
+    except Exception:
+        return 0.55
+
+
 @dataclass
 class MemoryItem:
     text: str
@@ -63,6 +89,7 @@ class LongTermMemory:
         self._items: List[MemoryItem] = []
         self._vec_map: List[int] = []      # faiss 位置 -> _items 下标
         self._loaded = False
+        self._dirty = False                # 有未落盘变更（批量落盘用）
 
     # ---------- 持久化 ----------
 
@@ -154,6 +181,17 @@ class LongTermMemory:
                 shutil.copy2(src, src.with_suffix(".bak"))
             except Exception:
                 pass
+        self._dirty = False
+
+    def flush(self) -> None:
+        """有脏数据才落盘（定时任务周期调用）。
+
+        add() 不再每次全量落盘（faiss+JSON+双 .bak 的 MB 级同步写跑在事件
+        循环上，条目越多越卡——O(n²) 写放大，严厉审查 P2-10）；代价是崩溃
+        最多丢一个 flush 周期的记忆，可接受。
+        """
+        if self._dirty:
+            self.save()
 
     # ---------- 写入 ----------
 
@@ -166,6 +204,29 @@ class LongTermMemory:
             return False
         self.load()
         vec = await get_embedding_client().embed_one(text)
+        # 写入去重：同会话近义条目（向量相似 >0.92 或归一化文本相同）合并加权
+        # 而非新插——否则 LLM 每轮都能把同一事实写 N 份挤占检索 top-k
+        # （严厉审查 P2-10）。pinned 不参与合并（用户显式钉的每一条都算数）。
+        norm = " ".join(text.split())
+        for it in reversed(self._items[-200:]):
+            if it.chat_id != chat_id or it.kind == "pinned":
+                continue
+            if " ".join(it.text.split()) == norm:
+                it.weight = min(2.0, it.weight + 0.1)
+                it.timestamp = time.time()
+                self._dirty = True
+                return True
+        if vec is not None and self._vec_map:
+            v = np.array([vec], dtype="float32")
+            v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
+            scores, ids = self._index.search(v, 1)
+            if int(ids[0][0]) >= 0 and float(scores[0][0]) > 0.92:
+                dup = self._items[self._vec_map[int(ids[0][0])]]
+                if dup.chat_id == chat_id and dup.kind != "pinned":
+                    dup.weight = min(2.0, dup.weight + 0.1)
+                    dup.timestamp = time.time()
+                    self._dirty = True
+                    return True
         item = MemoryItem(text=text, chat_id=chat_id, timestamp=time.time(),
                           weight=weight, kind=kind, has_vec=vec is not None)
         self._items.append(item)
@@ -174,7 +235,7 @@ class LongTermMemory:
             v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
             self._index.add(v)
             self._vec_map.append(len(self._items) - 1)
-        self.save()
+        self._dirty = True   # 批量落盘：flush() 周期写，不再每次全量重写
         return True
 
     # ---------- 检索 ----------
@@ -199,16 +260,20 @@ class LongTermMemory:
             v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
             k = min(top_k * 4, self._index.ntotal)
             scores, ids = self._index.search(v, k)
-            out = []
+            # 复合打分：相关性 × 重要性（时效衰减后）——weight 不再只是遗忘
+            # 参数，用户标重要的事召回概率就该更高（严厉审查 P2-10）
+            min_score = _recall_min_score()
+            cands = []
             for score, pos in zip(scores[0], ids[0], strict=False):
-                if pos < 0 or score < 0.3:
+                if pos < 0 or score < min_score:
                     continue
                 item = self._items[self._vec_map[int(pos)]]
                 if not _chat_allowed(item.chat_id, chat_id):
                     continue
-                out.append(item)
-                if len(out) >= top_k:
-                    break
+                w_norm = min(_effective_weight(item), 2.0) / 2.0   # 0..1
+                cands.append((float(score) * (0.7 + 0.3 * w_norm), item))
+            cands.sort(key=lambda x: -x[0])
+            out = [it for _, it in cands[:top_k]]
             # 纯文本条目关键词补充（向量检索覆盖不到它们）
             if len(out) < top_k:
                 plain = [it for it in self._keyword_search(query, top_k=top_k, chat_id=chat_id)
@@ -219,6 +284,11 @@ class LongTermMemory:
             spread = bool(_graph_cfg().get("enable", True))
         if spread and out:
             out = self._spread_related(out, chat_id=chat_id)
+        # 检索即复习：被召回的条目权重微涨（对抗时效衰减，常用的记得牢）
+        for it in out:
+            it.weight = min(2.0, it.weight + 0.05)
+        if out:
+            self._dirty = True
         return out
 
     def _spread_related(self, seeds: List[MemoryItem], *,
@@ -269,9 +339,10 @@ class LongTermMemory:
                max_items: Optional[int] = None) -> int:
         """删除记忆并重建索引。返回删除数。
 
-        两个淘汰口：
-        1. 过期低权重（原逻辑；注意多数条目 weight>=1.0，这条几乎不触发）
-        2. 容量上限（真正的闸门）：超过 max_items 时按（weight 低优先、
+        两个淘汰口（权重均按时效衰减后的有效权重计算——不复习就沉底，
+        老记忆终会被淘汰，遗忘口不再是摆设）：
+        1. 过期低权重（90 天 + 有效权重 < min_weight；pinned 不衰减不受影响）
+        2. 容量上限（真正的闸门）：超过 max_items 时按（有效权重低优先、
            时间老优先）淘汰到上限内——防 faiss/metadata/记忆图无界增长。
         max_items 默认读 [memory] ltm_max_items（5000）。
         """
@@ -287,9 +358,9 @@ class LongTermMemory:
                 max_items = 5000
         cutoff = time.time() - max_age_days * 86400
         keep_ids = [i for i, it in enumerate(self._items)
-                    if not (it.timestamp < cutoff and it.weight < min_weight)]
+                    if not (it.timestamp < cutoff and _effective_weight(it) < min_weight)]
         if len(keep_ids) > max_items:
-            ranked = sorted(keep_ids, key=lambda i: (self._items[i].weight,
+            ranked = sorted(keep_ids, key=lambda i: (_effective_weight(self._items[i]),
                                                      self._items[i].timestamp))
             drop = set(ranked[:len(keep_ids) - max_items])
             keep_ids = [i for i in keep_ids if i not in drop]
