@@ -42,6 +42,15 @@ _EXPAND_MAX_LEN = 200   # 描述长于该长度时不扩写（已经够详细，
 # 默认生图模型（取自旧插件 config.toml，可用 env 覆盖）
 _DEFAULT_MODEL = "Tongyi-MAI/Z-Image-Turbo"
 _DEFAULT_ANIME_MODEL = "QWQ114514123/WAI-illustrious-SDXL-v16"
+_DEFAULT_QWEN_MODEL = "Qwen/Qwen-Image-2512"
+
+# 模型别名 -> 实际 ModelScope Model-Id（env 可覆盖）：显式指定或关键词路由用
+def _model_registry() -> dict:
+    return {
+        "zimage": os.environ.get("AI_DRAW_MODEL", "") or _DEFAULT_MODEL,
+        "anime": os.environ.get("AI_DRAW_MODEL_ANIME", "") or _DEFAULT_ANIME_MODEL,
+        "qwen": os.environ.get("AI_DRAW_MODEL_QWEN", "") or _DEFAULT_QWEN_MODEL,
+    }
 
 # ---------------- 提示词工程（按模型家族定制，两套风格不可混用） ----------------
 # Z-Image-Turbo：中英双语自然语言完整描述效果最好（光照/色彩/构图/质感）
@@ -86,6 +95,10 @@ _NSFW_WORDS = ("色情", "裸", "sex", "涩情", "裸体", "nsfw", "porn")
 # 二次元/动漫画风词：命中则路由到二次元特化模型
 _ANIME_WORDS = ("动漫", "二次元", "anime", "漫画", "番", "manga")
 
+# Qwen-Image 优势域：写实/摄影 + 图中文字渲染（Qwen-Image 的中英文写字能力最强）
+_QWEN_WORDS = ("写实", "照片", "真人", "摄影", "海报", "带字", "文字", "招牌",
+               "贺卡", "封面", "photorealistic")
+
 # 「画自己」触发词：命中则把人设词附加到 prompt
 _SELF_WORDS = ("你", "自己", "自画像", "自拍")
 
@@ -119,11 +132,27 @@ def is_anime(prompt: str) -> bool:
     return any(w.lower() in low for w in _ANIME_WORDS)
 
 
-def route_model(prompt: str) -> str:
-    """根据描述选择生图模型：二次元词 -> 二次元模型，否则默认模型。"""
+def is_qwen_domain(prompt: str) -> bool:
+    """命中写实/文字渲染词 -> True（路由到 Qwen-Image）。"""
+    low = (prompt or "").lower()
+    return any(w.lower() in low for w in _QWEN_WORDS)
+
+
+def route_model(prompt: str, explicit: str = "") -> str:
+    """根据描述选择生图模型：显式别名 > 写实/文字词(qwen) > 二次元词(anime) > 默认。"""
+    reg = _model_registry()
+    if explicit and explicit.lower() in reg:
+        return reg[explicit.lower()]
+    if is_qwen_domain(prompt):
+        return reg["qwen"]
     if is_anime(prompt):
-        return os.environ.get("AI_DRAW_MODEL_ANIME", "") or _DEFAULT_ANIME_MODEL
-    return os.environ.get("AI_DRAW_MODEL", "") or _DEFAULT_MODEL
+        return reg["anime"]
+    return reg["zimage"]
+
+
+def model_style(model: str) -> str:
+    """模型 -> 提示词风格：anime 家族走 Danbooru 标签，其余走自然语言细描。"""
+    return "anime" if model == _model_registry()["anime"] else "default"
 
 
 def _get_persona() -> str:
@@ -246,24 +275,34 @@ async def generate(prompt: str, model: str, negative: str = "") -> str | None:
     return await poll_task(task_id)
 
 
-async def _draw_pipeline(prompt: str) -> tuple[str | None, str]:
+async def _draw_pipeline(prompt: str, model_alias: str = "") -> tuple[str | None, str]:
     """通用链路：人设注入 -> 按模型家族转写提示词 -> 生图（带负面词）。返回 (URL|None, 最终 prompt)。"""
     final_prompt = apply_self_prompt(prompt)
-    anime = is_anime(final_prompt)
-    model = route_model(final_prompt)
+    model = route_model(final_prompt, model_alias)
+    anime = model_style(model) == "anime"
     final_prompt = await expand_prompt(final_prompt, anime=anime)
     negative = _ANIME_NEGATIVE if anime else _DEFAULT_NEGATIVE
     url = await generate(final_prompt, model, negative)
     return url, final_prompt
 
 
+def _parse_model_alias(args: str) -> tuple[str, str]:
+    """从命令参数尾部解析显式模型别名：/draw 猫娘 qwen -> ("猫娘", "qwen")。"""
+    tokens = (args or "").split()
+    if tokens and tokens[-1].lower() in _model_registry():
+        return " ".join(tokens[:-1]).strip(), tokens[-1].lower()
+    return (args or "").strip(), ""
+
+
 @register_command("draw", aliases=["绘图", "画图"], plugin="ai_draw",
-                  description="AI画图：/draw <描述>，含动漫/二次元自动切换二次元模型")
+                  description="AI画图：/draw <描述> [模型]，含动漫/二次元自动切换二次元模型")
 async def draw_cmd(ctx):
     """手动画图命令：提交即回「在画了」，后台画完直发图片，绝不抛异常。"""
-    prompt = (ctx.args or "").strip()
+    prompt, model_alias = _parse_model_alias(ctx.args)
     if not prompt:
-        return "要画什么呀？用法：/draw <描述>，比如 /draw 猫娘少女"
+        return ("要画什么呀？用法：/draw <描述> [模型]，比如 /draw 猫娘少女\n"
+                "模型可选：zimage（默认）/ anime（二次元）/ qwen（写实/带字图最强），"
+                "不填按描述自动路由。")
     if is_minor_nsfw(prompt):
         return "这种不行哦，涉及未成年人的色色内容君君绝对不画！换个描述吧。"
 
@@ -280,7 +319,7 @@ async def draw_cmd(ctx):
     fut = _begin_pending_draw(chat_id)
     ack = await task_manager.submit(
         kind="ai_draw",
-        work=lambda: _draw_work(prompt, chat_id, fut),
+        work=lambda: _draw_work(prompt, chat_id, fut, model_alias),
         done_text=f"画好啦！{prompt}",
         fail_text="画图失败了，稍后再试试吧。",
         timeout=_POLL_TIMEOUT + 60,
@@ -328,10 +367,11 @@ async def wait_recent_drawn_url(chat_id: str, timeout: float = _WAIT_DRAWN_TIMEO
 
 
 async def _draw_work(prompt: str, chat_id: str = "",
-                     fut: "asyncio.Future | None" = None) -> list | None:
+                     fut: "asyncio.Future | None" = None,
+                     model_alias: str = "") -> list | None:
     """后台生图：成功返回 [image 段]，失败返回 None（由任务管理器发降级文案）。"""
     try:
-        url, _ = await _draw_pipeline(prompt)
+        url, _ = await _draw_pipeline(prompt, model_alias)
         if url and chat_id:
             _LAST_DRAWN[chat_id] = (time.time(), url)
         if fut is not None and not fut.done():
@@ -345,9 +385,11 @@ async def _draw_work(prompt: str, chat_id: str = "",
 
 
 @tool
-async def ai_draw(prompt: str) -> str:
+async def ai_draw(prompt: str, model: str = "") -> str:
     """根据描述 AI 生成图片并发到当前聊天。当用户要求画图、画个xxx、帮我画、来张图时使用。
     prompt 为画面描述（如「猫娘少女」「星空下的城市」）。
+    model 为可选模型别名：zimage（默认通用）/ anime（二次元）/ qwen（写实照片、
+    海报贺卡等带文字的图最强）——不填按描述自动路由。
 
     注意：如果图片是要作为 QQ 空间说说的配图，不要调本工具——直接用 send_feed
     的 with_image=True，说说会自己生成配图，调了本工具会重复画两张。
@@ -361,16 +403,19 @@ async def ai_draw(prompt: str) -> str:
         return "拒绝：描述涉及未成年人性内容，不会生成。"
     if not _api_key():
         return "画图功能未配置 MODELSCOPE_API_KEY，暂时画不了。"
+    model_alias = (model or "").strip().lower()
+    if model_alias and model_alias not in _model_registry():
+        return f"不认识模型「{model}」，可选：zimage / anime / qwen。"
     from junjun_skills.builtin.memory_skills import current_chat_id
     chat_id = current_chat_id.get("")
     if not chat_id:
         # 无会话路由（边缘场景）：同步生成 + [IMAGE:] 标记，由 processor 提取发图
-        url, _ = await _draw_pipeline(prompt)
+        url, _ = await _draw_pipeline(prompt, model_alias)
         return f"[IMAGE:{url}]" if url else "画图失败了，稍后再试。"
     fut = _begin_pending_draw(chat_id)
     return await task_manager.submit(
         kind="ai_draw",
-        work=lambda: _draw_work(prompt, chat_id, fut),
+        work=lambda: _draw_work(prompt, chat_id, fut, model_alias),
         fail_text="这次画失败了，再试一次？",
         timeout=_POLL_TIMEOUT + 60,
     )
