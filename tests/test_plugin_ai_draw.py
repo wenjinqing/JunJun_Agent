@@ -386,3 +386,63 @@ class TestQwenModel:
     async def test_tool_bad_alias_rejected(self, _plugin):
         out = await _plugin.ai_draw.ainvoke({"prompt": "猫娘", "model": "gpt"})
         assert "不认识模型" in out
+
+
+class TestNsfwDrawInterceptor:
+    """私聊涩图直通道（2026-08-04）：agent 模型对 NSFW 请求空内容自我审查，
+    无歧义私聊请求绕过 LLM 直接走 /draw 同链路。"""
+
+    def _ctx(self, _plugin, text, is_group=False):
+        from junjun_agent.commands import CommandContext
+        session = SimpleNamespace(
+            platform="qq", is_group=is_group,
+            group_id="999" if is_group else None,
+            chat_id="qq:999:group" if is_group else "qq:12345:private")
+        meta = SimpleNamespace(text=text, user_id="12345", nickname="甲",
+                               at_bot=False, message_id="m1")
+        return CommandContext(session=session, meta=meta, args=text)
+
+    @pytest.fixture
+    def _env(self, _plugin, monkeypatch):
+        import junjun_core.gateway.router as router_mod
+        sent = []
+
+        class _FakeGW:
+            async def send_reply(self, rs):
+                sent.append(rs)
+        monkeypatch.setattr(router_mod, "get_gateway", lambda: _FakeGW())
+        monkeypatch.setenv("MODELSCOPE_API_KEY", "sk-test")
+
+        async def _fake_submit(**kw):
+            return "在弄了，好了直接发出来。"
+        monkeypatch.setattr(_plugin.task_manager, "submit", _fake_submit)
+        yield sent
+        _plugin._PENDING.clear()
+        _plugin._last_use.clear()
+
+    @pytest.mark.asyncio
+    async def test_private_consumed_and_submits(self, _plugin, _env):
+        out = await _plugin.nsfw_draw_hit(self._ctx(_plugin, "画一个涩图"))
+        assert out is True
+        assert "在弄了" in _env[0].segments[0].data
+
+    @pytest.mark.asyncio
+    async def test_group_not_consumed(self, _plugin, _env):
+        """群聊不拦截，交给 LLM 按手册婉拒。"""
+        out = await _plugin.nsfw_draw_hit(self._ctx(_plugin, "画一个涩图", is_group=True))
+        assert out is False
+        assert not _env
+
+    @pytest.mark.asyncio
+    async def test_negation_not_consumed(self, _plugin, _env):
+        """「别画涩图了」是制止不是请求。"""
+        out = await _plugin.nsfw_draw_hit(self._ctx(_plugin, "别画涩图了，难看"))
+        assert out is False
+        assert not _env
+
+    @pytest.mark.asyncio
+    async def test_minor_red_line_still_refuses(self, _plugin, _env):
+        """未成年红线在直通道同样生效（draw_cmd 的 is_minor_nsfw）。"""
+        out = await _plugin.nsfw_draw_hit(self._ctx(_plugin, "画一个萝莉涩图"))
+        assert out is True                       # 消费掉 + 文本拒绝
+        assert "不行" in _env[0].segments[0].data

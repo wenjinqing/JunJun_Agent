@@ -259,8 +259,8 @@ _INTENT_GROUPS = [
      ("deep_research", "run_background_task", "list_background_tasks"), "deep_research"),
     (("发个语音", "发语音", "语音说", "唱首", "唱一", "念给", "说日语", "日语说"),
      ("unified_tts", "ja_tts"), None),
-    (("帮我画", "画个", "画一张", "画张", "生成图", "画幅"),
-     ("ai_draw",), None),
+    (("帮我画", "画一张", "画个", "画一", "画张", "生成图", "画幅", "涩图", "色图"),
+     ("ai_draw",), "ai_draw"),
 ]
 
 
