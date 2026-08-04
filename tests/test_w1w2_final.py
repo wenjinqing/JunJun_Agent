@@ -5,25 +5,31 @@ import pytest
 
 class TestStickerDescription:
     @pytest.mark.asyncio
-    async def test_describe_stickers_uses_sticker_prompt(self, monkeypatch):
+    async def test_describe_stickers_uses_sticker_prompt(self, monkeypatch, tmp_path):
         """表情包走专属 prompt（画面+情绪），结果入 Images 缓存。"""
-        from junjun_memory import vision
-        used = {}
+        # Images 缓存走内存库——写生产库会累积垃圾行（uuid 随机 hash 每次一行）
+        import peewee
+        from junjun_core.database import models as m
+        db = peewee.SqliteDatabase(str(tmp_path / "t.db"))
+        with db.bind_ctx([m.Images]):
+            db.create_tables([m.Images])
+            from junjun_memory import vision
+            used = {}
 
-        class _Model:
-            async def ainvoke(self, msgs):
-                used["prompt"] = msgs[0].content[0]["text"]
-                class R: content = "猫咪竖大拇指表示赞同"
-                return R()
+            class _Model:
+                async def ainvoke(self, msgs):
+                    used["prompt"] = msgs[0].content[0]["text"]
+                    class R: content = "猫咪竖大拇指表示赞同"
+                    return R()
 
-        async def _dl(url):
-            import uuid
-            return b"\x89PNG sticker-test-" + uuid.uuid4().bytes  # 每次唯一防 Images 持久缓存命中
+            async def _dl(url):
+                import uuid
+                return b"\x89PNG sticker-test-" + uuid.uuid4().bytes  # 每次唯一防 Images 持久缓存命中
 
-        monkeypatch.setattr(vision, "_download", _dl)
-        out = await vision.describe_stickers(["http://x/s.png"], model=_Model())
-        assert out["http://x/s.png"] == "猫咪竖大拇指表示赞同"
-        assert "表情包" in used["prompt"]
+            monkeypatch.setattr(vision, "_download", _dl)
+            out = await vision.describe_stickers(["http://x/s.png"], model=_Model())
+            assert out["http://x/s.png"] == "猫咪竖大拇指表示赞同"
+            assert "表情包" in used["prompt"]
 
     @pytest.mark.asyncio
     async def test_render_sticker_block(self):

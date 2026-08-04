@@ -119,33 +119,40 @@ class TestCompose:
 
 class TestMemoryBlockPending:
     @pytest.mark.asyncio
-    async def test_pending_hint_injected(self, monkeypatch):
+    async def test_pending_hint_injected(self, monkeypatch, tmp_path):
         """3s 内没看完 -> 记忆块带「还在看」提示 + 返回在途条目。"""
-        old = cfg_mod.global_config
-        cfg_mod.global_config = cfg_mod.GlobalConfig(
-            bot=cfg_mod.BotConfig(platform="qq", qq_account="12345", nickname="君君"),
-            raw={"perception": {"ready_wait_seconds": 0.01}})
-        import junjun_memory.vision as vision_mod
-        vision_mod._PENDING.clear()
+        # Images 缓存走内存库：本测试的 b"img" 描述曾写入生产库，导致下轮
+        # 缓存命中返回「一只橘猫」而不是在途提示（自污染，2026-08-04）
+        import peewee
+        from junjun_core.database import models as m
+        db = peewee.SqliteDatabase(str(tmp_path / "t.db"))
+        with db.bind_ctx([m.Images]):
+            db.create_tables([m.Images])
+            old = cfg_mod.global_config
+            cfg_mod.global_config = cfg_mod.GlobalConfig(
+                bot=cfg_mod.BotConfig(platform="qq", qq_account="12345", nickname="君君"),
+                raw={"perception": {"ready_wait_seconds": 0.01}})
+            import junjun_memory.vision as vision_mod
+            vision_mod._PENDING.clear()
 
-        async def _slow_describe(data, *, model, prompt):
-            await asyncio.sleep(0.2)
-            return "一只橘猫"
-        monkeypatch.setattr(vision_mod, "_describe", _slow_describe)
+            async def _slow_describe(data, *, model, prompt):
+                await asyncio.sleep(0.2)
+                return "一只橘猫"
+            monkeypatch.setattr(vision_mod, "_describe", _slow_describe)
 
-        async def _dl(url):
-            return b"img"
-        monkeypatch.setattr(vision_mod, "_download", _dl)
-        import junjun_llm
-        monkeypatch.setattr(junjun_llm, "get_chat_model", lambda slot: object())
+            async def _dl(url):
+                return b"img"
+            monkeypatch.setattr(vision_mod, "_download", _dl)
+            import junjun_llm
+            monkeypatch.setattr(junjun_llm, "get_chat_model", lambda slot: object())
 
-        from junjun_agent.processor import _build_memory_block
-        session = SimpleNamespace(chat_id="qq:999:group", memory=None)
-        meta = SimpleNamespace(image_urls=["http://x/1.jpg"], sticker_urls=None,
-                               voice_records=None, video_urls=None, text="看图",
-                               user_id="1", nickname="甲")
-        block, pending = await _build_memory_block(session, meta)
-        assert "还在看" in block and "绝不要说" in block
-        assert len(pending) == 1 and pending[0]["kind"] == "image"
-        vision_mod._PENDING.clear()
-        cfg_mod.global_config = old
+            from junjun_agent.processor import _build_memory_block
+            session = SimpleNamespace(chat_id="qq:999:group", memory=None)
+            meta = SimpleNamespace(image_urls=["http://x/1.jpg"], sticker_urls=None,
+                                   voice_records=None, video_urls=None, text="看图",
+                                   user_id="1", nickname="甲")
+            block, pending = await _build_memory_block(session, meta)
+            assert "还在看" in block and "绝不要说" in block
+            assert len(pending) == 1 and pending[0]["kind"] == "image"
+            vision_mod._PENDING.clear()
+            cfg_mod.global_config = old

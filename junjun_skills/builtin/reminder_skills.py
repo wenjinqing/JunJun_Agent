@@ -84,7 +84,8 @@ def set_reminder(content: str, time_spec: str, user_id: str) -> str:
 
 @tool
 def list_reminders() -> str:
-    """查看当前会话待办的提醒列表。"""
+    """查看当前会话待办的提醒列表。对方问「我有什么提醒/你提醒我什么了/提醒设好了吗」，
+    或你要取消提醒前需要查编号时使用。返回每条提醒的编号、时间和内容。"""
     from junjun_agent.loop.reminder import list_pending
     items = list_pending(current_chat_id.get())
     if not items:
