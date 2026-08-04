@@ -8,7 +8,10 @@ API：ModelScope 异步文生图（api-inference.modelscope.cn）
 模型路由：描述含 动漫/二次元/anime 等词时用二次元模型，否则默认模型；
   env AI_DRAW_MODEL / AI_DRAW_MODEL_ANIME 可覆盖默认值。
 提示词工程（按模型家族定制）：
-  - 默认（Z-Image-Turbo）：中英双语自然语言细描（光照/色彩/构图/质感），原文前置保主体
+  - 默认（Z-Image-Turbo）/写实（Qwen-Image）：prompt_studio 提示词工作室——
+    中文结构化写手 + 评审修订一轮（[ai_draw] prompt_critic 可关）；
+    可选 VLM 出图验收重画一次（[ai_draw] review_enable，默认关）；
+    工作室失败降级旧英文扩写（expand_prompt）
   - 二次元（WAI-illustrious-SDXL）：Danbooru 标签串 + 质量词后缀 + 负面提示词
     （防烂手/多余肢体/水印），模型不接受 negative_prompt 时自动降级重试
 安全：描述命中「未成年词 + 性词」组合直接拒绝；未配置 MODELSCOPE_API_KEY 降级文本。
@@ -275,14 +278,37 @@ async def generate(prompt: str, model: str, negative: str = "") -> str | None:
     return await poll_task(task_id)
 
 
-async def _draw_pipeline(prompt: str, model_alias: str = "") -> tuple[str | None, str]:
-    """通用链路：人设注入 -> 按模型家族转写提示词 -> 生图（带负面词）。返回 (URL|None, 最终 prompt)。"""
+async def _draw_pipeline(prompt: str, model_alias: str = "",
+                         _reviewed: bool = False) -> tuple[str | None, str]:
+    """通用链路：人设注入 -> 提示词工作室（写手+评审）-> 生图 -> (可选)VLM验收重画。
+
+    提示词策略按模型家族：anime 走 Danbooru 标签（expand_prompt），
+    zimage/qwen 走 prompt_studio 的中文结构化写手；工作室失败降级旧扩写。
+    """
+    from .prompt_studio import craft_prompt, review_image, _cfg
     final_prompt = apply_self_prompt(prompt)
     model = route_model(final_prompt, model_alias)
     anime = model_style(model) == "anime"
-    final_prompt = await expand_prompt(final_prompt, anime=anime)
+    if anime:
+        final_prompt = await expand_prompt(final_prompt, anime=True)
+    else:
+        family = "qwen" if model == _model_registry()["qwen"] else "zimage"
+        try:
+            crafted = await craft_prompt(final_prompt, family)
+        except Exception as e:
+            logger.warning(f"提示词工作室异常（降级旧扩写）: {type(e).__name__}: {e}")
+            crafted = ""
+        final_prompt = crafted or await expand_prompt(final_prompt, anime=False)
     negative = _ANIME_NEGATIVE if anime else _DEFAULT_NEGATIVE
     url = await generate(final_prompt, model, negative)
+    # VLM 出图验收（[ai_draw] review_enable，默认关）：严重不符带意见重画一次
+    if url and not _reviewed and bool(_cfg().get("review_enable", False)):
+        issue = await review_image(url, prompt)
+        if issue:
+            logger.info(f"出图验收不通过，带意见重画一次: {issue[:50]}")
+            return await _draw_pipeline(
+                f"{prompt}。上一稿的问题：{issue}，这次修正", model_alias,
+                _reviewed=True)
     return url, final_prompt
 
 
