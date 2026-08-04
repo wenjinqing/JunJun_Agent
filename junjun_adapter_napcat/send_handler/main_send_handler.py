@@ -9,6 +9,21 @@ from .nc_sending import nc_message_sender
 from .send_retry import send_with_retry
 
 
+def _media_file(data) -> str:
+    """媒体段的 file 参数规范化：本地路径转 file:/// URI。
+
+    NapCat 对裸 Windows 路径（E:\\... 反斜杠）识别失败——2026-08-04 实战：
+    bilibili 插件发视频报「文件处理失败 识别URL失败」。http/file/base64
+    URI 原样透传；其余一律视为本地路径转 file:/// 绝对 URI（NapCat 支持，
+    express_skills 表情包同法已验证）。
+    """
+    s = str(data)
+    if s.startswith(("http://", "https://", "file://", "base64://")):
+        return s
+    from pathlib import Path
+    return Path(s).resolve().as_uri()
+
+
 class SendHandler:
     async def handle_message(self, raw_message_base_dict: dict) -> None:
         try:
@@ -142,11 +157,11 @@ class SendHandler:
             if text:
                 payload.append({"type": "text", "data": {"text": text}})
         elif seg.type == "image":
-            payload.append({"type": "image", "data": {"file": seg.data}})
+            payload.append({"type": "image", "data": {"file": _media_file(seg.data)}})
         elif seg.type in ("voice", "voiceurl"):
-            payload.append({"type": "record", "data": {"file": seg.data}})
+            payload.append({"type": "record", "data": {"file": _media_file(seg.data)}})
         elif seg.type in ("video", "videourl"):
-            payload.append({"type": "video", "data": {"file": seg.data}})
+            payload.append({"type": "video", "data": {"file": _media_file(seg.data)}})
         elif seg.type == "at":
             payload.append({"type": "at", "data": {"qq": str(seg.data)}})
         elif seg.type == "music":

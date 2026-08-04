@@ -186,6 +186,21 @@ class TestSendSegments:
         payload = h._process_one(Seg(type="at", data="12345"), [])
         assert payload == [{"type": "at", "data": {"qq": "12345"}}]
 
+    def test_local_media_path_to_file_uri(self, tmp_path):
+        """本地媒体路径转 file:/// URI——2026-08-04 NapCat 报「识别URL失败」：
+        bilibili 插件发视频给的是裸 Windows 路径（E:\\... 反斜杠）。"""
+        h = self._handler()
+        from maim_message import Seg
+        f = tmp_path / "v.mp4"
+        f.write_bytes(b"x")
+        payload = h._process_one(Seg(type="video", data=str(f)), [])
+        assert payload[0]["data"]["file"].startswith("file:///")
+        payload = h._process_one(Seg(type="image", data=str(f)), [])
+        assert payload[0]["data"]["file"].startswith("file:///")
+        # 已是 URI 的透传
+        payload = h._process_one(Seg(type="voice", data="base64://AAAA"), [])
+        assert payload[0]["data"]["file"] == "base64://AAAA"
+
     def test_music_json(self):
         h = self._handler()
         from maim_message import Seg
