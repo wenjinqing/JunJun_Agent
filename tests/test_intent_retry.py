@@ -152,7 +152,7 @@ class TestAddressedFallback:
                 raise RuntimeError("Recursion limit reached")
 
         monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
-                            lambda self: _BoomAgent())
+                            lambda self, **_kw: _BoomAgent())
         session = ChatSession("qq:1:private", "qq", user_id="1")
         agent = agent_mod.JunJunAgent(session, model=object())
         out = await agent.process("甲: 帮我盯着p站16689973", addressed=True)
@@ -169,7 +169,35 @@ class TestAddressedFallback:
                 raise RuntimeError("Recursion limit reached")
 
         monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
-                            lambda self: _BoomAgent())
+                            lambda self, **_kw: _BoomAgent())
         session = ChatSession("qq:1:group", "qq", group_id="1")
         agent = agent_mod.JunJunAgent(session, model=object())
         assert await agent.process("甲: 随便聊聊", addressed=False) is None
+
+
+class TestAddressedNoSilence:
+    """必回场景结构性摘除 do_not_reply（2026-08-04 trace：管理员私聊 + addressed=true，
+    prompt 明写「禁止调用 do_not_reply」，模型照调、代码照吞，output=null）。
+    prompt 劝告管不住的，工具集里直接没有这个工具才管得住。"""
+
+    def test_silence_tool_stripped_when_addressed(self, monkeypatch):
+        import junjun_agent.agent as agent_mod
+        from junjun_core.gateway.session_manager import ChatSession
+
+        captured = {}
+
+        def _fake_create_agent(model, tools, middleware):
+            captured["tools"] = tools
+            return object()
+        monkeypatch.setattr(agent_mod, "create_agent", _fake_create_agent)
+
+        session = ChatSession("qq:1:group", "qq", group_id="1")
+        agent = agent_mod.JunJunAgent(session, model=object())
+
+        agent._build_agent(full=True, allow_silence=False)
+        names = {t.name for t in captured["tools"]}
+        assert "do_not_reply" not in names
+        assert "send_message" in names          # 其余工具不受影响
+
+        agent._build_agent(full=True, allow_silence=True)
+        assert "do_not_reply" in {t.name for t in captured["tools"]}

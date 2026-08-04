@@ -334,6 +334,7 @@ class TestQwenModel:
         assert _plugin.route_model("写实照片风的猫咪") == qwen      # 写实域
         assert _plugin.route_model("一张带字的海报") == qwen        # 文字渲染域
         assert _plugin.route_model("二次元少女") == anime
+        assert _plugin.route_model("画一个涩图") == anime   # R18 词路由到唯一能出的模型
         assert _plugin.route_model("星空下的城市") == default
         assert _plugin.route_model("二次元少女", explicit="qwen") == qwen  # 显式优先
         assert _plugin.route_model("猫", explicit="anime") == anime
