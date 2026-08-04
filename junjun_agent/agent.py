@@ -58,7 +58,7 @@ def _called_tool_names(messages: list) -> set:
 
 
 _ECHO_NUDGE = (
-    "（系统提示）你刚才的回复和你最近已经说过的话几乎一模一样（「{hit}」），"
+    "（系统提示）你刚才的回复在复读你最近已经说过的话（「{hit}」），"
     "真人不会复读自己。请换一个完全不同的说法或角度重新回应；"
     "如果实在没有新内容可说，调用 do_not_reply。"
     "注意：你上一轮的回复还没有发送出去，对方目前什么都没看到。"
@@ -383,13 +383,32 @@ class JunJunAgent:
         agent_cfg = cfg.raw.get("agent", {})
         if text and bool(agent_cfg.get("echo_guard", True)):
             try:
-                from junjun_memory.echo import is_echo
+                from junjun_memory.echo import (
+                    extract_catchphrases, is_echo, normalize_echo)
                 sim = float(agent_cfg.get("echo_similarity", 0.85))
                 k = int(agent_cfg.get("echo_recent_k", 8))
                 memory = getattr(self.session, "memory", None)
-                recent_bot = ([e.text for e in memory.entries if e.role == "bot"][-k:]
-                              if memory is not None else [])
-                hit = is_echo(text, recent_bot, similarity=sim) if recent_bot else None
+                all_bot = ([e.text for e in memory.entries if e.role == "bot"]
+                           if memory is not None else [])
+                recent_bot = all_bot[-k:]
+                # 口头禅检测：整句不像但嵌着近期用滥的词组（「姐姐疼你」式）。
+                # 挖掘窗口比整句撞车宽（默认 30 条）——口头禅是跨消息模式
+                cp_min = int(agent_cfg.get("echo_catchphrase_count", 3))
+                cp_k = int(agent_cfg.get("echo_catchphrase_k", 30))
+                catchphrases = extract_catchphrases(all_bot[-cp_k:],
+                                                    min_count=cp_min) if all_bot else []
+
+                def _echo_hit(t: str):
+                    h = is_echo(t, recent_bot, similarity=sim) if recent_bot else None
+                    if h is not None:
+                        return h
+                    norm_t = normalize_echo(t)
+                    for cp in catchphrases:
+                        if cp in norm_t:
+                            return cp
+                    return None
+
+                hit = _echo_hit(text)
             except Exception:
                 hit = None
             if hit is not None:

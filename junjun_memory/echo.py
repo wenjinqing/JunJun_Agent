@@ -50,3 +50,39 @@ def is_echo(new_text: str, recent_texts: List[str], *,
         if SequenceMatcher(None, new, old).ratio() >= similarity:
             return old_text
     return None
+
+
+def extract_catchphrases(texts: List[str], *, min_count: int = 3,
+                         ngram_min: int = 4, ngram_max: int = 6) -> List[str]:
+    """从 bot 近期发言里自动挖「口头禅」：在 >= min_count 条不同消息里
+    出现过的 4~6 字片段（n-gram）。
+
+    为什么需要它（2026-08-04 用户提问「示例集要一直维护吗」）：prompt 里的
+    台词被复读是物理规律，靠人定期换示例是永续维护。改成代码自动检测——
+    某个词组被用到第 3 次就进黑名单，agent 出口拦截（echo guard）会拦下
+    任何再含它的回复，全程零人工。
+
+    豁免：unique 字符 <= 2 的纯重复（哈哈哈哈/好好好好 这类天然会反复的）。
+    返回按出现次数降序的口头禅列表（归一化形式，只保留最长代表）。
+    """
+    counts: dict = {}
+    for text in texts:
+        norm = normalize_echo(text)
+        if len(norm) < ngram_min:
+            continue
+        seen = set()
+        for n in range(ngram_min, ngram_max + 1):
+            for i in range(len(norm) - n + 1):
+                gram = norm[i:i + n]
+                if len(set(gram)) <= 2:
+                    continue
+                seen.add(gram)
+        for gram in seen:
+            counts[gram] = counts.get(gram, 0) + 1
+    hits = [(c, g) for g, c in counts.items() if c >= min_count]
+    hits.sort(key=lambda x: (-x[0], -len(x[1])))
+    result = []
+    for _, g in hits:
+        if not any(g in kept for kept in result):  # 被更长代表包含的短 gram 跳过
+            result.append(g)
+    return result[:10]
