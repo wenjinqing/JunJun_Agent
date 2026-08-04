@@ -74,7 +74,17 @@ class ShortTermMemory:
         不从 bot 回复中间截断——模型不会把被截断的历史当成待续写文本。
         """
         from junjun_core.security import is_admin
+        from junjun_memory.echo import normalize_echo
         entries = self.entries[-limit:] if limit else self.entries
+        # bot 历史去重（防上下文自污染，2026-08-04）：同一句话术只保留最近一次
+        # 出现——否则 context 里「你(历史): xxx」堆 N 次，模型把它当成自己的
+        # 说话习惯继续复读，形成正反馈污染循环
+        bot_last = {}
+        for i, e in enumerate(entries):
+            if e.role == "bot":
+                n = normalize_echo(e.text)
+                if n:
+                    bot_last[n] = i
         lines = []
         # 找最后一条 user 消息的下标（mark_latest 用）
         last_user_idx = -1
@@ -90,6 +100,9 @@ class ShortTermMemory:
         for i, e in enumerate(entries[start:], start=start):
             if e.role == "bot":
                 if include_bot:
+                    n = normalize_echo(e.text)
+                    if n and bot_last.get(n) != i:
+                        continue  # 更早的重复出现：跳过，只留最近一次
                     # 标记为「历史输出」而非「待接续的话」（防复读关键）
                     lines.append(f"你(历史): {e.text}")
                 # 默认不进 context（include_bot=False 时）
