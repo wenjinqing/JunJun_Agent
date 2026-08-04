@@ -20,10 +20,12 @@ async def recall_memory(query: str) -> str:
         query: 要回忆的内容关键词，如"上次说的火锅店"
     """
     from junjun_memory.long_term import get_long_term_memory
-    items = await get_long_term_memory().search(query, top_k=5, chat_id=current_chat_id.get() or None)
-    if not items:
-        # 放宽到全库再试一次
-        items = await get_long_term_memory().search(query, top_k=3)
+    # 召回域：本会话 + 全局知识库。曾经搜不到就放宽全库再搜——A 群能套出
+    # B 群和私聊的记忆（严厉审查 P0-4：隐私边界不能靠 prompt 自觉，
+    # 全库 fallback 就是结构上的洞，杀掉）
+    cid = current_chat_id.get() or None
+    scope = (cid, "knowledge") if cid else ("knowledge",)
+    items = await get_long_term_memory().search(query, top_k=5, chat_id=scope)
     if not items:
         return "没有找到相关记忆。"
     lines = ["相关记忆："]
