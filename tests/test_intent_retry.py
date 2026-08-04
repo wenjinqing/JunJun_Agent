@@ -201,3 +201,25 @@ class TestAddressedNoSilence:
 
         agent._build_agent(full=True, allow_silence=True)
         assert "do_not_reply" in {t.name for t in captured["tools"]}
+
+
+class TestBackgroundRoleStructure:
+    """严厉审查 P0-3：bot 历史发言必须以 AIMessage 进 context（role 边界是
+    防自我模仿的第一道结构防线，混在 user 文本流里只剩「语气模仿」一条路）。"""
+
+    def test_bot_lines_become_ai_messages(self):
+        from langchain_core.messages import AIMessage, HumanMessage
+        from junjun_agent.agent import _background_to_messages
+        bg = "甲: 今天吃啥\n你(历史): 火锅啊火锅\n乙: 又火锅\n你(历史): 怎么了嘛\n多行续行"
+        msgs = _background_to_messages(bg)
+        roles = [type(m).__name__ for m in msgs]
+        assert roles == ["HumanMessage", "AIMessage", "HumanMessage", "AIMessage"]
+        assert msgs[1].content == "火锅啊火锅"
+        assert "你(历史)" not in msgs[1].content     # 前缀剥离
+        assert "多行续行" in msgs[3].content          # 续行并入上一条
+
+    def test_user_only_background(self):
+        from langchain_core.messages import HumanMessage
+        from junjun_agent.agent import _background_to_messages
+        msgs = _background_to_messages("甲: 在吗\n乙: 他不在")
+        assert len(msgs) == 1 and isinstance(msgs[0], HumanMessage)
