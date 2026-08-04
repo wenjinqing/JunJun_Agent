@@ -159,11 +159,22 @@ def model_style(model: str) -> str:
 
 
 def _get_persona() -> str:
-    """从全局配置取人设词（personality 段），取一段作为「画自己」附加描述。"""
+    """取「画自己」用的视觉形象描述。
+
+    优先 [personality] appearance（专门的视觉形象卡：发型/眼睛/服装风格——
+    画图要的是画面不是性格）。没有则退回 personality 首行（legacy 行为，
+    但性格首行大多是抽象词，对画图帮助有限，建议配 appearance）。
+    2026-08-04 实战：学姐设定卡首行是「谁愿意找你说心事的那种」，
+    80 字性格描述前置进画面 prompt 只会稀释主体。
+    """
     try:
         from junjun_core.config import get_global_config
         raw = get_global_config().raw or {}
-        text = str((raw.get("personality") or {}).get("personality") or "")
+        p = raw.get("personality") or {}
+        appearance = str(p.get("appearance") or "").strip()
+        if appearance:
+            return appearance[:150]
+        text = str(p.get("personality") or "")
         # 取第一段（首行或前 80 字），避免整段人设过长稀释画面主体
         first = text.split("\n", 1)[0].strip()
         return first[:80]
@@ -438,6 +449,11 @@ async def ai_draw(prompt: str, model: str = "") -> str:
         # 无会话路由（边缘场景）：同步生成 + [IMAGE:] 标记，由 processor 提取发图
         url, _ = await _draw_pipeline(prompt, model_alias)
         return f"[IMAGE:{url}]" if url else "画图失败了，稍后再试。"
+    # 在途防重（2026-08-04 实战：用户问「图呢」，模型又调一次 ai_draw 重复派画，
+    # 然后用「在画了」搪塞——/draw 命令有 20s 冷却，工具路径此前没有）
+    if chat_id in _PENDING:
+        return "上一张还在画，画好会自动发到当前聊天，不要重复派单。" \
+               "如果对方在催，告诉 ta 还在画；超过两三分钟还没收到再来找你。"
     fut = _begin_pending_draw(chat_id)
     return await task_manager.submit(
         kind="ai_draw",

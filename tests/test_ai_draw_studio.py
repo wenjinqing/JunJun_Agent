@@ -148,3 +148,39 @@ class TestPipelineIntegration:
         monkeypatch.setattr(draw_tools, "generate", _fake_generate)
         await draw_tools._draw_pipeline("画一只橘猫")
         assert not called
+
+
+class TestPendingDedup:
+    @pytest.mark.asyncio
+    async def test_second_call_while_pending_rejected(self, monkeypatch):
+        """在途防重：上一张还在画时再次调用直接劝退，不重复派单
+        （2026-08-04 实战：用户问「图呢」，模型又调 ai_draw 重复画了一张）。"""
+        monkeypatch.setenv("MODELSCOPE_API_KEY", "sk-test")
+        import asyncio
+        from junjun_skills.builtin import memory_skills
+        token = memory_skills.current_chat_id.set("qq:1:private")
+        try:
+            draw_tools._PENDING["qq:1:private"] = asyncio.get_running_loop().create_future()
+            out = await draw_tools.ai_draw.ainvoke({"prompt": "画只猫"})
+            assert "还在画" in out
+        finally:
+            draw_tools._PENDING.pop("qq:1:private", None)
+            memory_skills.current_chat_id.reset(token)
+
+
+class TestAppearance:
+    def test_appearance_preferred_over_personality(self, monkeypatch):
+        import junjun_core.config.config as cfg_mod
+        monkeypatch.setattr(cfg_mod, "global_config", cfg_mod.GlobalConfig(
+            bot=cfg_mod.BotConfig(platform="qq", qq_account="1", nickname="君君"),
+            raw={"personality": {
+                "appearance": "及肩黑发，黑色猫耳，琥珀色眼睛",
+                "personality": "你是君君，性格温柔但这对画图没用"}}))
+        assert draw_tools._get_persona() == "及肩黑发，黑色猫耳，琥珀色眼睛"
+
+    def test_fallback_to_personality_first_line(self, monkeypatch):
+        import junjun_core.config.config as cfg_mod
+        monkeypatch.setattr(cfg_mod, "global_config", cfg_mod.GlobalConfig(
+            bot=cfg_mod.BotConfig(platform="qq", qq_account="1", nickname="君君"),
+            raw={"personality": {"personality": "首行人设\n第二行"}}))
+        assert draw_tools._get_persona() == "首行人设"
