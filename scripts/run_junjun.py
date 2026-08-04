@@ -50,6 +50,13 @@ async def _run() -> int:
 
     router = get_router()
 
+    # 后台任务结局落盘 + 恢复（重启前的「在画了」不再是无头承诺）
+    try:
+        from junjun_agent.tasks import enable_persistence
+        enable_persistence(ROOT / "data" / "task_outcomes.jsonl")
+    except Exception as e:
+        logger.warning(f"任务结局持久化挂接失败（忽略）: {e}")
+
     # 数据库建表 + 写队列
     try:
         from junjun_core.database import init_database, db_writer

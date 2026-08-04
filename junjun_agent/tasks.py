@@ -29,9 +29,11 @@
 """
 
 import asyncio
+import json
 import random
 import time
 from collections import deque
+from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from junjun_core.contracts import ReplySegment, ReplySet
@@ -44,6 +46,72 @@ _DEFAULT_TIMEOUT = 150.0
 # 结果登记：chat_id -> deque[{ts, kind, status, detail}]（决策注入与状态查询的数据源）
 _OUTCOME_MAX = 10
 _OUTCOME_TTL = 1800.0   # 注入窗口 30 分钟——再久的结局对方早忘了，不用提醒
+
+# 结局落盘（2026-08-04「一直说还在画」幻觉事件）：结局本是内存态，进程重启
+# 全丢——重启前的「在画了」变成无头承诺，模型只能顺着历史续编。
+# start/end 追加写 JSONL；启动时恢复，孤儿 start（有始无终）标记为
+# 「进程重启，任务中断」。文件只追加不压缩（每任务 2 行，量级可忽略）。
+# 测试默认 None 不落盘（生产数据纪律），由 run_junjun 启动时挂接。
+_PERSIST_FILE: Optional[Path] = None
+
+
+def enable_persistence(path) -> None:
+    """生产启动挂钩：指定落盘文件并恢复历史结局。测试勿调。"""
+    global _PERSIST_FILE
+    _PERSIST_FILE = Path(path)
+    try:
+        _restore_from_records(task_manager, _load_records(_PERSIST_FILE))
+    except Exception as e:
+        logger.warning(f"任务结局恢复失败（忽略）: {type(e).__name__}: {e}")
+
+
+def _append_rec(rec: dict) -> None:
+    if _PERSIST_FILE is None:
+        return
+    try:
+        _PERSIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_PERSIST_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _load_records(path: Path) -> list:
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines()[-2000:]:
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            pass
+    return out
+
+
+def _restore_from_records(mgr: "TaskManager", records: list) -> None:
+    """回放 start/end：end 还原结局；有 start 无 end = 重启中断，标失败。"""
+    open_starts: Dict[Tuple[str, str], dict] = {}
+    for r in records:
+        chat_id, kind = r.get("chat_id") or "", r.get("kind") or ""
+        if not chat_id or not kind:
+            continue
+        key = (chat_id, kind)
+        if r.get("op") == "start":
+            open_starts[key] = r
+        elif r.get("op") == "end":
+            open_starts.pop(key, None)
+            dq = mgr._outcomes.setdefault(chat_id, deque(maxlen=_OUTCOME_MAX))
+            dq.append({"ts": float(r.get("ts") or time.time()), "kind": kind,
+                       "status": r.get("status") or "failed",
+                       "detail": r.get("detail") or ""})
+    now = time.time()
+    for (chat_id, kind) in open_starts:
+        dq = mgr._outcomes.setdefault(chat_id, deque(maxlen=_OUTCOME_MAX))
+        dq.append({"ts": now, "kind": kind, "status": "failed",
+                   "detail": "进程重启，任务中断"})
+    if mgr._outcomes:
+        logger.info(f"任务结局已恢复（{sum(len(d) for d in mgr._outcomes.values())} 条，"
+                    f"含 {len(open_starts)} 个重启中断）")
 
 # kind -> 中文名（状态注入/查询用「画图」而不是 ai_draw）
 _KIND_CN = {
@@ -202,6 +270,8 @@ class TaskManager:
         key = (chat_id, kind)
         self._running[key] = task
         self._started[key] = time.monotonic()
+        _append_rec({"op": "start", "chat_id": chat_id, "kind": kind,
+                     "ts": time.time()})
 
         def _pop(_t, k=key):
             self._running.pop(k, None)
@@ -217,6 +287,8 @@ class TaskManager:
         「画好啦/画砸了」，下轮被问「图呢」只能装傻（2026-08-04 实战）。"""
         dq = self._outcomes.setdefault(chat_id, deque(maxlen=_OUTCOME_MAX))
         dq.append({"ts": time.time(), "kind": kind, "status": status, "detail": detail})
+        _append_rec({"op": "end", "chat_id": chat_id, "kind": kind,
+                     "status": status, "detail": detail, "ts": time.time()})
         if said:
             try:
                 from junjun_core.gateway.session_manager import get_session_manager
@@ -256,6 +328,18 @@ class TaskManager:
     def list_for_chat(self, chat_id: str) -> str:
         """list_background_tasks 工具合并用；无任务返回空串。"""
         return "\n".join(self._status_lines(chat_id))
+
+    def negative_status_block(self, chat_id: str) -> str:
+        """否定证据块：用户问任务进度但当前无在途、近期无记录时注入。
+
+        没有它，模型判断「还在不在画」的唯一依据是历史里自己说过的
+        「在画了」——自己说过的话被当成事实续编（2026-08-04「一直说
+        还在画」幻觉实锤）。否定证据和肯定证据一样重要。
+        """
+        return ("【你的后台任务近况】当前没有在途任务，近期也没有任何任务记录。"
+                "如果聊天历史里你说过「在画了/马上好」，那个任务早已结束"
+                "（失败或进程重启中断）——照实说「那张没画成」，"
+                "别顺着旧话编「还在画」。")
 
     async def _send(self, chat_id: str, segments: List[ReplySegment]) -> bool:
         """直发到会话（gateway 不可用时静默——测试环境允许）。返回是否送达。"""
