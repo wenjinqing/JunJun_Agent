@@ -1,0 +1,35 @@
+# JunJun_Agent 仓库守则
+
+QQ 机器人「君君」单仓 monorepo。北极星指标：像真人。
+
+## 硬安全约束（任何任务都必须遵守）
+
+- `data/junjun.db` 是**生产库，只读**：`sqlite3.connect("file:data/junjun.db?mode=ro", uri=True)`。
+- **测试绝不写生产库**：触达 `junjun_core.database` 模型的测试必须用
+  `peewee.SqliteDatabase(tmp_path/"t.db")` + `db.bind_ctx([...])` + `db.create_tables`。
+  （2026-08-04 两次事故：selfmood、Images 表被测试污染。）
+- `.env`、`data/sf_keys.txt` 含活密钥：展示时只给前缀（sk-xxx...），PIXIV_COOKIE、
+  Langfuse key 永不打印。
+- gitignored 不入库：`config/bot_config.toml`（只提交 `.example`）、`data/`、
+  各插件 `config.toml`、`config/bot_config.toml.bak_*`。
+- `ADMIN_QQ` 是管理员信任根；R18 订阅标题群推送必须打码（URL 保留）。
+
+## 工作方式
+
+- **边做边 commit**，方便出错回滚；提交信息用中文、说明为什么。
+- 全量回归：`uv run python -m pytest tests/ -q`（基线 1233 绿）。
+- 功能体检：`uv run python scripts/functional_check.py --pytest`。
+- 控制台 GBK：打印中文用 `unicode_escape` 或写文件，避免乱码报错。
+
+## 关键结构
+
+| 目录 | 职责 |
+|---|---|
+| junjun_core | 网关 / 配置 / DB 模型 / 安全 |
+| junjun_adapter_napcat | NapCat(OneBot) 适配器 |
+| junjun_agent | 决策漏斗 / 人设 / 各 loop |
+| junjun_llm | LLM 槽位（agent / utils / vlm…） |
+| junjun_memory | 三层记忆 + echo 防复读 |
+| junjun_skills | 工具注册表 + plugins/ 27 个插件 |
+| junjun_express | 表达层（情绪/口吻） |
+| docs/ | 路线图、自设、踩坑清单、验证清单 |
