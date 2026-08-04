@@ -29,6 +29,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from junjun_agent.commands import register_command
+from junjun_agent.interceptors import register_interceptor
 from junjun_agent.tasks import task_manager
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
@@ -93,7 +94,8 @@ _DEFAULT_NEGATIVE = "低质量，模糊，过曝，变形，错误解剖，多�
 # 内容红线：未成年词 与 性词 同时命中 -> 直接拒绝
 _MINOR_WORDS = ("萝莉", "幼女", "小学生", "儿童", "幼童", "女童", "男童", "未成年",
                 "underage", "preteen", "child", "loli")
-_NSFW_WORDS = ("色情", "裸", "sex", "涩情", "裸体", "nsfw", "porn")
+_NSFW_WORDS = ("色情", "裸", "sex", "涩情", "裸体", "nsfw", "porn",
+               "涩图", "色图", "r18")  # 放开成年向后这三个也是性词，红线组合要认得
 
 # 二次元/动漫画风词：命中则路由到二次元特化模型
 # （含涩图词：WAI-illustrious 是唯一能出 R18 的模型，
@@ -467,3 +469,28 @@ async def ai_draw(prompt: str, model: str = "") -> str:
 
 
 TOOLS = [ai_draw]
+
+
+# ---------------- 私聊涩图直通道（2026-08-04） ----------------
+# 背景：agent 槽模型（Qwen3.5 + 硅基合规层）面对 NSFW 请求会输出空内容自我
+# 审查——实测四种死法（ playful 答应不调工具 / 文本拒绝 / 调 do_not_reply /
+# 空内容），rules 授权 + 手册 + 意图自检追问全试过，模型就是不从。
+# 无歧义的私聊涩图请求是内容判断问题不是智能问题：绕过 LLM 直接派画，
+# 与 /draw 命令同链路（红线/冷却/提交全复用）。群聊不拦截，交给 LLM 婉拒。
+_NSFW_DRAW_RE = r"涩图|色图|r18|nsfw|(画|生成|来[一张幅个])[^\n]{0,30}(涩|色的)"
+_NSFW_NEGATIONS = ("别画", "别发", "不要画", "不许画", "不准画", "不能画", "不要发")
+
+
+@register_interceptor(_NSFW_DRAW_RE, name="nsfw_draw", plugin="ai_draw")
+async def nsfw_draw_hit(ctx) -> bool:
+    """私聊涩图请求直通：绕过 LLM 内容审查直接走 /draw 同链路。"""
+    if ctx.session.is_group:
+        return False  # 群里交给 LLM 按手册婉拒（公共场合 + 风控）
+    text = (ctx.meta.text or "").strip()
+    if any(neg in text for neg in _NSFW_NEGATIONS):
+        return False  # 「别画涩图了」是制止不是请求，交给 LLM
+    from junjun_agent.commands import CommandContext
+    reply_text = await draw_cmd(CommandContext(
+        session=ctx.session, meta=ctx.meta, args=text))
+    await ctx.reply(reply_text)
+    return True
