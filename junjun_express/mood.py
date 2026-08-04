@@ -24,13 +24,17 @@ _DEFAULT_MOOD = "平静"
 _MOOD_NEGATIVE = ("无语", "烦", "生气", "怒", "难过", "郁闷", "累", "疲", "丧", "低落", "委屈", "emo")
 _MOOD_POSITIVE = ("开心", "兴奋", "得意", "高兴", "快乐", "期待", "满足", "甜", "惊喜")
 
-_EVAL_PROMPT = """你是 QQ 机器人"{nickname}"。根据最近对话判断你现在的情绪状态。
+_EVAL_PROMPT = """你是 QQ 群里的"{nickname}"。根据最近对话判断你现在的情绪状态。
 {emotion_style}
 当前情绪：{current}
 最近对话：
 {conversation}
 
-只输出新的情绪状态，一个短语（如：开心、有点无语、兴奋、被夸了很得意、平静），不要解释。"""
+判断规则：
+- 评估的是「你」被怎么对待后的情绪，不是群聊氛围——群聊吵闹/复读/玩梗不等于你无语，你是见惯了的群老人
+- 只有对话里出现明确冲着你来的情绪信号（夸你/怼你/求你/撩你/冷落你）才改变情绪；信号不明显就保持现状，或向「平静」回落
+- 情绪会自然流动：同一件事不会让你停在一个情绪里太久，事情过去就往「平静」回落
+只输出新的情绪状态，一个 2~8 字的短语，不要解释。"""
 
 
 @dataclass
@@ -115,8 +119,11 @@ class MoodManager:
             return ""
         base = f"你当前的情绪：{mood}"
         if any(w in mood for w in _MOOD_NEGATIVE):
-            block = base + "。让情绪体现在行为上：现在不太想说话，回复尽量短（一两句）；" \
-                          "不要主动发表情包、语音、画图，也不想折腾工具。"
+            # 负面情绪只调语气，不压人格：话少一点淡一点，但别人需要时依然在
+            # （旧版「不想说话/不想折腾工具」会把学姐的温柔和主动行为全压没，
+            # 还抑制工具调用意愿——2026-08-04 情绪卡死在「无语」事件）
+            block = base + "。让情绪体现在语气上：话少一点、淡一点，主动闹的心思低了；" \
+                          "但有人找你、需要你时，你依然会认真回应。"
         elif any(w in mood for w in _MOOD_POSITIVE):
             block = base + "。让情绪体现在行为上：现在很愿意聊，可以活泼一点；" \
                           "合适时主动发表情包/语音，被夸就大方得意。"
@@ -156,8 +163,10 @@ class MoodManager:
             if new_state and new_state != mood.state:
                 logger.info(f"[{chat_id}] 情绪变化: {mood.state} -> {new_state}")
                 mood.state = new_state
-                # 会话情绪变化同时塑造全局自我心境（最近的经历定义现在的自己）
-                self.set_self_mood(new_state, reason=chat_id)
+                # 会话情绪变化同时塑造全局自我心境（最近的经历定义现在的自己）；
+                # 但「平静」不写入——别群评出的平静不该冲掉这边真实沉淀的情绪
+                if new_state != _DEFAULT_MOOD:
+                    self.set_self_mood(new_state, reason=chat_id)
             mood.updated_at = time.time()
         except Exception as e:
             logger.warning(f"情绪评估失败（保持 {mood.state}）: {e}")
