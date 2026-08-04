@@ -64,8 +64,11 @@ class CommandContext:
                 memory = getattr(self.session, "memory", None)
                 if memory is not None:
                     memory.add_bot(text)
-                from junjun_agent.processor import _store_outbound
-                _store_outbound(self.session, text)
+                    from junjun_agent.processor import _store_outbound
+                    _store_outbound(self.session, text)
+                else:
+                    from junjun_agent.outbound import _remember
+                    _remember(self.session.chat_id, text)
         except Exception:
             pass
 

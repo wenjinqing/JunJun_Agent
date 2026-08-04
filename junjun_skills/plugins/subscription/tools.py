@@ -204,16 +204,12 @@ def _fmt_notify(sub, items: list) -> str:
 
 
 async def _notify(sub, items: list) -> None:
-    parts = sub.chat_id.split(":")
-    platform, target_id, kind = parts[0], parts[1], parts[2] if len(parts) > 2 else "private"
-    from junjun_core.contracts import ReplySet, ReplySegment
-    from junjun_core.gateway.router import get_gateway
-    await get_gateway().send_reply(ReplySet(
-        platform=platform,
-        target_group_id=target_id if kind == "group" else None,
-        target_user_id=target_id if kind != "group" else None,
-        segments=[ReplySegment(type="text", data=_fmt_notify(sub, items))],
-    ))
+    from junjun_core.contracts import ReplySegment
+    from junjun_agent.outbound import send_proactive
+    # 统一出站口：清洗 + 记忆回填 + 落库（严厉审查 S2）
+    await send_proactive(sub.chat_id,
+                         [ReplySegment(type="text", data=_fmt_notify(sub, items))],
+                         source="subscription")
 
 
 async def check_subscriptions() -> None:

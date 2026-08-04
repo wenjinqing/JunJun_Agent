@@ -321,26 +321,21 @@ async def daily60s_push() -> None:
     if not groups:
         logger.info("每日 60s：近 48h 无活跃群，跳过")
         return
-    from junjun_agent.tasks import _parse_route
     try:
+        from junjun_core.contracts import ReplySegment  # noqa: F401
         from junjun_core.gateway import router as router_mod
-        from junjun_core.contracts import ReplySet
-        gateway = router_mod.get_gateway()
+        router_mod.get_gateway()  # 仅探测可用性，发送走统一出站口
     except Exception as e:
         logger.warning(f"每日 60s：gateway 不可用: {e}")
         return
     sent = 0
     for chat_id in groups:
         try:
-            platform, user_id, group_id = _parse_route(chat_id)
-            await gateway.send_reply(ReplySet(
-                platform=platform,
-                target_user_id=user_id,
-                target_group_id=group_id,
-                segments=[ReplySegment(type="image", data=url)],
-                should_reply=True,
-            ))
-            sent += 1
+            from junjun_agent.outbound import send_proactive
+            # 统一出站口（严厉审查 S2）；图片段无文本可回填，remember 无影响
+            if await send_proactive(chat_id, [ReplySegment(type="image", data=url)],
+                                    source="fun_texts"):
+                sent += 1
         except Exception as e:
             logger.warning(f"每日 60s 推送失败 [{chat_id}]: {type(e).__name__}: {e}")
     logger.info(f"每日 60s 已推送 {sent}/{len(groups)} 个群")
