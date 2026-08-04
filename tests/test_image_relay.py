@@ -28,7 +28,7 @@ def _clean_relay_state():
 
 
 def _fake_pipeline(url=IMG_URL, delay=0.0):
-    async def _run(prompt):
+    async def _run(prompt, model_alias=""):
         if delay:
             await asyncio.sleep(delay)
         return url, "final prompt"
@@ -85,7 +85,7 @@ class TestWaitRecentDrawn:
     @pytest.mark.asyncio
     async def test_pipeline_exception_unblocks_waiter(self, monkeypatch):
         """画图抛异常：Future 回填 None，等待方不挂死。"""
-        async def _boom(prompt):
+        async def _boom(prompt, model_alias=""):
             raise RuntimeError("api down")
         monkeypatch.setattr(ad, "_draw_pipeline", _boom)
         fut = ad._begin_pending_draw(CHAT)
@@ -102,7 +102,7 @@ class TestFeedImageBytes:
         """本会话刚画了图：说说直接复用，绝不二次调用画图管线。"""
         from junjun_skills.builtin.memory_skills import current_chat_id
 
-        async def _boom(prompt):
+        async def _boom(prompt, model_alias=""):
             raise AssertionError("不应重复生成图片")
         monkeypatch.setattr(ad, "_draw_pipeline", _boom)
 
@@ -123,7 +123,7 @@ class TestFeedImageBytes:
         """无接力图（如定时自动说说）：正常走画图管线生成。"""
         calls = []
 
-        async def _pipeline(prompt):
+        async def _pipeline(prompt, model_alias=""):
             calls.append(prompt)
             return IMG_URL, "p"
         monkeypatch.setattr(ad, "_draw_pipeline", _pipeline)

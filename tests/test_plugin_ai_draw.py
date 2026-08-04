@@ -322,3 +322,66 @@ class TestTool:
         monkeypatch.delenv("MODELSCOPE_API_KEY", raising=False)
         out = await _plugin.ai_draw.ainvoke({"prompt": "猫娘"})
         assert "MODELSCOPE_API_KEY" in out
+
+
+class TestQwenModel:
+    """Qwen-Image-2512：写实/文字域自动路由 + 显式别名。"""
+
+    def test_route_model_matrix(self, _plugin):
+        qwen = _plugin._DEFAULT_QWEN_MODEL
+        anime = _plugin._DEFAULT_ANIME_MODEL
+        default = _plugin._DEFAULT_MODEL
+        assert _plugin.route_model("写实照片风的猫咪") == qwen      # 写实域
+        assert _plugin.route_model("一张带字的海报") == qwen        # 文字渲染域
+        assert _plugin.route_model("二次元少女") == anime
+        assert _plugin.route_model("星空下的城市") == default
+        assert _plugin.route_model("二次元少女", explicit="qwen") == qwen  # 显式优先
+        assert _plugin.route_model("猫", explicit="anime") == anime
+        assert _plugin.route_model("猫", explicit="不存在") == default    # 未知别名忽略
+
+    def test_model_style(self, _plugin):
+        reg = _plugin._model_registry()
+        assert _plugin.model_style(reg["anime"]) == "anime"
+        assert _plugin.model_style(reg["qwen"]) == "default"  # qwen 吃自然语言细描
+        assert _plugin.model_style(reg["zimage"]) == "default"
+
+    def test_parse_model_alias(self, _plugin):
+        assert _plugin._parse_model_alias("猫娘少女 qwen") == ("猫娘少女", "qwen")
+        assert _plugin._parse_model_alias("猫娘少女") == ("猫娘少女", "")
+        assert _plugin._parse_model_alias("带字海报 anime") == ("带字海报", "anime")
+
+    @pytest.mark.asyncio
+    async def test_qwen_routing_via_cmd(self, _fake_gateway, _plugin, monkeypatch):
+        captured = {}
+
+        async def _gen(prompt, model, negative=""):
+            captured["model"] = model
+            captured["negative"] = negative
+            return "http://x/a.png"
+
+        monkeypatch.setattr(_plugin, "generate", _gen)
+        await _plugin.draw_cmd(_ctx("/draw 写实照片风的猫咪"))
+        await _drain()
+        assert captured["model"] == _plugin._DEFAULT_QWEN_MODEL
+        assert captured["negative"] == _plugin._DEFAULT_NEGATIVE  # 非 anime 家族
+
+    @pytest.mark.asyncio
+    async def test_explicit_alias_via_cmd(self, _fake_gateway, _plugin, monkeypatch):
+        captured = {}
+
+        async def _gen(prompt, model, negative=""):
+            captured["model"] = model
+            captured["prompt"] = prompt
+            return "http://x/a.png"
+
+        monkeypatch.setattr(_plugin, "generate", _gen)
+        _plugin._last_use.clear()
+        await _plugin.draw_cmd(_ctx("/draw 猫娘少女 qwen"))
+        await _drain()
+        assert captured["model"] == _plugin._DEFAULT_QWEN_MODEL
+        assert "qwen" not in captured["prompt"]  # 别名被剥离
+
+    @pytest.mark.asyncio
+    async def test_tool_bad_alias_rejected(self, _plugin):
+        out = await _plugin.ai_draw.ainvoke({"prompt": "猫娘", "model": "gpt"})
+        assert "不认识模型" in out
