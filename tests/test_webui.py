@@ -56,12 +56,12 @@ class TestAuth:
 class TestConfigAPI:
     def test_get_returns_whitelist_keys(self, auth_client):
         cfg = auth_client.get("/api/config").json()
-        assert "chat" in cfg and "talk_value" in cfg["chat"]
+        assert "chat" in cfg and "max_context_size" in cfg["chat"]
 
     def test_hot_change_applies_to_memory(self, auth_client, _fake_bot_config):
-        r = auth_client.post("/api/config", json={"chat": {"talk_value": 0.42}})
+        r = auth_client.post("/api/config", json={"chat": {"max_context_size": 66}})
         assert r.status_code == 200
-        assert _fake_bot_config.raw["chat"]["talk_value"] == 0.42
+        assert _fake_bot_config.raw["chat"]["max_context_size"] == 66
 
     def test_non_whitelist_key_rejected(self, auth_client):
         r = auth_client.post("/api/config", json={"gateway": {"port": 1}})

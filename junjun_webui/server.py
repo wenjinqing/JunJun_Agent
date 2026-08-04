@@ -90,8 +90,7 @@ app = FastAPI(title="JunJun WebUI", docs_url=None, redoc_url=None)
 
 # 允许热改的白名单（section, key）——防 WebUI 改崩关键结构
 _MUTABLE_KEYS = {
-    ("chat", "talk_value"), ("chat", "mentioned_bot_reply"), ("chat", "max_context_size"),
-    ("chat", "enable_talk_value_rules"),
+    ("chat", "mentioned_bot_reply"), ("chat", "max_context_size"),
     ("mood", "enable_mood"), ("emoji", "emoji_chance"), ("emoji", "steal_emoji"),
     ("repeat", "enable"), ("repeat", "threshold"),
     ("proactive_chat", "enable"), ("proactive_chat", "max_daily_proactive"),

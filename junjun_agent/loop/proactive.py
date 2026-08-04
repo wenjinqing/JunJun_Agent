@@ -40,8 +40,22 @@ def _cfg() -> dict:
     return get_global_config().raw.get("proactive_chat", {})
 
 
+def _in_range(now_min: int, rng: str) -> bool:
+    """time="HH:MM-HH:MM"，支持跨夜（23:00-02:00）。
+    （原在 funnel/frequency.py，该模块作为死代码删除后移居此处——
+    静默时段是主动消息系统的活功能）。"""
+    try:
+        start_s, end_s = rng.split("-")
+        start, end = int(start_s.split(":")[0]) * 60 + int(start_s.split(":")[1]), \
+                     int(end_s.split(":")[0]) * 60 + int(end_s.split(":")[1])
+    except (ValueError, AttributeError, IndexError):
+        return False
+    if start <= end:
+        return start <= now_min <= end
+    return now_min >= start or now_min <= end  # 跨夜
+
+
 def _in_silent_hours(now: Optional[datetime] = None) -> bool:
-    from junjun_agent.funnel.frequency import _in_range
     spec = str(_cfg().get("silent_hours", "23:00-09:00"))
     now = now or datetime.now()
     return _in_range(now.hour * 60 + now.minute, spec)

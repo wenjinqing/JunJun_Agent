@@ -113,6 +113,7 @@ class TestLongTermBackupRecovery:
         mem.load()
         await mem.add("珍贵记忆一", chat_id="qq:1:group")
         await mem.add("珍贵记忆二", chat_id="qq:1:group")
+        mem.flush()  # 批量落盘语义：add 只打脏标记，flush 才写盘（主备同步）
         # 主 metadata 写坏（模拟断电半写）
         mem._meta_path().write_text("{损坏的json", encoding="utf-8")
 

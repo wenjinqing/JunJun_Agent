@@ -49,13 +49,6 @@ def _no_langfuse(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_freq_eval(monkeypatch):
-    async def _noop(session):
-        return None
-    monkeypatch.setattr(proc_mod, "_maybe_adjust_frequency", _noop)
-
-
-@pytest.fixture(autouse=True)
 def _no_mood_eval(monkeypatch):
     from junjun_express.mood import mood_manager
     monkeypatch.setattr(mood_manager, "should_evaluate", lambda chat_id: False)

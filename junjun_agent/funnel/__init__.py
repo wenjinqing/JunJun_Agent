@@ -1,9 +1,5 @@
-"""决策漏斗：L1 规则门 + L2 语义门。"""
+"""决策门：私聊直通，群聊仅 @/直呼进主 Agent（2026-08-04 起收敛为此）。"""
 
-from junjun_agent.funnel.rule_gate import L1Config, L1Result, rule_gate, is_addressed
-from junjun_agent.funnel.llm_gate import GateDecision, llm_gate, parse_gate_output
+from junjun_agent.funnel.rule_gate import L1Config, is_addressed
 
-__all__ = [
-    "L1Config", "L1Result", "rule_gate", "is_addressed",
-    "GateDecision", "llm_gate", "parse_gate_output",
-]
+__all__ = ["L1Config", "is_addressed"]
