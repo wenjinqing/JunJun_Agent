@@ -132,7 +132,7 @@ class JunJunAgent:
             model = get_chat_model("agent")
         self._model = model  # 留引用：会话淘汰时关闭 httpx 连接池（防泄漏）
 
-    def _build_agent(self, full: bool = False):
+    def _build_agent(self, full: bool = False, allow_silence: bool = True):
         """每轮重建 agent 图：工具集按「当前」会话话题实时掩码。
 
         曾经只在 __init__ 绑一次——那时 memory 是空的，关键词钉不住任何工具，
@@ -143,8 +143,14 @@ class JunJunAgent:
         后掩码真正生效（设计本意就是按轮动态）。
         full=True：漏绑补救轮用全量工具（意图自检发现目标工具被裁掉时，
         P5-2 兜底）。
+        allow_silence=False（必回场景）：从工具集摘除 do_not_reply——
+        prompt 里「禁止调用 do_not_reply」只是劝告，模型不听话就真沉默了
+        （2026-08-04 trace：管理员私聊问话被 do_not_reply 吞掉，output=null）。
+        必回语义必须结构性强制：想沉默？没这个工具，只能出声。
         """
         tools = get_tools() if full else get_tools(self.session)
+        if not allow_silence:
+            tools = [t for t in tools if t.name != SILENCE_TOOL_NAME]
         if not full:
             # 后台预热 embedding 缓存：同步掩码路径只读缓存，这里喂它——
             # 本轮可能来不及，下一轮起语义相关性补满生效（失败静默）
@@ -253,7 +259,7 @@ class JunJunAgent:
         # 多步任务加迭代预算：每步可能 1-2 次工具调用
         eff_iter = max_iter + len(plan_steps or [])
 
-        agent = self._build_agent()  # 每轮重建：工具掩码按当前话题实时生效
+        agent = self._build_agent(allow_silence=not addressed)  # 每轮重建：工具掩码按当前话题实时生效；必回场景摘除沉默工具
         try:
             result = await agent.ainvoke(
                 {"messages": messages},
@@ -299,7 +305,8 @@ class JunJunAgent:
                 logger.info(f"[{self.session.chat_id}] 意图自检：追问补调工具"
                             f"{'（全绑补救）' if full_bind else ''} [trace={trace_id}]")
                 try:
-                    retry_agent = self._build_agent(full=True) if full_bind else agent
+                    retry_agent = (self._build_agent(full=True, allow_silence=not addressed)
+                                   if full_bind else agent)
                     retry = await retry_agent.ainvoke(
                         {"messages": messages + [HumanMessage(content=nudge)]},
                         config={

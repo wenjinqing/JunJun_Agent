@@ -137,7 +137,7 @@ class TestAgentEchoGuard:
 
         scripted = _ScriptedAgent(["杂鱼就是杂鱼", "好吧好吧，换个话题呗"])
         monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
-                            lambda self, full=False: scripted)
+                            lambda self, full=False, **_kw: scripted)
         session = _session_with_memory()
         session.memory.add_bot("杂鱼就是杂鱼")
         agent = agent_mod.JunJunAgent(session, model=object())
@@ -152,7 +152,7 @@ class TestAgentEchoGuard:
 
         scripted = _ScriptedAgent(["杂鱼就是杂鱼", "杂鱼就是杂鱼！"])
         monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
-                            lambda self, full=False: scripted)
+                            lambda self, full=False, **_kw: scripted)
         session = _session_with_memory()
         session.memory.add_bot("杂鱼就是杂鱼")
         agent = agent_mod.JunJunAgent(session, model=object())
@@ -165,7 +165,7 @@ class TestAgentEchoGuard:
 
         scripted = _ScriptedAgent(["杂鱼就是杂鱼", "杂鱼就是杂鱼！"])
         monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
-                            lambda self, full=False: scripted)
+                            lambda self, full=False, **_kw: scripted)
         session = _session_with_memory()
         session.memory.add_bot("杂鱼就是杂鱼")
         agent = agent_mod.JunJunAgent(session, model=object())
@@ -180,7 +180,7 @@ class TestAgentEchoGuard:
         # 新稿和任何一条历史整句都不像，但都嵌着「姐姐疼你」
         scripted = _ScriptedAgent(["姐姐疼你别哭", "我在呢，慢慢说"])
         monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
-                            lambda self, full=False: scripted)
+                            lambda self, full=False, **_kw: scripted)
         session = _session_with_memory()
         session.memory.add_bot("来，姐姐疼你")
         session.memory.add_bot("今天姐姐疼你一次")
@@ -197,7 +197,7 @@ class TestAgentEchoGuard:
 
         scripted = _ScriptedAgent(["今晚月亮真圆啊"])
         monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
-                            lambda self, full=False: scripted)
+                            lambda self, full=False, **_kw: scripted)
         session = _session_with_memory()
         session.memory.add_bot("杂鱼就是杂鱼")
         agent = agent_mod.JunJunAgent(session, model=object())
@@ -213,7 +213,7 @@ class TestAgentEchoGuard:
 
         scripted = _ScriptedAgent(["杂鱼就是杂鱼"])
         monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
-                            lambda self, full=False: scripted)
+                            lambda self, full=False, **_kw: scripted)
         cfg = cfg_mod.get_global_config()
         monkeypatch.setitem(cfg.raw, "agent", {"echo_guard": False})
         session = _session_with_memory()
