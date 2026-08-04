@@ -106,6 +106,7 @@ def get_all_tools() -> list:
 # 只读实调白名单：(工具名, 参数字典, 备注)。不在名单的一律 SKIP。
 LIVE_PROBES = [
     ("get_time", {}, "系统时间"),
+    ("use_skill", {"name": "video-watching"}, "技能手册读取(md skills)"),
     ("get_capabilities", {}, "能力自报"),
     ("query_jargon", {"term": "yyds"}, "黑话查询"),
     ("abbreviation_translate", {"term": "yyds"}, "缩写翻译(在线API)"),

@@ -17,9 +17,11 @@ QQ 机器人「君君」单仓 monorepo。北极星指标：像真人。
 ## 工作方式
 
 - **边做边 commit**，方便出错回滚；提交信息用中文、说明为什么。
-- 全量回归：`uv run python -m pytest tests/ -q`（基线 1233 绿）。
+- 全量回归：`uv run python -m pytest tests/ -q`（基线 1242 绿）。
 - 功能体检：`uv run python scripts/functional_check.py --pytest`。
 - 控制台 GBK：打印中文用 `unicode_escape` 或写文件，避免乱码报错。
+- Agent 技能手册（md skills）：`junjun_skills/agent_skills/<name>.md`，frontmatter
+  必须带 `name` + `when`；新增后跑 `tests/test_agent_skills.py`。
 
 ## 关键结构
 
