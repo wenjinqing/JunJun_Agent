@@ -69,6 +69,7 @@ class TestLongTermMemory:
     async def test_persistence_across_instances(self, tmp_path, fake_embedding):
         ltm1 = LongTermMemory(data_dir=tmp_path)
         await ltm1.add("持久化测试内容", "c1")
+        ltm1.flush()  # 批量落盘语义：add 只打脏标记，flush 才写盘
         ltm2 = LongTermMemory(data_dir=tmp_path)  # 新实例重新 load
         hits = await ltm2.search("持久化测试内容", top_k=1)
         assert hits and hits[0].text == "持久化测试内容"
@@ -239,3 +240,58 @@ class TestScheduler:
         await asyncio.sleep(0.25)
         await s.stop()
         assert ran  # bad 崩溃不影响 good
+
+
+# ---------- 严厉审查 P2-10：检索质量/写入去重/时效衰减/批量落盘 ----------
+
+class TestMemoryQuality:
+    @pytest.mark.asyncio
+    async def test_add_dedup_merges_same_fact(self, tmp_path, fake_embedding):
+        """同一事实重复写入合并加权，不再 N 份挤占 top-k。"""
+        ltm = LongTermMemory(data_dir=tmp_path)
+        await ltm.add("甲不吃香菜", "c1")
+        await ltm.add("甲不吃香菜", "c1")
+        await ltm.add("乙喜欢火锅", "c1")
+        kinds = [it.text for it in ltm._items]
+        assert kinds.count("甲不吃香菜") == 1
+        merged = next(it for it in ltm._items if it.text == "甲不吃香菜")
+        assert merged.weight > 1.0      # 合并强化
+
+    @pytest.mark.asyncio
+    async def test_recall_reinforces_weight(self, tmp_path, fake_embedding):
+        """检索命中 = 复习：被召回条目权重微涨。"""
+        ltm = LongTermMemory(data_dir=tmp_path)
+        await ltm.add("丙养了只猫", "c1")
+        it = ltm._items[0]
+        w0 = it.weight
+        hits = await ltm.search("丙养了只猫", top_k=1, chat_id="c1", spread=False)
+        assert hits and hits[0].weight > w0
+
+    def test_effective_weight_decays_and_pinned_exempt(self):
+        """时效衰减：普通条目随时间沉底，pinned 不衰减。"""
+        from junjun_memory.long_term import _effective_weight, MemoryItem
+        old = MemoryItem(text="x", chat_id="c", timestamp=time.time() - 10 * 604800,
+                         weight=1.0, kind="fact")
+        pinned = MemoryItem(text="x", chat_id="c", timestamp=time.time() - 10 * 604800,
+                            weight=1.0, kind="pinned")
+        assert _effective_weight(old) < 0.7       # 10 周 ×0.95^10 ≈ 0.60
+        assert _effective_weight(pinned) == 1.0
+
+    @pytest.mark.asyncio
+    async def test_forget_old_decayed_memory(self, tmp_path, fake_embedding):
+        """遗忘口修复：90 天前的普通记忆（权重衰减后 <0.2）会被清掉。"""
+        ltm = LongTermMemory(data_dir=tmp_path)
+        await ltm.add("很久以前的小事", "c1")
+        ltm._items[0].timestamp = time.time() - 400 * 86400  # 400 天前（0.95^57≈0.05）
+        removed = ltm.forget()
+        assert removed == 1
+
+    @pytest.mark.asyncio
+    async def test_add_marks_dirty_flush_saves(self, tmp_path, fake_embedding):
+        """批量落盘：add 只打脏标记，flush 才真正写盘。"""
+        ltm = LongTermMemory(data_dir=tmp_path)
+        await ltm.add("批量落盘验证", "c1")
+        assert ltm._dirty
+        ltm.flush()
+        assert not ltm._dirty
+        assert (tmp_path / "metadata.json").exists()

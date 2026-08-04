@@ -137,6 +137,12 @@ async def _run() -> int:
         await scheduler.stop()
         from junjun_agent.tasks import task_manager
         await task_manager.shutdown()
+        # 长期记忆批量落盘后的收尾：关停前把脏数据写出去
+        try:
+            from junjun_memory.long_term import get_long_term_memory
+            get_long_term_memory().flush()
+        except Exception:
+            pass
         from junjun_agent.funnel.session_queue import session_queues
         await session_queues.stop_all()
         from junjun_core.database import db_writer

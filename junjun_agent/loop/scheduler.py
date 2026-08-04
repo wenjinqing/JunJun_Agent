@@ -132,6 +132,12 @@ def register_default_tasks() -> None:
         if removed:
             logger.info(f"记忆遗忘任务: 清理 {removed} 条")
 
+    async def memory_flush():
+        """长期记忆批量落盘：add() 只打脏标记（防 O(n²) 写放大卡事件循环），
+        由这里周期落盘。"""
+        from junjun_memory.long_term import get_long_term_memory
+        get_long_term_memory().flush()
+
     async def flush_pending_summaries():
         """兜底：超时未满批的摘要批次也定期消费。"""
         from junjun_memory.summarizer import get_summarizer, BATCH_MAX_AGE
@@ -202,6 +208,7 @@ def register_default_tasks() -> None:
     get_session_manager().on_evict = lambda s: session_queues.drop(s.chat_id)
 
     scheduler.add(ScheduledTask("memory_forget", memory_forget, interval=6 * 3600))
+    scheduler.add(ScheduledTask("memory_flush", memory_flush, interval=60))
     scheduler.add(ScheduledTask("flush_summaries", flush_pending_summaries, interval=600))
     scheduler.add(ScheduledTask("reminders", reminders, interval=interval))
     scheduler.add(ScheduledTask("proactive_chat", proactive_scan, interval=proactive_min * 60))

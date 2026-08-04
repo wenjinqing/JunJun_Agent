@@ -94,7 +94,7 @@ class TestDiary:
             monkeypatch.setattr(d, "_gather_material", lambda day: "我今天说过的话：大家好")
             indexed = []
 
-            async def _fake_index(day, content):
+            async def _fake_index(day, content, **_kw):
                 indexed.append((day, content))
 
             monkeypatch.setattr(d, "_index_to_memory", _fake_index)
