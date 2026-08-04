@@ -477,11 +477,14 @@ TOOLS = [ai_draw]
 # 空内容），rules 授权 + 手册 + 意图自检追问全试过，模型就是不从。
 # 无歧义的私聊涩图请求是内容判断问题不是智能问题：绕过 LLM 直接派画，
 # 与 /draw 命令同链路（红线/冷却/提交全复用）。群聊不拦截，交给 LLM 婉拒。
-_NSFW_DRAW_RE = r"涩图|色图|r18|nsfw|(画|生成|来[一张幅个])[^\n]{0,30}(涩|色的)"
-_NSFW_NEGATIONS = ("别画", "别发", "不要画", "不许画", "不准画", "不能画", "不要发")
+# 「色的」只匹配句尾（「搞点色的」「来张色的」）——「蓝色的天空」「角色的立绘」
+# 这类颜色/角色词不再被劫持（严厉审查 P1-6 假阳性）
+_NSFW_DRAW_RE = r"涩图|色图|r18|nsfw|(画|生成|来[一张幅个])[^\n]{0,30}(涩|色色|色的?[。!~？\s]*$)"
+_NSFW_NEGATIONS = ("别画", "别发", "不要画", "不许画", "不准画", "不能画", "不要发",
+                   "先别画", "这次算了", "不用画")
 
 
-@register_interceptor(_NSFW_DRAW_RE, name="nsfw_draw", plugin="ai_draw")
+@register_interceptor(_NSFW_DRAW_RE, name="nsfw_draw", plugin="ai_draw", priority=-10)
 async def nsfw_draw_hit(ctx) -> bool:
     """私聊涩图请求直通：绕过 LLM 内容审查直接走 /draw 同链路。"""
     if ctx.session.is_group:

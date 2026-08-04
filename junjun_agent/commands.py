@@ -43,7 +43,12 @@ class CommandContext:
         await self.send([ReplySegment(type="text", data=text)])
 
     async def send(self, segments: List[ReplySegment]) -> None:
-        """任意段回复到当前会话（image/video/at/poke 等）。"""
+        """任意段回复到当前会话（image/video/at/poke 等）。
+
+        发送成功后把文本段写回短期记忆 + 落库——命令/拦截器的回复直发
+        gateway 不进 inbound 管线，不写的话 bot 下一轮就忘了自己说过
+        「在画了」，被问「图呢」时记忆为空只能编（严厉审查 P1-6 副作用失忆）。
+        """
         from junjun_core.gateway.router import get_gateway
         await get_gateway().send_reply(ReplySet(
             platform=self.session.platform,
@@ -52,6 +57,17 @@ class CommandContext:
             segments=segments,
             should_reply=True,
         ))
+        try:
+            text = "\n".join(s.data for s in segments
+                             if s.type == "text" and isinstance(s.data, str)).strip()
+            if text:
+                memory = getattr(self.session, "memory", None)
+                if memory is not None:
+                    memory.add_bot(text)
+                from junjun_agent.processor import _store_outbound
+                _store_outbound(self.session, text)
+        except Exception:
+            pass
 
     async def send_forward(self, title: str, content: str, *, nickname: str = "君君") -> None:
         """长内容合并转发（防刷屏）。单条 >200 字或含多行列表时优先用此。

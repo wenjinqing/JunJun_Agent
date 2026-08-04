@@ -37,6 +37,7 @@ class Interceptor:
     plugin: str = "builtin"
     group_at_only: bool = False      # 群聊里只在 @bot 时触发
     admin_only: bool = False
+    priority: int = 0                # 大者先匹配（默认同级按注册序）
 
 
 _interceptors: list = []
@@ -44,15 +45,20 @@ _interceptors: list = []
 
 def register_interceptor(pattern: str, *, name: str = "", plugin: str = "builtin",
                          group_at_only: bool = False, admin_only: bool = False,
-                         flags: int = re.I):
-    """装饰器：注册消息拦截器（按注册顺序匹配，先中先得）。"""
+                         priority: int = 0, flags: int = re.I):
+    """装饰器：注册消息拦截器。
+
+    匹配顺序 = priority 降序，同级按注册序——曾按裸注册序（=插件目录
+    字母序），改个目录名就换优先级，没有任何显式控制（严厉审查 P1-6）。
+    """
     def deco(fn: Handler) -> Handler:
         _interceptors.append(Interceptor(
             name=name or fn.__name__, pattern=re.compile(pattern, flags),
             handler=fn, plugin=plugin, group_at_only=group_at_only,
-            admin_only=admin_only,
+            admin_only=admin_only, priority=priority,
         ))
-        logger.debug(f"注册拦截器: {name or fn.__name__} [{plugin}] /{pattern}/")
+        _interceptors.sort(key=lambda i: -i.priority)  # 稳定排序，同级保持注册序
+        logger.debug(f"注册拦截器: {name or fn.__name__} [{plugin}] /{pattern}/ (prio={priority})")
         return fn
     return deco
 
