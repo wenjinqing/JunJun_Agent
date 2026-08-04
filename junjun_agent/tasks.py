@@ -22,12 +22,16 @@
 可靠性：
 - 每会话同 kind 任务去重（占线时返回占线话术，不并行堆任务）
 - work 全程 try/except + 硬超时，炸了只发降级文案，绝不影响主流程
+- 失败自动重试一次（[tasks] auto_retry，默认开）——ModelScope 类抖动占失败大头
+- 结果登记 + 决策注入（2026-08-04「图呢」事件）：任务结局对在途会话可见，
+  Agent 记得自己答应的事办成了没有；完成/失败话术同步写进短期记忆
 - 进程重启丢任务可接受（内存任务）；shutdown() 优雅取消全部
 """
 
 import asyncio
 import random
 import time
+from collections import deque
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from junjun_core.contracts import ReplySegment, ReplySet
@@ -36,6 +40,20 @@ from junjun_core.observability import get_logger
 logger = get_logger("agent.tasks")
 
 _DEFAULT_TIMEOUT = 150.0
+
+# 结果登记：chat_id -> deque[{ts, kind, status, detail}]（决策注入与状态查询的数据源）
+_OUTCOME_MAX = 10
+_OUTCOME_TTL = 1800.0   # 注入窗口 30 分钟——再久的结局对方早忘了，不用提醒
+
+# kind -> 中文名（状态注入/查询用「画图」而不是 ai_draw）
+_KIND_CN = {
+    "ai_draw": "画图", "tts": "语音", "bilibili": "B站视频",
+    "douyin": "抖音视频", "video_watch": "看视频",
+}
+
+
+def _kind_cn(kind: str) -> str:
+    return _KIND_CN.get(kind, kind)
 
 # 完成话术模板池（贴合人设，可按 kind 覆盖；空列表表示不发完成语，只发内容段）
 # 警告：这些模板直发不经过 echo guard——池子小了必成口头禅
@@ -73,10 +91,12 @@ def _parse_route(chat_id: str) -> Tuple[str, Optional[str], Optional[str]]:
 
 
 class TaskManager:
-    """后台任务登记/去重/兜底/直发。"""
+    """后台任务登记/去重/兜底/直发/结果追踪。"""
 
     def __init__(self) -> None:
         self._running: Dict[Tuple[str, str], asyncio.Task] = {}
+        self._started: Dict[Tuple[str, str], float] = {}   # key -> monotonic 起点
+        self._outcomes: Dict[str, deque] = {}
 
     @staticmethod
     def _current_chat_id() -> str:
@@ -85,6 +105,15 @@ class TaskManager:
             return current_chat_id.get() or ""
         except Exception:
             return ""
+
+    @staticmethod
+    def _auto_retry() -> bool:
+        """[tasks] auto_retry（默认开）：失败后自动重试一次再认输。"""
+        try:
+            from junjun_core.config import get_global_config
+            return bool(get_global_config().raw.get("tasks", {}).get("auto_retry", True))
+        except Exception:
+            return True
 
     def is_busy(self, chat_id: str, kind: str) -> bool:
         task = self._running.get((chat_id, kind))
@@ -119,13 +148,26 @@ class TaskManager:
 
         async def _runner() -> None:
             started = time.monotonic()
-            try:
-                segments = await asyncio.wait_for(work(), timeout=timeout)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.warning(f"[{chat_id}] {kind} 后台任务异常: {type(e).__name__}: {e}")
-                segments = None
+            attempts = 2 if self._auto_retry() else 1
+            segments = None
+            err_detail = ""
+            for i in range(attempts):
+                try:
+                    segments = await asyncio.wait_for(work(), timeout=timeout)
+                except asyncio.CancelledError:
+                    raise
+                except asyncio.TimeoutError:
+                    err_detail = "超时"
+                    segments = None
+                except Exception as e:
+                    err_detail = type(e).__name__
+                    logger.warning(f"[{chat_id}] {kind} 后台任务异常: {type(e).__name__}: {e}")
+                    segments = None
+                if segments:
+                    break
+                if i < attempts - 1:
+                    logger.info(f"[{chat_id}] {kind} 失败（{err_detail or '无产出'}），自动重试一次")
+                    await asyncio.sleep(3.0)
             elapsed = time.monotonic() - started
             try:
                 if segments:
@@ -135,12 +177,19 @@ class TaskManager:
                         pool = _DONE_TEMPLATES.get(kind, _DONE_TEMPLATES["_default"])
                         text = random.choice(pool) if pool else ""
                     out = ([ReplySegment(type="text", data=text)] if text else []) + segments
-                    await self._send(chat_id, out)
+                    sent = await self._send(chat_id, out)
                     logger.info(f"[{chat_id}] {kind} 后台任务完成，已直发（{elapsed:.1f}s）")
+                    self._record_outcome(chat_id, kind, "done",
+                                         f"耗时{elapsed:.0f}s" + ("" if sent else "，但发送失败"),
+                                         said=text)
                 else:
+                    sent = False
                     if fail_text:
-                        await self._send(chat_id, [ReplySegment(type="text", data=fail_text)])
+                        sent = await self._send(chat_id, [ReplySegment(type="text", data=fail_text)])
                     logger.info(f"[{chat_id}] {kind} 后台任务失败，已发降级文案（{elapsed:.1f}s）")
+                    self._record_outcome(chat_id, kind, "failed",
+                                         (err_detail or "无产出") + ("" if sent else "，降级文案也没发出去"),
+                                         said=fail_text if sent else "")
             finally:
                 # 成品文件等「发送尝试之后」才清理——提前删会让 NapCat 拿到不存在的路径
                 if cleanup is not None:
@@ -150,13 +199,66 @@ class TaskManager:
                         logger.warning(f"[{chat_id}] {kind} 任务收尾清理异常: {e}")
 
         task = asyncio.create_task(_runner(), name=f"bg-{kind}-{chat_id}")
-        self._running[(chat_id, kind)] = task
-        task.add_done_callback(lambda _t: self._running.pop((chat_id, kind), None))
+        key = (chat_id, kind)
+        self._running[key] = task
+        self._started[key] = time.monotonic()
+
+        def _pop(_t, k=key):
+            self._running.pop(k, None)
+            self._started.pop(k, None)
+        task.add_done_callback(_pop)
         logger.info(f"[{chat_id}] {kind} 后台任务已登记")
         return ack_text
 
-    async def _send(self, chat_id: str, segments: List[ReplySegment]) -> None:
-        """直发到会话（gateway 不可用时静默——测试环境允许）。"""
+    def _record_outcome(self, chat_id: str, kind: str, status: str,
+                        detail: str, said: str = "") -> None:
+        """登记结局：① 决策注入数据源 ② 话术写进短期记忆——
+        直发消息不经过 inbound 管线，不手动记的话模型会忘了自己说过
+        「画好啦/画砸了」，下轮被问「图呢」只能装傻（2026-08-04 实战）。"""
+        dq = self._outcomes.setdefault(chat_id, deque(maxlen=_OUTCOME_MAX))
+        dq.append({"ts": time.time(), "kind": kind, "status": status, "detail": detail})
+        if said:
+            try:
+                from junjun_core.gateway.session_manager import get_session_manager
+                s = get_session_manager().all_sessions().get(chat_id)
+                if s is not None and getattr(s, "memory", None) is not None:
+                    note = said if status == "done" else f"（后台任务{ _kind_cn(kind) }失败：{detail}）{said}"
+                    s.memory.add_bot(note)
+            except Exception:
+                pass
+
+    def _status_lines(self, chat_id: str) -> List[str]:
+        """在途 + 近 30 分钟结局的人类可读行（注入与查询共用）。"""
+        lines = []
+        now = time.time()
+        for (cid, kind), t in list(self._running.items()):
+            if cid != chat_id or t.done():
+                continue
+            started = self._started.get((cid, kind))
+            mins = int((time.monotonic() - started) / 60) if started else 0
+            lines.append(f"- {_kind_cn(kind)}：进行中（已 {mins} 分钟）")
+        for o in reversed(self._outcomes.get(chat_id, ())):
+            if now - o["ts"] > _OUTCOME_TTL:
+                continue
+            when = time.strftime("%H:%M", time.localtime(o["ts"]))
+            status = "完成" if o["status"] == "done" else "失败"
+            lines.append(f"- {_kind_cn(o['kind'])}：{status}（{when}，{o['detail']}）")
+        return lines
+
+    def task_status_block(self, chat_id: str) -> str:
+        """决策注入块：让 Agent 记得自己答应过的事办得怎么样。"""
+        lines = self._status_lines(chat_id)
+        if not lines:
+            return ""
+        return ("【你的后台任务近况】（你答应过的事，对方问起照实说；"
+                "失败了主动提补救，别装没这回事）\n" + "\n".join(lines))
+
+    def list_for_chat(self, chat_id: str) -> str:
+        """list_background_tasks 工具合并用；无任务返回空串。"""
+        return "\n".join(self._status_lines(chat_id))
+
+    async def _send(self, chat_id: str, segments: List[ReplySegment]) -> bool:
+        """直发到会话（gateway 不可用时静默——测试环境允许）。返回是否送达。"""
         try:
             from junjun_core.gateway import router as router_mod
             gateway = router_mod.get_gateway()
@@ -168,8 +270,10 @@ class TaskManager:
                 segments=segments,
                 should_reply=True,
             ))
+            return True
         except Exception as e:
             logger.warning(f"[{chat_id}] 后台任务发送失败: {type(e).__name__}: {e}")
+            return False
 
     async def shutdown(self) -> None:
         """优雅退出：取消全部未完成任务。"""
@@ -180,6 +284,7 @@ class TaskManager:
             await asyncio.gather(*pending, return_exceptions=True)
             logger.info(f"后台任务已全部取消（{len(pending)} 个）")
         self._running.clear()
+        self._started.clear()
 
 
 task_manager = TaskManager()

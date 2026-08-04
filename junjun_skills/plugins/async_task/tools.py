@@ -147,9 +147,23 @@ def deep_research(topic: str) -> str:
 
 @tool
 def list_background_tasks() -> str:
-    """查看当前会话的后台任务（排队中/执行中/最近完成）。用户问「任务做得怎么样了/做好了吗」时使用。"""
+    """查看当前会话的后台任务（画图/语音等成品任务 + 调研/派活任务的真实状态）。
+    用户问「任务做得怎么样了/做好了吗/图呢/画好了吗」时使用——照状态如实回答。"""
     from junjun_skills.builtin.memory_skills import current_chat_id
-    return async_jobs.list_for_chat(current_chat_id.get())
+    chat_id = current_chat_id.get()
+    parts = []
+    # 成品直发型任务（task_manager：ai_draw/tts/bilibili/douyin）——
+    # 2026-08-04 前这里只查 async_jobs，画图状态对模型完全不可见，
+    # 用户问「图呢」模型只能再画一张或装傻
+    try:
+        from junjun_agent.tasks import task_manager
+        tm = task_manager.list_for_chat(chat_id)
+        if tm:
+            parts.append("成品任务（画图/语音/视频）：\n" + tm)
+    except Exception:
+        pass
+    parts.append(async_jobs.list_for_chat(chat_id))
+    return "\n".join(parts)
 
 
 @tool
