@@ -183,6 +183,41 @@ class TaskManager:
         except Exception:
             return True
 
+    @staticmethod
+    def _max_concurrent() -> int:
+        """[tasks] max_concurrent（默认 4）：全局在途上限——此前只按
+        (chat_id, kind) 去重，N 个群同时画图就是 N 条并发轮询（严厉审查 S3）。"""
+        try:
+            from junjun_core.config import get_global_config
+            return int(get_global_config().raw.get("tasks", {}).get("max_concurrent", 4))
+        except Exception:
+            return 4
+
+    def running_count(self) -> int:
+        return sum(1 for t in self._running.values() if not t.done())
+
+    def cancel_for_chat(self, chat_id: str, kind: str = "") -> int:
+        """取消该会话的在途任务（可按 kind 过滤，兼容中文名「画图」）。返回取消数。
+
+        「别画了」此前无路可走——cancel_background_task 只认 AsyncJob
+        （严厉审查 S3：TaskManager 任务用户不可取消）。
+        """
+        n = 0
+        for (cid, k), t in list(self._running.items()):
+            if cid != chat_id or t.done():
+                continue
+            if kind and kind not in (k, _kind_cn(k)):
+                continue
+            t.cancel()
+            _append_rec({"op": "end", "chat_id": cid, "kind": k,
+                         "status": "cancelled", "detail": "对方主动取消",
+                         "ts": time.time()})
+            self._record_outcome(cid, k, "cancelled", "对方主动取消")
+            n += 1
+        if n:
+            logger.info(f"[{chat_id}] 已取消 {n} 个在途任务（{kind or '全部'}）")
+        return n
+
     def is_busy(self, chat_id: str, kind: str) -> bool:
         task = self._running.get((chat_id, kind))
         return task is not None and not task.done()
@@ -213,6 +248,9 @@ class TaskManager:
         if self.is_busy(chat_id, kind):
             logger.info(f"[{chat_id}] {kind} 任务占线，拒绝新提交")
             return busy_text or random.choice(_BUSY_TEMPLATES)
+        if self.running_count() >= self._max_concurrent():
+            logger.info(f"[{chat_id}] 全局任务并发已满（{self._max_concurrent()}），拒绝新提交")
+            return "我这会儿手头的活排满了，等一个弄完了再帮你弄。"
 
         async def _runner() -> None:
             started = time.monotonic()
@@ -294,7 +332,8 @@ class TaskManager:
                 from junjun_core.gateway.session_manager import get_session_manager
                 s = get_session_manager().all_sessions().get(chat_id)
                 if s is not None and getattr(s, "memory", None) is not None:
-                    note = said if status == "done" else f"（后台任务{ _kind_cn(kind) }失败：{detail}）{said}"
+                    status_cn = {"done": "", "failed": "失败", "cancelled": "取消"}.get(status, status)
+                    note = said if status == "done" else f"（后台任务{_kind_cn(kind)}{status_cn}：{detail}）{said}"
                     s.memory.add_bot(note)
             except Exception:
                 pass

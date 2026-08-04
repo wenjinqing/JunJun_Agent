@@ -186,3 +186,47 @@ class TestOutcomePersistence:
         assert tasks_mod._PERSIST_FILE is None
         tasks_mod._append_rec({"op": "end", "chat_id": "x", "kind": "k"})
         assert list(tmp_path.iterdir()) == []
+
+
+class TestConcurrencyAndCancel:
+    """严厉审查 S3：全局并发上限 + 成品任务可取消。"""
+
+    @pytest.mark.asyncio
+    async def test_global_concurrency_cap(self, tm, monkeypatch):
+        m, sent = tm
+        monkeypatch.setattr(TaskManager, "_max_concurrent", staticmethod(lambda: 1))
+        monkeypatch.setattr(TaskManager, "_auto_retry", staticmethod(lambda: False))
+        ev = asyncio.Event()
+
+        async def work_slow():
+            await ev.wait()
+            return None
+
+        ack1 = await m.submit(kind="ai_draw", work=work_slow, timeout=30,
+                              chat_id="qq:1:private")
+        ack2 = await m.submit(kind="tts", work=work_slow, timeout=30,
+                              chat_id="qq:2:private")
+        assert "在弄了" in ack1 or ack1          # 第一个接单
+        assert "排满" in ack2                    # 第二个被全局上限拒绝
+        ev.set()
+        await asyncio.sleep(0.2)
+
+    @pytest.mark.asyncio
+    async def test_cancel_by_kind_cn_name(self, tm):
+        """「别画了」-> cancel_for_chat(chat_id, "画图") 能取消在途任务。"""
+        m, _ = tm
+        ev = asyncio.Event()
+
+        async def work_slow():
+            await ev.wait()
+            return None
+
+        await m.submit(kind="ai_draw", work=work_slow, timeout=30,
+                       chat_id="qq:1:private")
+        n = m.cancel_for_chat("qq:1:private", "画图")   # 中文名也可
+        assert n == 1
+        await asyncio.sleep(0)                          # 让取消的 done 回调落地
+        assert m.running_count() == 0
+        out = m._outcomes["qq:1:private"][-1]
+        assert out["status"] == "cancelled"
+        ev.set()

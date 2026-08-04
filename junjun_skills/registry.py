@@ -155,6 +155,21 @@ def _tool_error_text(tool_name: str, e: BaseException) -> str:
     return f"[TOOL_ERROR kind={kind}] 工具 {tool_name} 执行失败：{type(e).__name__}: {detail}"
 
 
+def _tool_timeout() -> float:
+    """工具调用统一超时（[tools] timeout_seconds，默认 60s）。
+
+    此前工具超时全靠各插件自觉（30s/15s 各有各的魔法数，漏写的就是
+    无限挂起占住会话 worker——单事件循环上一个卡死的工具拖死全 bot，
+    严厉审查 M5）。registry 层统一兜底；个别慢工具（看视频/调研派单
+    本身是秒回的派单动作）不受影响。
+    """
+    try:
+        from junjun_core.config import get_global_config
+        return float(get_global_config().raw.get("tools", {}).get("timeout_seconds", 60))
+    except Exception:
+        return 60.0
+
+
 def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
     """统一错误包装（最外层）：工具逃逸的异常 -> 结构化错误文本，不再抛给框架。
     同时上报工具健康度（P5-4）：异常记失败、正常返回记成功（自动恢复）。"""
@@ -163,9 +178,11 @@ def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
         original = skill.coroutine
 
         async def wrapped(*args, _orig=original, **kwargs):
+            import asyncio
             from junjun_skills import health, patches
             try:
-                result = await _orig(*args, **kwargs)
+                result = await asyncio.wait_for(_orig(*args, **kwargs),
+                                                timeout=_tool_timeout())
             except Exception as e:
                 health.record_fail(name, _classify_error(e), str(e))
                 patches.log_failure(name, _classify_error(e), str(e))
@@ -298,10 +315,24 @@ def get_tools(session=None) -> List[BaseTool]:
     Berkeley Function-Calling Leaderboard：超过 20 工具性能显著下降，
     动态选择/掩码是必需。按会话最近话题做 embedding 检索相关工具：
     核心工具（决策/记忆/时间/提醒）永远保留，其余按语义相关性取前 8 个。
+    熔断（2026-08-04 严厉审查 M5）：连续失败降级的工具直接从可用集摘除
+    （此前只在 prompt 里提示「在修」照样可绑可调——那不是熔断是劝告）；
+    超过 24h 无新失败自动半开恢复（degraded_tools 的 TTL 语义）。
     """
+    from junjun_skills import health
+    breaker_on = True
+    try:
+        from junjun_core.config import get_global_config
+        breaker_on = bool(get_global_config().raw.get("tools", {}).get("circuit_breaker", True))
+    except Exception:
+        pass
+    degraded = ({d["tool"] for d in health.degraded_tools()} if breaker_on else set()) - _CORE_SET
+
     tools = []
     for name, skill in _registry.items():
         if name in _disabled or not is_plugin_enabled(_skill_plugin.get(name, "builtin")):
+            continue
+        if name in degraded:
             continue
         gate = _availability.get(name)
         if session is None or gate is None or gate(session):
