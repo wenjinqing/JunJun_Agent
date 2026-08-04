@@ -126,3 +126,63 @@ class TestOutcomeVisibility:
             memory_skills.current_chat_id.reset(token)
         assert "成品任务" in out and "画图" in out and "失败" in out
         assert "还没有后台任务" in out           # async_jobs 段也在
+
+
+class TestNegativeEvidence:
+    @pytest.mark.asyncio
+    async def test_query_intent_injects_negative_block(self, monkeypatch, tmp_path):
+        """问进度但无在途/无记录 -> 注入否定证据（治「顺着旧话编还在画」）。"""
+        import junjun_core.config.config as cfg_mod
+        monkeypatch.setattr(cfg_mod, "global_config", cfg_mod.GlobalConfig(
+            bot=cfg_mod.BotConfig(platform="qq", qq_account="1", nickname="君君"),
+            raw={}))
+        from types import SimpleNamespace
+        from junjun_agent.processor import _build_memory_block
+        session = SimpleNamespace(chat_id="qq:777:group", memory=None)
+        meta = SimpleNamespace(image_urls=None, sticker_urls=None, voice_records=None,
+                               video_urls=None, text="图呢", user_id="1", nickname="甲")
+        block, _ = await _build_memory_block(session, meta)
+        assert "没有在途任务" in block and "别顺着旧话编" in block
+
+    @pytest.mark.asyncio
+    async def test_non_query_gets_no_negative_block(self, monkeypatch):
+        import junjun_core.config.config as cfg_mod
+        monkeypatch.setattr(cfg_mod, "global_config", cfg_mod.GlobalConfig(
+            bot=cfg_mod.BotConfig(platform="qq", qq_account="1", nickname="君君"),
+            raw={}))
+        from types import SimpleNamespace
+        from junjun_agent.processor import _build_memory_block
+        session = SimpleNamespace(chat_id="qq:778:group", memory=None)
+        meta = SimpleNamespace(image_urls=None, sticker_urls=None, voice_records=None,
+                               video_urls=None, text="今天天气真好", user_id="1", nickname="甲")
+        block, _ = await _build_memory_block(session, meta)
+        assert "没有在途任务" not in block
+
+
+class TestOutcomePersistence:
+    def test_restore_marks_orphan_start_as_interrupted(self, tmp_path):
+        """有 start 无 end = 重启中断，恢复为失败结局。"""
+        import json as _json
+        from junjun_agent import tasks as tasks_mod
+        recs = [
+            {"op": "start", "chat_id": "qq:1:private", "kind": "ai_draw", "ts": 100.0},
+            {"op": "end", "chat_id": "qq:1:private", "kind": "ai_draw",
+             "status": "done", "detail": "耗时60s", "ts": 160.0},
+            {"op": "start", "chat_id": "qq:1:private", "kind": "tts", "ts": 200.0},
+        ]
+        f = tmp_path / "out.jsonl"
+        f.write_text("\n".join(_json.dumps(r) for r in recs), encoding="utf-8")
+        mgr = TaskManager()
+        tasks_mod._restore_from_records(mgr, tasks_mod._load_records(f))
+        outs = list(mgr._outcomes["qq:1:private"])
+        assert len(outs) == 2
+        assert outs[0]["status"] == "done" and outs[0]["kind"] == "ai_draw"
+        assert outs[1]["status"] == "failed" and "重启" in outs[1]["detail"]
+        assert outs[1]["kind"] == "tts"
+
+    def test_no_persist_file_no_writes(self, tmp_path, monkeypatch):
+        """测试纪律：未挂接落盘文件时不写任何文件。"""
+        from junjun_agent import tasks as tasks_mod
+        assert tasks_mod._PERSIST_FILE is None
+        tasks_mod._append_rec({"op": "end", "chat_id": "x", "kind": "k"})
+        assert list(tmp_path.iterdir()) == []

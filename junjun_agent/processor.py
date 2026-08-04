@@ -559,6 +559,12 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> tuple:
     try:
         from junjun_agent.tasks import task_manager
         tb = task_manager.task_status_block(session.chat_id)
+        if not tb:
+            # 否定证据（同日「一直说还在画」幻觉）：用户在问进度但没有
+            # 任何在途/记录——不注入的话模型只能顺着历史里的旧话续编
+            import re as _re2
+            if _re2.search(r"图呢|画好|还没|画完|画得|做好了|进度|还没弄", meta.text or ""):
+                tb = task_manager.negative_status_block(session.chat_id)
         if tb:
             parts.append(tb)
     except Exception:
