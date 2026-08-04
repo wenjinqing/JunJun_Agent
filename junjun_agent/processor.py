@@ -553,6 +553,16 @@ async def _build_memory_block(session: ChatSession, meta: InboundMeta) -> tuple:
             parts.append(sb)
     except Exception:
         pass
+    # 后台任务近况（2026-08-04「图呢」事件）：成品任务（画图/语音/视频）的
+    # 在途与结局注入——Agent 必须记得自己答应的事办成了没有，
+    # 失败要主动提补救，不能「说了在画了然后永远没下文」
+    try:
+        from junjun_agent.tasks import task_manager
+        tb = task_manager.task_status_block(session.chat_id)
+        if tb:
+            parts.append(tb)
+    except Exception:
+        pass
     # 钉住记忆（P6-2）：对方明确说「记住」钉下的事，每轮优先注入，
     # 不占语义召回额度——用户显式意志 > 检索运气
     try:
