@@ -88,8 +88,16 @@ def _cfg() -> dict:
 
 
 async def _call(slot: str, text: str) -> str:
-    from junjun_llm import get_chat_model
-    resp = await get_chat_model(slot).ainvoke([HumanMessage(content=text)])
+    from junjun_llm import get_chat_model, get_callbacks
+    resp = await get_chat_model(slot).ainvoke(
+        [HumanMessage(content=text)],
+        # 接 Langfuse：后台任务里没有 agent trace 的 callbacks，
+        # 不传的话写手/评审在 Langfuse 里完全不可见（2026-08-04 用户实测
+        # 「trace 里看不到工作室效果」——它们会以独立 trace 出现）
+        config={"callbacks": get_callbacks(),
+                "metadata": {"langfuse_tags": ["junjun", "ai_draw", "prompt-studio"],
+                             "langfuse_session_id": "ai_draw"}},
+    )
     return (resp.content or "").strip().strip('"').replace("\n", " ")
 
 
@@ -124,12 +132,14 @@ async def review_image(url: str, origin_prompt: str) -> str | None:
             resp = await client.get(url)
             resp.raise_for_status()
             b64 = base64.b64encode(resp.content).decode()
-        from junjun_llm import get_chat_model
+        from junjun_llm import get_chat_model, get_callbacks
         vlm = get_chat_model("vlm")
         resp = await vlm.ainvoke([HumanMessage(content=[
             {"type": "text", "text": _REVIEW.format(prompt=origin_prompt)},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-        ])])
+        ])], config={"callbacks": get_callbacks(),
+                     "metadata": {"langfuse_tags": ["junjun", "ai_draw", "review"],
+                                  "langfuse_session_id": "ai_draw"}})
         verdict = (resp.content or "").strip()
         if not verdict or verdict.startswith("通过"):
             return None
