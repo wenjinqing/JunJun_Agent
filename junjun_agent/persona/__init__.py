@@ -40,17 +40,20 @@ def match_keyword_rules(text: str) -> List[str]:
     return hits
 
 
-def _behavior_examples(p: dict, nickname: str) -> str:
-    """行为示例人设（防 drift 关键：形容词 drift，行为示例稳定）。
+def _role_persona(p: dict, nickname: str) -> str:
+    """人设 = 设定卡（personality）+ 示例集（behavior_examples，可选，拼接）。
 
-    没配 behavior_examples 时直接用 personality 原文——不代编示例：
-    曾经在这里硬编「就这？->杂鱼就是杂鱼」，结果每条 prompt 都在教模型
-    复读这个梗，回复永远那几个点、满满角色扮演感（2026-08-03 用户反馈）。
-    示例必须由人设作者自己写，才能保证梗的多样性。
+    2026-08-04 起改为拼接（原来是 examples 整体替换 personality）：
+    设定卡给「你是谁」，示例集给「说话长什么样」，自设 = 两者合体。
+    示例必须由人设作者自己写，而且要多而杂——prompt 里每个具体句子都会
+    被模型当口头禅复读（「杂鱼」事件：全人设只有一个具体骂词，傲娇词表
+    坍缩成一个词）。示例集靠数量与反差让模型学到分布，而非背下单句。
     """
     base = p.get("personality", f"你是{nickname}。")
-    examples = p.get("behavior_examples", "")
-    return examples if examples else base
+    examples = (p.get("behavior_examples") or "").strip()
+    if examples:
+        return f"{base}\n\n【你说话的样子（示例集：感受分布，不要照抄原句）】\n{examples}"
+    return base
 
 
 def build_system_prompt(
@@ -80,7 +83,7 @@ def build_system_prompt(
     else:
         scene = "QQ 私聊，一对一。对方说的话都是对你说的，直接回应。"
 
-    role = _behavior_examples(p, nickname)
+    role = _role_persona(p, nickname)
     if p.get("reply_style"):
         role += f"\n说话方式：{p.get('reply_style', '')}"
     if p.get("interest"):
