@@ -172,7 +172,10 @@ class Gateway:
             logger.error(f"processor 异常，本条消息忽略: {type(e).__name__}: {e}")
             return
         if reply is not None:
-            await self.send_reply(reply)
+            try:
+                await self.send_reply(reply)
+            except Exception as e:
+                logger.error(f"回复发送异常，本条回复丢失: {type(e).__name__}: {e}")
 
     async def send_reply(self, reply: ReplySet) -> None:
         if not reply.should_reply:
@@ -181,7 +184,18 @@ class Gateway:
         if self.server is not None:
             # 按平台定向发送（原 broadcast 发给所有已连接 adapter——
             # 两个 adapter 叠连时每条回复发两遍）
-            await self.server.broadcast_to_platform(reply.platform, msg_base.to_dict())
+            # 2026-08-04：send_message 找不到平台连接时返回 False、异常也
+            # 只是内部 warning——两层都可能静默丢消息，显式检查+告警
+            try:
+                ok = await self.server.broadcast_to_platform(reply.platform,
+                                                             msg_base.to_dict())
+            except Exception as e:
+                logger.error(f"回复广播异常，消息未送达: {type(e).__name__}: {e}")
+                return
+            if ok is False:
+                logger.error(f"回复未送达：平台 {reply.platform} 没有已连接的 adapter "
+                             f"（adapter 掉线？）目标={reply.target_group_id or reply.target_user_id}")
+                return
             logger.info(f"已发送回复 -> {reply.target_group_id or reply.target_user_id}")
 
 
