@@ -382,22 +382,13 @@ class TaskManager:
                 "别顺着旧话编「还在画」。")
 
     async def _send(self, chat_id: str, segments: List[ReplySegment]) -> bool:
-        """直发到会话（gateway 不可用时静默——测试环境允许）。返回是否送达。"""
-        try:
-            from junjun_core.gateway import router as router_mod
-            gateway = router_mod.get_gateway()
-            platform, user_id, group_id = _parse_route(chat_id)
-            await gateway.send_reply(ReplySet(
-                platform=platform,
-                target_user_id=user_id,
-                target_group_id=group_id,
-                segments=segments,
-                should_reply=True,
-            ))
-            return True
-        except Exception as e:
-            logger.warning(f"[{chat_id}] 后台任务发送失败: {type(e).__name__}: {e}")
-            return False
+        """直发到会话（统一走出站口 outbound.send_proactive）。
+
+        remember=False：记忆回填由 _record_outcome 负责（带结局上下文，
+        比裸文本更有用），避免双写。
+        """
+        from junjun_agent.outbound import send_proactive
+        return await send_proactive(chat_id, segments, source="task", remember=False)
 
     async def shutdown(self) -> None:
         """优雅退出：取消全部未完成任务，并写终态记录——否则恢复逻辑会把

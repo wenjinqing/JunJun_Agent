@@ -287,18 +287,13 @@ async def _notify(job) -> None:
     text = f"{await _persona_lead(job, ok)}\n{body[:report_max]}"
     if truncated:
         text += "\n……（内容太长只发这部分）"
-    parts = job.chat_id.split(":")
-    platform, target_id = parts[0], parts[1]
-    kind = parts[2] if len(parts) > 2 else "private"
     try:
-        from junjun_core.contracts import ReplySet, ReplySegment
-        from junjun_core.gateway.router import get_gateway
-        await get_gateway().send_reply(ReplySet(
-            platform=platform,
-            target_group_id=target_id if kind == "group" else None,
-            target_user_id=target_id if kind != "group" else None,
-            segments=[ReplySegment(type="text", data=text)],
-            should_reply=True,
-        ))
+        from junjun_core.contracts import ReplySegment
+        from junjun_agent.outbound import send_proactive
+        # 统一出站口：清洗 + 记忆回填 + 落库（任务汇报 bot 自己也得记得说过）
+        ok_send = await send_proactive(job.chat_id, [ReplySegment(type="text", data=text)],
+                                       source=f"async_job:{job.job_id}")
+        if not ok_send:
+            logger.warning(f"任务汇报发送失败 #{job.job_id}")
     except Exception as e:
         logger.warning(f"任务汇报发送失败 #{job.job_id}: {type(e).__name__}: {e}")
