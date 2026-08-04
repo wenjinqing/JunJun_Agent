@@ -229,7 +229,7 @@ def list_skills() -> List[dict]:
 
 # ---------------------------------------------------------------- 三层工具子集（P5-2）
 
-# CORE 层：任何对话都可能用的刚需工具，永不掩码，≤8 个（Berkeley
+# CORE 层：任何对话都可能用的刚需工具，永不掩码，≤9 个（Berkeley
 # Function-Calling Leaderboard：工具越多模型越难选对）。顺序即绑定顺序。
 _CORE_TOOLS = (
     "do_not_reply",   # 沉默决策
@@ -240,6 +240,7 @@ _CORE_TOOLS = (
     "save_memory",    # 记忆写
     "manage_mood",    # 心情
     "web_search",     # 搜索（答疑兜底）
+    "use_skill",      # 技能手册入口（prompt 索引引用了它，必须常驻防「追问未绑定工具」式陷阱）
 )
 _CORE_SET = frozenset(_CORE_TOOLS)
 
@@ -508,6 +509,7 @@ def load_builtin() -> None:
         send_message, send_poke, get_weather, query_chat_history, peek_group_chat,
     )
     from junjun_skills.builtin.capability_skills import get_capabilities, find_user_id
+    from junjun_skills.builtin.skill_guide import use_skill
 
     register(get_time)
     register(do_not_reply)
@@ -532,4 +534,5 @@ def load_builtin() -> None:
     register(peek_group_chat, available_for=lambda s: not s.is_group)
     register(get_capabilities)
     register(find_user_id)
+    register(use_skill)
     logger.info(f"内置 skill 已加载: {[t.name for t in get_tools()]}")

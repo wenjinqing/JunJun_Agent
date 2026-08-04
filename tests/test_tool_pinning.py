@@ -94,7 +94,9 @@ class TestThreeLayerSubset:
     """P5-2 三层工具子集：CORE 瘦身 / INTENT 整组挂载 / 稳定序。"""
 
     def test_core_slimmed_to_eight(self):
-        """CORE ≤8：原 CORE 的 set_reminder/ai_draw/send_feed 等无话题时不常驻。"""
+        """CORE ≤9：原 CORE 的 set_reminder/ai_draw/send_feed 等无话题时不常驻。
+        （2026-08-04 第 9 席给 use_skill：prompt 技能包索引引用了它，
+        必须常驻防「索引指向被掩码工具」陷阱。）"""
         ex_core = [_named_tool(n) for n in
                    ("set_reminder", "list_reminders", "ai_draw", "unified_tts",
                     "ja_tts", "send_feed", "read_feed", "find_user_id")]
@@ -104,7 +106,7 @@ class TestThreeLayerSubset:
         session = _session_with("今天天气真好啊")
         kept = registry._mask_by_relevance(tools, session)
         names = {t.name for t in kept}
-        assert len(registry._CORE_TOOLS) <= 8
+        assert len(registry._CORE_TOOLS) <= 9
         for n in registry._CORE_TOOLS:
             assert n in names  # CORE 永不掩码
         for n in ("set_reminder", "ai_draw", "send_feed"):

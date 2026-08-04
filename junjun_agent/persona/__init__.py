@@ -147,6 +147,16 @@ def build_system_prompt(
     if dynamic:
         parts.append(f"<state>\n{' '.join(dynamic)}\n</state>")
 
+    # 技能包索引（md skills，2026-08-04）：只放目录不占每轮 context，
+    # 命中场景时模型调 use_skill 取全文——与 Claude Code skill 同一模式
+    try:
+        from junjun_skills.skills_md import skill_index
+        si = skill_index()
+        if si:
+            parts.append(f"<skills>\n{si}\n</skills>")
+    except Exception:
+        pass
+
     # 规则层（正面约束，一句话）
     rules = [
         # 真人感锚（2026-08-03）：放最前，定调整条规则的语气——
