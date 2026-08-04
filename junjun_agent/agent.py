@@ -48,6 +48,47 @@ _NUDGE_PROMPT = (
 )
 
 
+def _background_to_messages(background: str) -> list:
+    """背景文本 -> 结构化多轮消息：bot 的历史发言必须是 AIMessage。
+
+    曾把全部背景拼成一个 HumanMessage，bot 自己的话以「你(历史):」文本
+    前缀混在 user role 里——模型对它只有「语气模仿」一种处理方式，
+    这是 echo 复读的根因（四层补丁都在给它交利息，严厉审查 P0-3）。
+    role 边界是防自我模仿的第一道结构防线。
+    """
+    msgs: list = []
+    buf: list = []
+    buf_is_bot = False
+
+    def flush():
+        nonlocal buf
+        if not buf:
+            return
+        content = "\n".join(buf).strip()
+        if content:
+            msgs.append(AIMessage(content=content) if buf_is_bot
+                        else HumanMessage(content=content))
+        buf = []
+
+    for line in background.split("\n"):
+        s = line.strip()
+        if s.startswith("你(历史):"):
+            if not buf_is_bot:
+                flush()
+            buf_is_bot = True
+            buf.append(s[len("你(历史):"):].strip())
+        elif s and (":" in s or "：" in s):
+            if buf_is_bot:
+                flush()
+            buf_is_bot = False
+            buf.append(line.rstrip())
+        else:
+            # 续行（多行消息的后续行）并入当前缓冲
+            buf.append(line.rstrip())
+    flush()
+    return msgs
+
+
 def _called_tool_names(messages: list) -> set:
     names = set()
     for m in messages:
@@ -242,7 +283,15 @@ class JunJunAgent:
 
         messages = [SystemMessage(content=system)]
         if background:
-            messages.append(HumanMessage(content=f"[群聊背景，仅供参考]\n{background}"))
+            bg_msgs = _background_to_messages(background)
+            if bg_msgs:
+                if isinstance(bg_msgs[0], HumanMessage):
+                    bg_msgs[0] = HumanMessage(
+                        content="[群聊背景，仅供参考]\n" + (bg_msgs[0].content or ""))
+                else:
+                    # 首轮是 bot 历史发言：标记单独成条，别让模型以为这话是它说的
+                    bg_msgs.insert(0, HumanMessage(content="[群聊背景，仅供参考]"))
+                messages.extend(bg_msgs)
         if latest_msg:
             # 去掉「【最新】」前缀（processor 加的标记），还原原始消息
             clean_latest = latest_msg.replace("【最新】", "").strip()
