@@ -1,4 +1,4 @@
-"""W3 自有项测试：命令总线多 slash 回归 / chat_frequency / cross_scene / intimacy / acpoke 增强。"""
+"""W3 自有项测试：命令总线多 slash 回归 / cross_scene / intimacy / acpoke 增强。"""
 
 from types import SimpleNamespace
 
@@ -58,37 +58,6 @@ class TestMultiSlashRegression:
         assert _fake_gateway[-1].segments[0].data == "一"
         assert await commands.dispatch(_session(), _meta("/second 参数")) is True
         assert _fake_gateway[-1].segments[0].data == "二"
-
-
-class TestChatFrequency:
-    @pytest.mark.asyncio
-    async def test_show(self, _fake_bot_config):
-        import junjun_skills.plugins.chat_frequency.tools as cf
-        out = await cf.chat_cmd(_ctx("/chat show"))
-        assert "生效值" in out and "倍率" in out
-
-    @pytest.mark.asyncio
-    async def test_set_admin_and_clamp(self, _fake_bot_config, monkeypatch):
-        monkeypatch.setenv("ADMIN_QQ", "10001")
-        from junjun_core.security import set_caller
-        import junjun_skills.plugins.chat_frequency.tools as cf
-        from junjun_agent.funnel.frequency import frequency_control
-        set_caller("10001", at_bot=True, is_group=True)
-        out = await cf.chat_cmd(_ctx("/chat talk_frequency 2.5", user_id="10001"))
-        assert "2.50" in out
-        assert frequency_control.state("qq:999:group").adjust_factor == 2.5
-        out = await cf.chat_cmd(_ctx("/chat t 99", user_id="10001"))
-        assert "3.00" in out  # 上限截断
-
-    @pytest.mark.asyncio
-    async def test_set_non_admin_refused(self, _fake_bot_config, monkeypatch):
-        monkeypatch.setenv("ADMIN_QQ", "10001")
-        reports = []
-        monkeypatch.setattr("junjun_core.security.report_violation",
-                            lambda *a, **k: reports.append(a))
-        import junjun_skills.plugins.chat_frequency.tools as cf
-        out = await cf.chat_cmd(_ctx("/chat talk_frequency 2"))
-        assert "管理员" in out and reports
 
 
 class TestCrossScene:

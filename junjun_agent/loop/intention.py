@@ -271,7 +271,7 @@ def spawn_scheduled_checks() -> int:
 # ---------------------------------------------------------------- 评估门
 
 def _in_quiet_hours() -> bool:
-    from junjun_agent.funnel.frequency import _in_range
+    from junjun_agent.loop.proactive import _in_range
     spec = str(_cfg().get("quiet_hours", "23:00-08:00"))
     now = datetime.now()
     return _in_range(now.hour * 60 + now.minute, spec)

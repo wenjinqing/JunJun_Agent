@@ -8,10 +8,8 @@
 flowchart TD
     NC[NapCat ws://8095] -->|OneBot 11| AD[junjun_adapter_napcat]
     AD -->|maim_message WS| GW[Gateway ws://8092<br/>黑白名单/会话/速率/契约]
-    GW --> FUNNEL{三级决策漏斗<br/>省 token}
-    FUNNEL -->|0 token| L1[L1 规则门<br/>自消息/@旁路/talk_value 概率]
-    FUNNEL -->|小 token| L2[L2 语义门<br/>小模型 reply/no_reply/until_call]
-    FUNNEL -->|主模型| L3[L3 主 Agent<br/>create_agent + 18 skill]
+    GW --> GATE{决策门<br/>0 token}
+    GATE -->|私聊 / 群聊@或直呼| L3[主 Agent<br/>create_agent + 50+ 工具]
     L3 --> PP[回复后处理<br/>分条/错别字/引用/打字延迟]
     PP --> QQ[QQ 群/私聊]
     L3 -.-> MEM[junjun_memory<br/>窗口/摘要/faiss/画像/LPMM]
@@ -59,7 +57,7 @@ copy .env.example .env
 
 ## 配置说明
 
-- `config/bot_config.toml` — 人设/漏斗频控/回复后处理/情绪/表情包/主动/提醒（注释即文档）
+- `config/bot_config.toml` — 人设/回复后处理/情绪/表情包/主动/提醒（注释即文档）
 - `config/model_config.toml` — 任务槽模型：每槽 models 按序 fallback
 - `config/mcp_servers.toml` — MCP server 声明（stdio，`${REPO_ROOT}` 插值）
 
@@ -78,7 +76,7 @@ uv run pytest -q                                      # 全量单测（无网络
 |---|---|
 | QQ 无响应 | ① netstat 查 8095 是否被旧 adapter 占用 ② adapter 日志是否连上 8092 ③ 名单过滤（启动日志打印生效名单） |
 | 双回复 | 有第二个 adapter 进程在跑（可能开机自启），杀掉 |
-| 全部沉默 | talk_value 配置/时段规则；日志 DEBUG 看每级漏斗拦截原因 |
+| 全部沉默 | 群聊只有 @/直呼才回（设计如此）；日志 DEBUG 看决策门拦截原因 |
 | MCP 工具缺失 | server 子进程必须 `-u`；日志看连接失败原因（10s 超时降级） |
 | Langfuse 无 trace | `LANGFUSE_ENABLED=true` + 自托管服务可达；SDK 降级不影响主流程 |
 | Docker/Langfuse 起不来 | 见 `docs/Langfuse排障.md`（Win11 家庭版需启用虚拟机平台组件） |

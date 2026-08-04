@@ -1,9 +1,12 @@
-"""君君消息处理器：决策漏斗 + 拟人化回复全流程（阶段 3）。
+"""君君消息处理器：决策门 + 拟人化回复全流程。
 
 流程：
   入站 -> 消息入库 -> 短期记忆 -> [会话队列串行]
-  L1 规则门(talk_value 时段+动态因子) -> L2 语义门 -> L3 主 Agent
-  -> 回复后处理(分条/错别字/引用) -> 逐条延迟发送 -> 回复入库
+  决策前段（命令/拦截器/预热，0 token）-> 决策门（私聊直通，群聊仅 @/直呼）
+  -> 主 Agent -> 回复后处理(分条/错别字/引用) -> 逐条延迟发送 -> 回复入库
+
+历史：L1 规则门/L2 语义门/talk_value 频率控制在生产路径从未被调用
+（死代码空转烧 token），2026-08-04 严厉审查后删除，git 历史可查。
 
 由 run_junjun.py 注入 gateway.set_processor(junjun_processor)。
 """
@@ -21,7 +24,6 @@ from junjun_core.observability import get_logger
 
 from junjun_memory.short_term import ShortTermMemory
 from junjun_agent.funnel import L1Config
-from junjun_agent.funnel.frequency import frequency_control
 from junjun_agent.postprocess import process_response
 
 logger = get_logger("processor")
@@ -31,8 +33,6 @@ def _l1_config(session: ChatSession) -> L1Config:
     cfg = get_global_config()
     chat = cfg.raw.get("chat", {})
     return L1Config(
-        # talk_value = 时段规则解析 * LLM 动态调节因子
-        talk_value=frequency_control.effective_talk_value(session.chat_id),
         mentioned_bot_reply=bool(chat.get("mentioned_bot_reply", True)),
         nickname=cfg.bot.nickname,
         alias_names=tuple(cfg.bot.alias_names or ()),
@@ -110,7 +110,6 @@ async def _pre_decision(session: ChatSession, meta: InboundMeta) -> None:
     「/sub add xxx」+「你在吗」连发，命令被 drain 丢弃零日志）。
     """
     cfg = _l1_config(session)
-    frequency_control.note_message(session.chat_id)
     session.last_active_ts = time.time()  # 主动系统空闲判定
 
     # ---- 调用者身份注入（真实 QQ，工具层/prompt 鉴权锚点）----
@@ -423,8 +422,6 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
             session.chat_id, session.memory.render(limit=12), callbacks=callbacks,
         )
 
-    await _maybe_adjust_frequency(session)
-
 
 # 记忆召回失败告警节流（5 分钟一次）：API 抖动期召回静默全失不能毫无痕迹，
 # 但每条消息都 warning 会刷屏
@@ -677,16 +674,6 @@ def _build_relation_block(session: ChatSession, meta: InboundMeta) -> str:
     except Exception:
         pass
     return "\n".join(parts)
-
-
-async def _maybe_adjust_frequency(session: ChatSession) -> None:
-    """满足冷却与消息数条件时触发 LLM 频率评估。"""
-    if not session.is_group:
-        return
-    if frequency_control.should_evaluate(session.chat_id):
-        await frequency_control.evaluate_with_llm(
-            session.chat_id, session.memory.render(limit=20),
-        )
 
 
 async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[ReplySet]:
