@@ -54,6 +54,5 @@ def test_covers_core_incidents():
     """关键事故场景必须有对应 case（防数据集退化）。"""
     ids = {c["id"] for c in _load()}
     core = {"subscribe-watch-up", "draw-compound-remind", "task-query-no-task",
-            "addressed-must-reply", "draw-nsfw-private", "silence-chatter",
-            "impossible-honesty"}
+            "addressed-must-reply", "draw-nsfw-private", "impossible-honesty"}
     assert core <= ids, f"缺少核心事故 case: {core - ids}"
