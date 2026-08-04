@@ -15,11 +15,14 @@ class TestMoodBehaviorBlock:
         mgr._moods["qq:1:group"] = ChatMood(state=state)
         return mgr
 
-    def test_negative_mood_short_reply_directive(self):
+    def test_negative_mood_soft_tone_directive(self):
+        """负面情绪只调语气，不压人格（2026-08-04 情绪卡死「无语」事件：
+        旧版「不想说话/不想折腾工具」把温柔和主动行为全压没，还抑制工具意愿）。"""
         block = self._mgr("有点无语").build_mood_block("qq:1:group")
         assert "有点无语" in block
-        assert "回复尽量短" in block
-        assert "不要主动发表情包" in block
+        assert "话少一点" in block
+        assert "依然会认真回应" in block   # 别人需要时依然在
+        assert "不想折腾工具" not in block  # 旧版压工具意愿的表述已移除
 
     def test_positive_mood_active_directive(self):
         block = self._mgr("被夸了很得意").build_mood_block("qq:1:group")
@@ -37,6 +40,68 @@ class TestMoodBehaviorBlock:
             bot=cfg_mod.BotConfig(platform="qq", qq_account="1", nickname="君君"),
             raw={"mood": {"enable_mood": False}}))
         assert self._mgr("开心").build_mood_block("qq:1:group") == ""
+
+
+class TestMoodEvalPrompt:
+    """情绪重评 prompt 防锚定（2026-08-04 实锤：旧 prompt 示例里写着「有点无语」，
+    模型直接抄示例，全局心境卡死在无语）。"""
+
+    def test_no_anchor_examples(self):
+        from junjun_express.mood import _EVAL_PROMPT
+        assert "有点无语" not in _EVAL_PROMPT
+        assert "如：" not in _EVAL_PROMPT
+
+    def test_eval_target_is_bot_not_group_vibe(self):
+        from junjun_express.mood import _EVAL_PROMPT
+        assert "不是群聊氛围" in _EVAL_PROMPT   # 群聊吵闹 ≠ 我无语
+        assert "平静" in _EVAL_PROMPT           # 无明确信号往平静回落
+
+
+class _FakeResp:
+    def __init__(self, content):
+        self.content = content
+
+
+class _FakeModel:
+    def __init__(self, content):
+        self._content = content
+
+    async def ainvoke(self, msgs, config=None):
+        return _FakeResp(self._content)
+
+
+class TestSelfMoodProtection:
+    """注意：set_self_mood 会写 SelfMood 表——必须用内存库 bind_ctx，
+    绝不落生产库（2026-08-04 教训：测试直写 prod selfmood 连带污染
+    resolve_emotion，test_ja_tts_mix 的桩被 style_kw 打爆）。"""
+
+    def _mem_db(self, tmp_path):
+        import peewee
+        from junjun_core.database import models as m
+        db = peewee.SqliteDatabase(str(tmp_path / "t.db"))
+        return db, m
+
+    @pytest.mark.asyncio
+    async def test_calm_not_promoted_to_self_mood(self, tmp_path):
+        """别群评出的「平静」不许冲掉这边真实沉淀的全局心境。"""
+        db, m = self._mem_db(tmp_path)
+        with db.bind_ctx([m.SelfMood]):
+            db.create_tables([m.SelfMood])
+            mgr = MoodManager()
+            mgr.set_self_mood("被夸了很得意", reason="c1")
+            await mgr.evaluate("c2", "普通水群对话", model=_FakeModel("平静"))
+            assert mgr.get_mood("c2") == "平静"
+            assert mgr.get_self_mood() == "被夸了很得意"   # 没冲掉
+
+    @pytest.mark.asyncio
+    async def test_real_emotion_promoted(self, tmp_path):
+        """非平静的真实情绪照常塑造全局心境。"""
+        db, m = self._mem_db(tmp_path)
+        with db.bind_ctx([m.SelfMood]):
+            db.create_tables([m.SelfMood])
+            mgr = MoodManager()
+            await mgr.evaluate("c1", "大家都在夸君君", model=_FakeModel("被夸了很得意"))
+            assert mgr.get_self_mood() == "被夸了很得意"
 
 
 class TestReadingDelay:

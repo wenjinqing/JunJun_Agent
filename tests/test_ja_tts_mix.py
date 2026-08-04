@@ -70,7 +70,7 @@ class TestMixSwitch:
         monkeypatch.setattr(ja, "OUTPUT_DIR", tmp_path)
         captured = {}
 
-        async def _fake_synth(text, speaker=""):
+        async def _fake_synth(text, speaker="", **kw):  # **kw：吞掉情绪 style_kw，与心情单例解耦
             captured["text"] = text
             return b"\xff\xfb" + b"\x00" * 64
 
@@ -91,7 +91,7 @@ class TestMixSwitch:
         monkeypatch.setattr(ja, "OUTPUT_DIR", tmp_path)
         captured = {}
 
-        async def _fake_synth(text, speaker=""):
+        async def _fake_synth(text, speaker="", **kw):  # **kw：吞掉情绪 style_kw，与心情单例解耦
             captured["text"] = text
             return b"\xff\xfb" + b"\x00" * 64
 
@@ -110,7 +110,7 @@ class TestMixSwitch:
         monkeypatch.setattr(ja, "OUTPUT_DIR", tmp_path)
         captured = {}
 
-        async def _fake_synth(text, speaker=""):
+        async def _fake_synth(text, speaker="", **kw):  # **kw：吞掉情绪 style_kw，与心情单例解耦
             captured["text"] = text
             return b"\xff\xfb" + b"\x00" * 64
 
