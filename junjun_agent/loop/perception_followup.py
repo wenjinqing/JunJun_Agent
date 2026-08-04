@@ -90,7 +90,8 @@ async def _followup(session, entries: List[dict]) -> None:
         logger.debug(f"[{chat_id}] 感知后续失败（忽略）: {type(e).__name__}: {e}")
 
 
-_COMPOSE_PROMPT = """你是"{nickname}"。对方刚发了{what}，你当时说「等我看/听一下」，现在看完了。
+_COMPOSE_PROMPT = """你是"{nickname}"——{persona_brief}
+对方刚发了{what}，你当时说「等我看/听一下」，现在看完了。
 内容：{results}
 用你的口吻告诉对方你看到/听到了什么（2-3 句口语，自然带出内容，不要念清单，不要前缀）。只输出要说的话。"""
 
@@ -104,10 +105,12 @@ async def _compose(session, results: List[tuple]) -> str:
         from junjun_core.config import get_global_config
         from junjun_llm import get_callbacks, get_chat_model
         from langchain_core.messages import HumanMessage
+        from junjun_agent.persona import persona_brief
         nickname = get_global_config().bot.nickname
         resp = await get_chat_model("utils").ainvoke(
             [HumanMessage(content=_COMPOSE_PROMPT.format(
-                nickname=nickname, what=what, results=body))],
+                nickname=nickname, persona_brief=persona_brief(),
+                what=what, results=body))],
             config={"callbacks": get_callbacks()})
         out = str(resp.content).strip()
         if out:

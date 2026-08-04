@@ -19,7 +19,8 @@ logger = get_logger("loop.proactive")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TOPICS_FILE = PROJECT_ROOT / "data" / "proactive_topics.json"
 
-_TOPIC_PROMPT = """你是"{nickname}"。你想主动找朋友聊天。
+_TOPIC_PROMPT = """你是"{nickname}"——{persona_brief}
+你想主动找朋友聊天。
 你们最近的对话：
 {recent}
 
@@ -116,13 +117,15 @@ class ProactiveChatManager:
             from junjun_llm import get_chat_model
             model = get_chat_model("utils")
         from langchain_core.messages import HumanMessage
+        from junjun_agent.persona import persona_brief
 
         used = "\n".join(f"- {t['topic'][:40]}" for t in self._load_topics()) or "（无）"
         recent = session.memory.render(limit=10) if session.memory else "（无）"
         try:
             resp = await model.ainvoke(
                 [HumanMessage(content=_TOPIC_PROMPT.format(
-                    nickname=cfg.bot.nickname, recent=recent, used_topics=used))],
+                    nickname=cfg.bot.nickname, persona_brief=persona_brief(),
+                    recent=recent, used_topics=used))],
                 config={"callbacks": callbacks or []},
             )
             raw = str(resp.content).strip()
