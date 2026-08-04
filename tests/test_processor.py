@@ -195,7 +195,7 @@ async def test_processor_entry_enqueues(session, monkeypatch):
     calls = []
 
     class FakeQueues:
-        def dispatch(self, s, m, h):
+        def dispatch(self, s, m, h, **_kw):
             calls.append((s, m))
     import junjun_agent.funnel.session_queue as sq
     monkeypatch.setattr(sq, "session_queues", FakeQueues())

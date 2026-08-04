@@ -313,7 +313,8 @@ class TaskManager:
             if now - o["ts"] > _OUTCOME_TTL:
                 continue
             when = time.strftime("%H:%M", time.localtime(o["ts"]))
-            status = "完成" if o["status"] == "done" else "失败"
+            status = {"done": "完成", "failed": "失败",
+                      "cancelled": "取消"}.get(o["status"], o["status"])
             lines.append(f"- {_kind_cn(o['kind'])}：{status}（{when}，{o['detail']}）")
         return lines
 
@@ -360,12 +361,18 @@ class TaskManager:
             return False
 
     async def shutdown(self) -> None:
-        """优雅退出：取消全部未完成任务。"""
-        pending = [t for t in self._running.values() if not t.done()]
-        for t in pending:
+        """优雅退出：取消全部未完成任务，并写终态记录——否则恢复逻辑会把
+        正常关停的在途任务误判为「进程重启，任务中断」的失败结局，
+        下次启动给用户注入「你上次的事搞砸了」的错误记忆（严厉审查 P0-5）。"""
+        pending = [(k, t) for k, t in self._running.items() if not t.done()]
+        for (chat_id, kind), t in pending:
             t.cancel()
+            _append_rec({"op": "end", "chat_id": chat_id, "kind": kind,
+                         "status": "cancelled",
+                         "detail": "进程正常关停，任务取消",
+                         "ts": time.time()})
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(*[t for _, t in pending], return_exceptions=True)
             logger.info(f"后台任务已全部取消（{len(pending)} 个）")
         self._running.clear()
         self._started.clear()
