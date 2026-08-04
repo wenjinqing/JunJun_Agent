@@ -57,6 +57,29 @@ def _called_tool_names(messages: list) -> set:
     return names
 
 
+_ECHO_NUDGE = (
+    "（系统提示）你刚才的回复和你最近已经说过的话几乎一模一样（「{hit}」），"
+    "真人不会复读自己。请换一个完全不同的说法或角度重新回应；"
+    "如果实在没有新内容可说，调用 do_not_reply。"
+    "注意：你上一轮的回复还没有发送出去，对方目前什么都没看到。"
+)
+
+
+def _plain_reply_text(msg) -> str:
+    """轻量提取 AIMessage 文本（echo 补救轮用）：拼接分块 + 砍 think 链。"""
+    if msg is None:
+        return ""
+    text = msg.content or ""
+    if isinstance(text, list):
+        text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+    text = (text or "").strip()
+    if "</think>" in text:
+        text = text.split("</think>")[-1].strip()
+    elif "<think>" in text:
+        return ""
+    return text
+
+
 def _intent_nudge(latest_text: str, result_messages: list, available: set):
     """强意图命中但对应工具没调 -> (系统追问文本, 是否需全绑补救)，否则 None。
 
@@ -351,4 +374,58 @@ class JunJunAgent:
                 else:
                     logger.warning(f"[{self.session.chat_id}] 推理结构无法提取，本轮沉默")
                     return None
+
+        # ---- 复读自检（echo guard，2026-08-04）：与近期自身发言撞车 -> 追问重说 ----
+        # 背景：bot 复读的话术落进短期记忆，下一轮 context 里同一句话堆 N 次，
+        # 模型把「自己老说这句」当成说话习惯继续复读——自我污染正反馈。
+        # 输入端 render 已去重，这里守出口：撞车追问一轮，仍撞车则沉默
+        # （被 @ 必回场景发重试稿——至少模型挣扎过一次）。
+        agent_cfg = cfg.raw.get("agent", {})
+        if text and bool(agent_cfg.get("echo_guard", True)):
+            try:
+                from junjun_memory.echo import is_echo
+                sim = float(agent_cfg.get("echo_similarity", 0.85))
+                k = int(agent_cfg.get("echo_recent_k", 8))
+                memory = getattr(self.session, "memory", None)
+                recent_bot = ([e.text for e in memory.entries if e.role == "bot"][-k:]
+                              if memory is not None else [])
+                hit = is_echo(text, recent_bot, similarity=sim) if recent_bot else None
+            except Exception:
+                hit = None
+            if hit is not None:
+                logger.info(f"[{self.session.chat_id}] 复读自检命中，追问重说 "
+                            f"[trace={trace_id}]: {text[:30]} ≈ {hit[:30]}")
+                try:
+                    retry = await agent.ainvoke(
+                        {"messages": messages + [
+                            HumanMessage(content=_ECHO_NUDGE.format(hit=hit[:60]))]},
+                        config={
+                            "callbacks": callbacks or [],
+                            "recursion_limit": 2 * eff_iter + 1,
+                            "metadata": {
+                                "chat_id": self.session.chat_id,
+                                "trace_id": trace_id,
+                                "langfuse_session_id": self.session.chat_id,
+                                "langfuse_tags": ["junjun", "agent", "echo-retry"],
+                            },
+                        },
+                    )
+                    rmsgs = retry.get("messages", messages)
+                    _record_usage(rmsgs, self.session.chat_id)
+                    if _called_silence_tool(rmsgs):
+                        return None
+                    rtext = _plain_reply_text(rmsgs[-1] if rmsgs else None)
+                    if rtext and is_echo(rtext, recent_bot, similarity=sim) is None:
+                        text = rtext                       # 重说成功
+                    elif not addressed:
+                        logger.info(f"[{self.session.chat_id}] 重说仍复读，本轮沉默")
+                        return None                        # 非必回：宁可沉默不复读
+                    elif rtext:
+                        logger.warning(f"[{self.session.chat_id}] 被@必回但重说仍复读，"
+                                       f"发重试稿: {rtext[:30]}")
+                        text = rtext
+                except Exception as e:
+                    logger.warning(f"复读补救轮异常（按原稿处理）: {type(e).__name__}: {e}")
+                    if not addressed:
+                        return None
         return text or None
