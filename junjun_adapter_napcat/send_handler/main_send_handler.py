@@ -6,6 +6,7 @@ from maim_message import MessageBase, Seg
 
 from ..logger import logger
 from .nc_sending import nc_message_sender
+from .send_retry import send_with_retry
 
 
 class SendHandler:
@@ -73,11 +74,12 @@ class SendHandler:
             }
             action = "send_private_msg"
 
-        resp = await nc_message_sender.send_message_to_napcat(action, params)
+        resp = await send_with_retry(action, params)
         if resp.get("status") == "ok":
-            logger.info(f"已发送到 NapCat [{action}]")
+            logger.info(f"已发送到 NapCat [{action}]"
+                        f"{'（历史确认免重发）' if resp.get('_verified') else ''}")
         else:
-            logger.warning(f"NapCat 发送失败: {resp}")
+            logger.warning(f"NapCat 发送失败（含重试）: {resp}")
 
     @staticmethod
     def _extract_pokes(seg: Seg) -> tuple:
