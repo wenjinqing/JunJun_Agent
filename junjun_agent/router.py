@@ -17,8 +17,8 @@ logger = get_logger("agent.router")
 # 「查一下天气」是单步（只有查），「查资料写成报告」才是任务（查+写）。
 _ACTION_PAIRS = [
     # 调研链：检索 × 产出
-    (("调研", "研究一下", "查资料", "深度搜索", "搜集"),
-     ("报告", "写份", "写成", "整理成", "汇总成", "梳理成", "综述")),
+    (("调研", "研究一下", "查资料", "深度搜索", "搜集", "查一下", "搜一下"),
+     ("报告", "写份", "写成", "整理成", "汇总成", "梳理成", "综述", "摘要")),
     # 阅读链：深读 × 产出
     (("看完", "读一下", "读这篇", "仔细看", "精读", "读完"),
      ("整理", "笔记", "汇总", "讲给", "梳理", "报告", "总结一下", "提炼")),
@@ -46,6 +46,10 @@ _NEGATIONS = ("别", "不要", "不用", "不许", "不准", "算了", "先不")
 
 _Q_RE = re.compile(r"[吗呢啊？?]$")
 
+# 单独的研究/调研意图（有明确产出诉求才视为任务）
+_RESEARCH_WORDS = ("调研", "研究一下")
+_RESEARCH_OUTPUTS = ("报告", "摘要", "综述", "整理成", "汇总成", "梳理成")
+
 
 def route_to_task(text: str, *, chat_id: str = "") -> bool:
     """强信号命中 -> True（任务通道）。拿不准一律 False（对话通道）。"""
@@ -59,6 +63,12 @@ def route_to_task(text: str, *, chat_id: str = "") -> bool:
     for neg in _NEGATIONS:
         if neg in t:
             return False
+    # 单独的研究/调研意图：有对象 + 有产出诉求
+    if (any(w in t for w in _RESEARCH_WORDS)
+            and any(w in t for w in _RESEARCH_OUTPUTS)
+            and len(t) > 10):
+        logger.debug(f"路由->任务通道（研究意图）: {t[:30]}")
+        return True
     # 时程承诺
     if any(w in t for w in _SCHEDULE_WORDS):
         logger.debug(f"路由->任务通道（时程承诺）: {t[:30]}")
