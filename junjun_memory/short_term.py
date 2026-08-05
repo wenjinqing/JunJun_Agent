@@ -1,10 +1,12 @@
 """短期记忆：按会话滑动窗口。
 
 群聊消息渲染带昵称前缀，Agent 能分清谁在说话。
-阶段 4 升级为 LangGraph checkpointer；本阶段内存窗口。
+阶段 2 新增：可选持久化到 SQLite，进程重启后可恢复最近上下文。
 """
 
-from dataclasses import dataclass, field
+import json
+import time
+from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
 # 管理员锚点防伪：昵称/消息内容里不得出现系统标记样式或换行，
@@ -40,6 +42,45 @@ class MemoryEntry:
 class ShortTermMemory:
     max_size: int = 80
     entries: List[MemoryEntry] = field(default_factory=list)
+    chat_id: str = ""           # 会话键；空时不持久化
+    persist: bool = False       # 是否写入 SQLite
+
+    def __post_init__(self):
+        if self.persist and self.chat_id:
+            self._load()
+
+    def _load(self) -> None:
+        """从 SQLite 恢复 entries（失败静默）。"""
+        try:
+            from junjun_core.database import ShortTermMemory as STMModel
+            rec = STMModel.get_or_none(STMModel.chat_id == self.chat_id)
+            if rec and rec.entries_json:
+                loaded = json.loads(rec.entries_json)
+                self.entries = [MemoryEntry(**e) for e in loaded[-self.max_size:]]
+        except Exception:
+            pass
+
+    def _save(self) -> None:
+        """异步写入 SQLite（失败静默）。"""
+        if not self.persist or not self.chat_id:
+            return
+        try:
+            from junjun_core.database import ShortTermMemory as STMModel, db_writer
+            data = [asdict(e) for e in self.entries]
+            payload = json.dumps(data, ensure_ascii=False)
+            now = time.time()
+
+            def _upsert():
+                (STMModel
+                 .insert(chat_id=self.chat_id, entries_json=payload, updated_at=now)
+                 .on_conflict(
+                     conflict_target=[STMModel.chat_id],
+                     update={STMModel.entries_json: payload, STMModel.updated_at: now})
+                 .execute())
+
+            db_writer.submit(_upsert)
+        except Exception:
+            pass
 
     def add_user(self, text: str, nickname: str, user_id: str = "",
                  message_id: str = "", at_bot: bool = False) -> None:
@@ -48,10 +89,16 @@ class ShortTermMemory:
             user_id=user_id, message_id=message_id, at_bot=at_bot,
         ))
         self._trim()
+        self._save()
 
     def add_bot(self, text: str) -> None:
         self.entries.append(MemoryEntry(role="bot", text=text))
         self._trim()
+        self._save()
+
+    def _trim(self) -> None:
+        if len(self.entries) > self.max_size:
+            self.entries = self.entries[-self.max_size:]
 
     def _trim(self) -> None:
         if len(self.entries) > self.max_size:

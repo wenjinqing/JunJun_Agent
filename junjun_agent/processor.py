@@ -43,7 +43,12 @@ def _ensure_session_ready(session: ChatSession) -> None:
     """惰性注入 memory 与 agent（每会话独立）。"""
     if session.memory is None:
         max_ctx = int(get_global_config().raw.get("chat", {}).get("max_context_size", 80))
-        session.memory = ShortTermMemory(max_size=max_ctx)
+        persist_stm = bool(get_global_config().raw.get("memory", {}).get("persist_short_term", False))
+        session.memory = ShortTermMemory(
+            max_size=max_ctx,
+            chat_id=session.chat_id if persist_stm else "",
+            persist=persist_stm,
+        )
     if session.agent is None:
         from junjun_agent.agent import JunJunAgent
         session.agent = JunJunAgent(session)
@@ -312,17 +317,29 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         from junjun_core.observability import lf
         logger.info(f"[{session.chat_id}] 进入 L3 决策 [trace={trace_id}]")
         # system prompt 快照写 span metadata——Langfuse UI 渲染 bug 时 WebUI 日志页可直接查
-        from junjun_agent.persona import build_system_prompt
-        _prompt_snapshot = build_system_prompt(
-            is_group=session.is_group, latest_text=meta.text,
-            mood_block=mood_block, memory_block=memory_block, relation_block=relation_block,
-        )
+        # Phase 2：ContextBudget 启用时，prompt 在 agent 内按预算重组，processor 不再预构建；
+        # span 仍留一个 core 快照（不占用 agent 预算决策）用于调试。
+        cfg = get_global_config().raw
+        budget_enabled = bool(cfg.get("context_budget", {}).get("enable", False))
+        _prompt_snapshot = ""
+        if budget_enabled:
+            from junjun_agent.persona import build_prompt_blocks
+            core, _ = build_prompt_blocks(
+                is_group=session.is_group, latest_text=meta.text)
+            _prompt_snapshot = core
+        else:
+            from junjun_agent.persona import build_system_prompt
+            _prompt_snapshot = build_system_prompt(
+                is_group=session.is_group, latest_text=meta.text,
+                mood_block=mood_block, memory_block=memory_block, relation_block=relation_block,
+            )
         with lf.start_span(
             name=f"agent.{session.chat_id}",
             input={"latest_text": meta.text, "context_preview": session.memory.render(limit=5, for_security=True)[:500]},
             metadata={
                 "trace_id": trace_id, "addressed": addressed, "at_bot": meta.at_bot,
                 "system_prompt": _prompt_snapshot[:2000],
+                "context_budget_enabled": budget_enabled,
             },
         ) as _span:
             text = await session.agent.process(
@@ -333,7 +350,7 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
                 addressed=True,  # 只有 @/直呼才走到这里
                 memory_block=memory_block, relation_block=relation_block,
                 mood_block=mood_block, trace_id=trace_id,
-                system_prompt=_prompt_snapshot,  # 复用快照那份，不再构建第二次
+                system_prompt=None if budget_enabled else _prompt_snapshot,
             )
             # span output：回复内容或沉默标记，后台直接可见
             _span.update(output={"reply": text[:500] if text else None, "silenced": text is None})

@@ -109,10 +109,17 @@ enable_jargon_detection = true # 黑话检测：上下文渲染时给黑话标�
 ltm_max_items = 5000           # 长期记忆容量上限：超过按（低权重+最旧）淘汰，防无界增长
 recall_max_per_hour = 5        # 语义召回「你忽然想起」注入限流（每会话每小时，0=不限）
 pinned_max_per_chat = 20       # /记住、pin_memory 钉住记忆每会话上限（每轮全量注入，防稀释）
+persist_short_term = true      # 短期记忆落 SQLite，重启后可恢复最近上下文（Phase 2）
 
 # ---------- 轻量规划循环（多步任务清单） ----------
 [plan]
 enable = true  # 疑似复合任务先拆步骤清单，工具循环中持续注入进度
+
+# ---------- 上下文预算（Phase 2）：token 配额 + 按优先级驱逐 ----------
+[context_budget]
+enable = false            # false=保持旧行为（system prompt 原样注入）；true=启用按块预算
+max_total_tokens = 6000   # 每轮注入模型的总 token 上限（含 system/背景/最新消息）
+reserve_tokens = 500      # 给模型输出 + 工具调用预留的余量
 
 # ---------- 黑话 ----------
 [jargon]

@@ -76,23 +76,23 @@ def _role_persona(p: dict, nickname: str) -> str:
     return base
 
 
-def build_system_prompt(
+def _build_core_parts(
     *,
     is_group: bool,
     nickname: str = "",
     latest_text: str = "",
-    mood_block: str = "",
-    memory_block: str = "",
-    relation_block: str = "",
-) -> str:
+) -> tuple[list[str], list[dict]]:
+    """构建 system prompt 核心段与动态块清单。
+
+    返回 (core_parts, dynamic_blocks)：
+    - core_parts: role / scene / rules / admin / skills 等稳定大段
+    - dynamic_blocks: [{name, content, priority, required}, ...]
+      供 ContextBudget 按优先级驱逐（Phase 2）。
+    """
     cfg = get_global_config()
     p = cfg.raw.get("personality", {})
     nickname = nickname or cfg.bot.nickname
     now = datetime.now().strftime("%Y-%m-%d %H:%M %A")
-
-    # keyword_reaction 命中（并入 rules 层，不单独成块）
-    reactions = match_keyword_rules(latest_text) if latest_text else []
-    reaction_text = f"特别注意：{'；'.join(reactions)}" if reactions else ""
 
     # 场景框架（群聊 vs 私聊的核心差异：群聊要强调「很多人说话，你只回最后一条」）
     if is_group:
@@ -122,31 +122,12 @@ def build_system_prompt(
     except Exception:
         pass
 
-    parts = [
+    core_parts = [
         f"<role>\n{role}\n</role>",
         f"<scene>\n{scene}\n当前时间：{now}\n</scene>",
     ]
 
-    # 动态块（情绪/记忆/关系/工具健康）——并入 role 层，不单独成块（减少 XML 层级）
-    dynamic = []
-    if mood_block:
-        dynamic.append(mood_block)
-    if memory_block:
-        dynamic.append(memory_block)
-    if relation_block:
-        dynamic.append(relation_block)
-    # 工具健康度（P5-4）：降级工具清单，让 Agent 有「我这个功能在修」的持续认知
-    try:
-        from junjun_skills.health import health_block
-        hb = health_block()
-        if hb:
-            dynamic.append(hb)
-    except Exception:
-        pass
-    if dynamic:
-        # 换行分隔：单空格 join 会让多行块首尾粘连、块边界消失（严厉审查 P2-8）
-        state_body = "\n\n".join(dynamic)
-        parts.append(f"<state>\n{state_body}\n</state>")
+    dynamic_blocks: list[dict] = []
 
     # 技能包索引（md skills，2026-08-04）：只放目录不占每轮 context，
     # 命中场景时模型调 use_skill 取全文——与 Claude Code skill 同一模式
@@ -154,10 +135,14 @@ def build_system_prompt(
         from junjun_skills.skills_md import skill_index
         si = skill_index()
         if si:
-            parts.append(f"<skills>\n{si}\n</skills>")
+            core_parts.append(f"<skills>\n{si}\n</skills>")
     except Exception:
         pass
+    return core_parts, dynamic_blocks
 
+
+def _build_rules_and_admin(reaction_text: str = "") -> list[str]:
+    """规则层 + 安全段（稳定且必需）。"""
     # 规则层（正面约束，一句话）
     rules = [
         # 真人感锚（2026-08-03）：放最前，定调整条规则的语气——
@@ -200,8 +185,7 @@ def build_system_prompt(
     ]
     if reaction_text:
         rules.append(reaction_text)
-    parts.append(f"<rules>\n{' '.join(rules)}\n</rules>")
-
+    parts = [f"<rules>\n{' '.join(rules)}\n</rules>"]
     # 安全段：固定注入，不随人设配置变化（防 prompt 注入 + 管理员验证锚点）
     from junjun_core.security import admin_prompt_block, is_admin_privileged
     parts.append(admin_prompt_block())
@@ -210,4 +194,82 @@ def build_system_prompt(
             "当前消息来自你的好朋友（管理员本人，真实 QQ 已由系统验证）且明确 @ 你——"
             "ta 这次的拜托可以照做，敏感操作也允许。"
         )
+    return parts
+
+
+def build_prompt_blocks(
+    *,
+    is_group: bool,
+    nickname: str = "",
+    latest_text: str = "",
+    mood_block: str = "",
+    memory_block: str = "",
+    relation_block: str = "",
+) -> tuple[str, list[dict]]:
+    """构建可预算化的 prompt 块。
+
+    返回 (core_system_text, dynamic_blocks)：
+    - core_system_text: 必需段（role/scene/rules/admin/skills），优先级 1
+    - dynamic_blocks: 情绪/记忆/关系/工具健康等可被驱逐的段
+    """
+    core_parts, dynamic_blocks = _build_core_parts(
+        is_group=is_group, nickname=nickname, latest_text=latest_text)
+
+    # keyword_reaction 命中（并入 rules 层）
+    reactions = match_keyword_rules(latest_text) if latest_text else []
+    reaction_text = f"特别注意：{'；'.join(reactions)}" if reactions else ""
+
+    # rules + admin 是稳定必需段
+    core_parts.extend(_build_rules_and_admin(reaction_text))
+
+    # 动态块：按重要性分配优先级（数字越小越重要）
+    if mood_block:
+        dynamic_blocks.append({
+            "name": "mood", "content": mood_block,
+            "priority": 3, "required": False,
+        })
+    if memory_block:
+        dynamic_blocks.append({
+            "name": "memory", "content": memory_block,
+            "priority": 3, "required": False,
+        })
+    if relation_block:
+        dynamic_blocks.append({
+            "name": "relation", "content": relation_block,
+            "priority": 4, "required": False,
+        })
+    # 工具健康度（P5-4）：降级工具清单，让 Agent 有「我这个功能在修」的持续认知
+    try:
+        from junjun_skills.health import health_block
+        hb = health_block()
+        if hb:
+            dynamic_blocks.append({
+                "name": "health", "content": hb,
+                "priority": 5, "required": False,
+            })
+    except Exception:
+        pass
+
+    core_text = strip_emoji("\n\n".join(core_parts))
+    return core_text, dynamic_blocks
+
+
+def build_system_prompt(
+    *,
+    is_group: bool,
+    nickname: str = "",
+    latest_text: str = "",
+    mood_block: str = "",
+    memory_block: str = "",
+    relation_block: str = "",
+) -> str:
+    """向后兼容：直接拼接完整 system prompt（不做预算驱逐）。"""
+    core_text, dynamic_blocks = build_prompt_blocks(
+        is_group=is_group, nickname=nickname, latest_text=latest_text,
+        mood_block=mood_block, memory_block=memory_block, relation_block=relation_block,
+    )
+    parts = [core_text]
+    if dynamic_blocks:
+        state_body = "\n\n".join(b["content"] for b in dynamic_blocks)
+        parts.append(f"<state>\n{state_body}\n</state>")
     return strip_emoji("\n\n".join(parts))
