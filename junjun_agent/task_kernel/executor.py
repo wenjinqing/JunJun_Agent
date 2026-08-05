@@ -1,0 +1,340 @@
+"""TaskKernel 执行器：步骤图的代码侧状态机（方案 §4.3 执行循环）。
+
+设计要点：
+- 执行循环由代码驱动——取就绪步骤、验证、失败决策（retry/replan/abort）
+  全是代码逻辑，不靠模型自由发挥（12-factor: harness acts, not the model）。
+- 成品类步骤（画图/语音）的工具内部自己会走 TaskManager 提交即返回，
+  kernel 只把工具返回值当步骤产出——不重复造轮询。
+- 汇报走 outbound.send_proactive（统一出站口）；结局登记复用
+  task_manager._record_outcome（kind=task_kernel），决策注入自然生效。
+- 接单话术是模板池（0 token，走正常出站路径由 processor 发送）；
+  最终汇报过 utils 合成 + persona_brief 口吻——能力与人格分层。
+- 灰度开关：[task_kernel] enable（默认关）。关掉后 router 命中也回退
+  对话通道，等于回到现状。
+"""
+
+import asyncio
+import json
+import random
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from junjun_core.contracts import ReplySegment
+from junjun_core.observability import get_logger
+from junjun_agent.task_kernel.plan import SYNTH_ACTION, Step, TaskPlan
+
+logger = get_logger("task_kernel.executor")
+
+_PERSIST_DIR: Optional[Path] = None   # 生产由 run_junjun 挂接；测试默认 None
+
+# 接单话术模板池（直发不经 echo guard——保持 8+ 防口头禅）
+_ACK_TEMPLATES = [
+    "行，这活得拆开弄，我规划一下步骤，做完了喊你。",
+    "收到，这个不是一句话能搞定的，我分几步来，弄好向你汇报。",
+    "好嘞，我列个步骤慢慢弄，你先忙你的。",
+    "嗯这个得花点功夫，我拆成几步来弄，好了叫你。",
+    "可以，我规划下流程再动手，结果出来直接发你。",
+    "这单接了，步骤有点多，我一条条来，做完了汇报。",
+    "明白，我先拆任务再动手，你别等，好了我主动说。",
+    "成，这个我来跟，分步弄，有结果了第一时间说。",
+]
+
+
+def _cfg() -> dict:
+    try:
+        from junjun_core.config import get_global_config
+        return get_global_config().raw.get("task_kernel", {})
+    except Exception:
+        return {}
+
+
+def enabled() -> bool:
+    return bool(_cfg().get("enable", False))
+
+
+def enable_persistence(dir_path) -> None:
+    """生产启动挂钩：计划落盘目录 + 恢复中断计划。测试勿调。"""
+    global _PERSIST_DIR
+    _PERSIST_DIR = Path(dir_path)
+    _restore_interrupted()
+
+
+def _persist(plan: TaskPlan) -> None:
+    if _PERSIST_DIR is None:
+        return
+    try:
+        _PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+        (_PERSIST_DIR / f"{plan.plan_id}.json").write_text(
+            json.dumps(plan.to_dict(), ensure_ascii=False, indent=1),
+            encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"计划落盘失败（忽略）: {e}")
+
+
+def _restore_interrupted() -> None:
+    """重启恢复：v1 不续跑——进行中的计划标 failed 并登记结局，
+    让决策注入能如实说「上次那个任务被重启打断了」（不续编幻觉）。"""
+    if _PERSIST_DIR is None or not _PERSIST_DIR.exists():
+        return
+    n = 0
+    from junjun_agent.tasks import task_manager
+    for f in _PERSIST_DIR.glob("*.json"):
+        try:
+            plan = TaskPlan.from_dict(json.loads(f.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+        if plan.state in ("planning", "running", "reporting"):
+            plan.state = "failed"
+            plan.note = "进程重启，任务中断"
+            _persist(plan)
+            task_manager._record_outcome(plan.chat_id, "task_kernel", "failed",
+                                         f"{plan.goal[:30]}：进程重启，任务中断")
+            n += 1
+    if n:
+        logger.info(f"已标记 {n} 个被重启中断的复杂任务")
+
+
+class TaskKernel:
+    """复杂任务的规划-执行-验证-汇报状态机。"""
+
+    def __init__(self) -> None:
+        self._plans: Dict[str, TaskPlan] = {}
+
+    # ---------- 入口 ----------
+
+    async def try_submit(self, text: str, *, chat_id: str, user_id: str = "",
+                         callbacks=None) -> Optional[str]:
+        """路由命中后的接单入口。返回接单话术（调用方直发）；规划失败返回
+        None——调用方回退对话通道，等于无事发生。"""
+        if not enabled():
+            return None
+        from junjun_agent.task_kernel.planner import make_plan
+        max_steps = int(_cfg().get("max_steps", 6))
+        try:
+            plan = await make_plan(text, chat_id=chat_id, user_id=user_id,
+                                   max_steps=max_steps, callbacks=callbacks)
+        except Exception as e:
+            logger.warning(f"规划调用异常，回退对话通道: {type(e).__name__}: {e}")
+            return None
+        if plan is None:
+            return None
+        plan.state = "running"
+        plan.deadline_ts = time.time() + float(_cfg().get("deadline_minutes", 30)) * 60
+        self._plans[plan.plan_id] = plan
+        _persist(plan)
+        asyncio.create_task(self._run(plan), name=f"task-kernel-{plan.plan_id}")
+        logger.info(f"[{chat_id}] 复杂任务接单（{len(plan.steps)} 步）: {text[:40]}")
+        return random.choice(_ACK_TEMPLATES)
+
+    # ---------- 执行循环 ----------
+
+    async def _run(self, plan: TaskPlan) -> None:
+        from junjun_agent.task_kernel.planner import revise_remaining
+        max_replans = int(_cfg().get("max_replans", 1))
+        try:
+            while True:
+                if time.time() > plan.deadline_ts:
+                    plan.state = "failed"
+                    plan.note = "超过时限"
+                    break
+                ready = plan.ready_steps()
+                if not ready:
+                    if any(s.status == "running" for s in plan.steps):
+                        await asyncio.sleep(0.5)
+                        continue
+                    if any(s.status == "pending" for s in plan.steps):
+                        plan.state = "failed"
+                        plan.note = "步骤图无法推进（依赖断裂）"
+                    break
+                await asyncio.gather(*(self._run_step(plan, s) for s in ready),
+                                     return_exceptions=True)
+                _persist(plan)
+                failed = [s for s in plan.steps if s.status == "failed"]
+                for s in failed:
+                    if plan.attempts.get(s.id, 0) < 2:
+                        logger.info(f"步骤 {s.id} 失败（{s.error[:60]}），重试一次")
+                        s.status, s.error = "pending", ""
+                    elif plan.replans < max_replans:
+                        plan.replans += 1
+                        logger.info(f"步骤 {s.id} 连续失败，局部重规划（第 {plan.replans} 次）")
+                        new_steps = await revise_remaining(plan, s.desc, s.error)
+                        if new_steps:
+                            plan.steps = ([x for x in plan.steps if x.status == "done"]
+                                          + new_steps)
+                            _persist(plan)
+                        else:
+                            s.status = "failed"  # 重规划也废了，认输
+                            plan.state = "failed"
+                            plan.note = f"步骤「{s.desc[:30]}」失败且无法重规划"
+                    else:
+                        plan.state = "failed"
+                        plan.note = f"步骤「{s.desc[:30]}」失败：{s.error[:100]}"
+                if plan.state == "failed":
+                    break
+                if all(s.status in ("done", "skipped") for s in plan.steps):
+                    plan.state = "done"
+                    break
+        except asyncio.CancelledError:
+            plan.state, plan.note = "failed", "进程关停，任务取消"
+            _persist(plan)
+            raise
+        except Exception as e:
+            plan.state, plan.note = "failed", f"{type(e).__name__}: {e}"
+            logger.warning(f"任务内核异常: {plan.note}")
+        finally:
+            await self._report(plan)
+            self._plans.pop(plan.plan_id, None)
+            _persist(plan)
+
+    # ---------- 单步执行 ----------
+
+    async def _run_step(self, plan: TaskPlan, step: Step) -> None:
+        step.status = "running"
+        plan.attempts[step.id] = plan.attempts.get(step.id, 0) + 1
+        try:
+            if step.action == SYNTH_ACTION:
+                result = await self._synthesize(plan, step)
+            else:
+                result = await self._call_tool(plan, step)
+            ok = await self._verify(plan, step, result)
+        except Exception as e:
+            result, ok = "", False
+            step.error = f"{type(e).__name__}: {e}"
+        if ok:
+            step.status = "done"
+            step.result = result[:500]
+            logger.info(f"步骤 {step.id} 完成: {step.desc[:40]}")
+        else:
+            step.status = "failed"
+            if not step.error:
+                step.error = "验证未通过" if result else "工具无产出"
+            logger.info(f"步骤 {step.id} 失败: {step.error[:80]}")
+
+    async def _call_tool(self, plan: TaskPlan, step: Step) -> str:
+        """按名找注册表工具直接调（继承注册处的超时/熔断/错误分类包装）。"""
+        from junjun_skills.registry import get_tools
+        tool = next((t for t in get_tools() if t.name == step.action), None)
+        if tool is None:
+            raise RuntimeError(f"工具 {step.action} 不在注册表（可能被熔断降级）")
+        args = dict(step.args_hint)
+        done = {s.id: s.result for s in plan.steps if s.status == "done"}
+        # $步骤id 引用替换为前序产出
+        for k, v in list(args.items()):
+            if isinstance(v, str) and v.startswith("$"):
+                ref = v[1:]
+                if ref in done:
+                    args[k] = done[ref]
+        if not args:
+            args = self._default_args(tool, plan, step)
+        out = await tool.ainvoke(args)
+        text = out if isinstance(out, str) else str(out)
+        if text.startswith("[TOOL_ERROR]"):
+            raise RuntimeError(text[:200])
+        return text
+
+    @staticmethod
+    def _default_args(tool, plan: TaskPlan, step: Step) -> dict:
+        """规划器没给参数时，按工具 schema 的第一个字符串字段塞任务描述。"""
+        try:
+            fields = tool.args_schema.model_fields
+            for name, f in fields.items():
+                if f.annotation is str:
+                    deps = "；".join(s.result[:100] for s in plan.steps
+                                     if s.id in step.depends_on and s.result)
+                    return {name: f"{step.desc}（任务目标：{plan.goal[:80]}）"
+                                   + (f"；前序产出：{deps}" if deps else "")}
+        except Exception:
+            pass
+        return {}
+
+    async def _synthesize(self, plan: TaskPlan, step: Step) -> str:
+        """llm_synthesize：纯文本合成步骤（调研报告、笔记汇总）。"""
+        from junjun_llm import get_chat_model
+        from langchain_core.messages import HumanMessage
+        deps = "\n".join(f"【{s.desc}】\n{s.result}" for s in plan.steps
+                         if s.id in step.depends_on and s.result)
+        prompt = (f"任务目标：{plan.goal}\n\n前序步骤产出：\n{deps or '（无）'}\n\n"
+                  f"当前步骤：{step.desc}\n\n直接产出这一步的成果内容。")
+        model = get_chat_model("utils")
+        resp = await model.ainvoke([HumanMessage(content=prompt)])
+        return str(resp.content)
+
+    async def _verify(self, plan: TaskPlan, step: Step, result: str) -> bool:
+        if step.verify == "none":
+            return True
+        if not result.strip():
+            return False
+        if step.verify == "llm_judge":
+            from junjun_llm import get_chat_model
+            from langchain_core.messages import HumanMessage
+            prompt = (f"判断下面的产出是否基本完成了步骤目标（只答「可以」或「不行+一句原因」）。\n"
+                      f"步骤目标：{step.desc}\n产出：\n{result[:1500]}")
+            try:
+                model = get_chat_model("utils_small") or get_chat_model("utils")
+                resp = await model.ainvoke([HumanMessage(content=prompt)])
+                verdict = str(resp.content)
+                if verdict.strip().startswith("不行"):
+                    step.error = f"验收不通过：{verdict[:100]}"
+                    return False
+            except Exception:
+                pass  # 验收调用本身炸了不当失败（工具结果已在）
+        return True
+
+    # ---------- 汇报 ----------
+
+    async def _report(self, plan: TaskPlan) -> None:
+        """终态汇报：口吻过 persona_brief，内容照实（含失败原因与已完成部分）。"""
+        from junjun_agent.outbound import send_proactive
+        from junjun_agent.tasks import task_manager
+        status = "done" if plan.state == "done" else "failed"
+        done = [s for s in plan.steps if s.status == "done"]
+        try:
+            text = await self._compose_report(plan)
+        except Exception as e:
+            logger.warning(f"汇报合成异常，用模板兜底: {e}")
+            text = self._fallback_report(plan)
+        said = ""
+        if text:
+            sent = await send_proactive(
+                plan.chat_id, [ReplySegment(type="text", data=text)],
+                source="task_kernel", remember=False)
+            said = text if sent else ""
+        if plan.state in ("done", "failed"):
+            detail = (f"{len(done)}/{len(plan.steps)} 步完成"
+                      + (f"，{plan.note}" if plan.note else ""))
+            task_manager._record_outcome(plan.chat_id, "task_kernel", status,
+                                         detail, said=said)
+        logger.info(f"[{plan.chat_id}] 复杂任务终态 {plan.state}: {plan.goal[:40]} {plan.note}")
+
+    async def _compose_report(self, plan: TaskPlan) -> str:
+        from junjun_llm import get_chat_model
+        from junjun_agent.persona import persona_brief
+        from junjun_core.config import get_global_config
+        from langchain_core.messages import HumanMessage
+        nickname = get_global_config().bot.nickname
+        lines = plan.summary_lines()
+        results = "\n".join(f"【{s.desc}】{s.result[:300]}" for s in plan.steps
+                            if s.status == "done" and s.result)
+        if plan.state == "done":
+            ask = f"任务已全部完成，把最终成果汇报给对方（成果内容为主，别只报喜不给货）。"
+        else:
+            ask = (f"任务没做完（{plan.note}）。照实说哪几步成了、卡在哪、"
+                   f"已完成的部分如果有用也带给对方。")
+        prompt = (f"你是「{nickname}」——{persona_brief()}\n\n"
+                  f"你之前接了一个任务：{plan.goal}\n\n步骤情况：\n" + "\n".join(lines)
+                  + f"\n\n产出：\n{results or '（无）'}\n\n{ask}\n"
+                    f"用你平时的口气说，别太长。")
+        model = get_chat_model("utils")
+        resp = await model.ainvoke([HumanMessage(content=prompt)])
+        return str(resp.content).strip()
+
+    @staticmethod
+    def _fallback_report(plan: TaskPlan) -> str:
+        lines = plan.summary_lines()
+        if plan.state == "done":
+            return "弄好了：\n" + "\n".join(lines)
+        return f"这个任务没弄完（{plan.note or '未知原因'}）：\n" + "\n".join(lines)
+
+
+kernel = TaskKernel()

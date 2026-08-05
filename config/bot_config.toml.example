@@ -274,6 +274,16 @@ max_pending_per_chat = 5   # 单会话排队+进行中的上限
 subagent_max_iter = 12     # 子任务 agent 的最大迭代轮数
 report_max_chars = 1500    # 汇报正文最长（超出截断）
 
+# ---------- 复杂任务内核（TaskKernel：规划-执行-验证-汇报状态机） ----------
+# Router 命中的复杂任务（调研报告/深读整理/复合成品/周期任务）走任务通道；
+# 关闭时路由命中也回退对话通道，等于回到现状——灰度开关。
+[task_kernel]
+enable = false           # 灰度：观察期先关，确认 golden case 绿后再开
+max_steps = 6            # 单个计划最多几步
+deadline_minutes = 30    # 硬时限（防失控）
+max_replans = 1          # 失败后最多局部重规划几次
+
+
 # ---------- 深度研究（deep_research job 的流水线参数） ----------
 [deep_research]
 queries = 5           # 规划拆出的搜索查询数
