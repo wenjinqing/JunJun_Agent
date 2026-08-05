@@ -236,3 +236,6 @@ junjun_skills/plugins/pixiv/config.toml
 scripts/napcat_watchdog.py
 tests/test_napcat_watchdog.py
 data/napcat_watchdog.*
+
+# 项目文档（本地工作文档，不入库——2026-08-05 用户决定）
+docs/
