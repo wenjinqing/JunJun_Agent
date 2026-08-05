@@ -237,5 +237,8 @@ scripts/napcat_watchdog.py
 tests/test_napcat_watchdog.py
 data/napcat_watchdog.*
 
+# 本地交接包/迁移工作目录
+junjun_migration_*/
+
 # 项目文档（本地工作文档，不入库——2026-08-05 用户决定）
 docs/
