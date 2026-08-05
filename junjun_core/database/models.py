@@ -240,6 +240,15 @@ class SkillPatch(BaseModel):
     updated_at = FloatField(default=time.time)
 
 
+class ShortTermMemory(BaseModel):
+    """短期记忆持久化（Phase 2）：进程重启后可恢复最近对话上下文。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    chat_id = CharField(unique=True)   # 会话键 platform:id:type
+    entries_json = TextField(default="[]")  # JSON: [{role,text,nickname,user_id,message_id,at_bot}]
+    updated_at = FloatField(default=time.time)
+
+
 class AsyncJob(BaseModel):
     """异步任务：接单->后台跑->主动汇报的持久化队列（重启可恢复，区别见 tasks.py 注释）。"""
     id = AutoField()
@@ -279,7 +288,7 @@ class Subscription(BaseModel):
 
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
               OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity,
-              UserSceneProfile, Intention, SkillPatch]
+              UserSceneProfile, Intention, SkillPatch, ShortTermMemory]
 
 
 def init_database() -> None:

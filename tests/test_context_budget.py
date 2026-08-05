@@ -55,3 +55,32 @@ class TestBackgroundBudget:
         bg = next(m.content for m in msgs if str(m.content).startswith("[群聊背景"))
         assert "消息28" in bg and "消息24" in bg
         assert "消息0" not in bg and "消息23" not in bg
+
+
+class TestContextBudgetEnabled:
+    @pytest.mark.asyncio
+    async def test_budget_enabled_keeps_latest_and_system(self, agent_env, monkeypatch):
+        """ContextBudget 启用时：system 和最新消息必需保留。"""
+        import junjun_core.config.config as cfg_mod
+        cfg_mod.global_config.raw["context_budget"] = {
+            "enable": True, "max_total_tokens": 50, "reserve_tokens": 0,
+        }
+        await agent_env.process(_ctx(30), latest_text="消息29")
+        msgs = _FakeGraph.captured["messages"]
+        assert any(isinstance(m.content, str) and "<role>" in m.content for m in msgs)
+        latest = next(m.content for m in msgs if str(m.content).startswith("[你要回复的消息"))
+        assert "消息29" in latest
+
+    @pytest.mark.asyncio
+    async def test_budget_enabled_evicts_background(self, agent_env, monkeypatch):
+        """预算极紧时背景块被驱逐，最新消息仍在。"""
+        import junjun_core.config.config as cfg_mod
+        cfg_mod.global_config.raw["context_budget"] = {
+            "enable": True, "max_total_tokens": 30, "reserve_tokens": 0,
+        }
+        await agent_env.process(_ctx(30), latest_text="消息29")
+        msgs = _FakeGraph.captured["messages"]
+        # 背景块应当被驱逐
+        assert not any(str(m.content).startswith("[群聊背景") for m in msgs)
+        latest = next(m.content for m in msgs if str(m.content).startswith("[你要回复的消息"))
+        assert "消息29" in latest

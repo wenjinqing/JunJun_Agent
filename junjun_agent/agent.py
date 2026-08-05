@@ -19,7 +19,8 @@ from junjun_skills.builtin.do_not_reply import SILENCE_TOOL_NAME
 from junjun_agent.loop.plan_tracker import (
     PlanMiddleware, detect_complexity, make_plan, set_plan, reset_plan,
 )
-from junjun_agent.persona import build_system_prompt
+from junjun_agent.persona import build_prompt_blocks, build_system_prompt
+from junjun_agent.context_budget import BudgetBlock, ContextBudget
 
 logger = get_logger("agent")
 
@@ -164,6 +165,91 @@ def _record_usage(messages: list, chat_id: str, request_type: str = "agent") -> 
         logger.debug(f"token 用量记录失败（忽略）: {e}")
 
 
+def _apply_context_budget(
+    *,
+    is_group: bool,
+    latest_text: str,
+    mood_block: str,
+    memory_block: str,
+    relation_block: str,
+    background: str,
+    latest_msg: str,
+    addressed: bool,
+) -> tuple[list, str, dict]:
+    """用 ContextBudget 组装 messages，返回 (messages, final_system_text, metrics)。"""
+    from junjun_core.config import get_global_config
+    cfg = get_global_config().raw.get("context_budget", {})
+    max_tokens = int(cfg.get("max_total_tokens", 6000))
+    reserve = int(cfg.get("reserve_tokens", 500))
+    budget = ContextBudget(max_total_tokens=max_tokens, reserve_tokens=reserve)
+
+    core_text, dynamic_blocks = build_prompt_blocks(
+        is_group=is_group, latest_text=latest_text,
+        mood_block=mood_block, memory_block=memory_block,
+        relation_block=relation_block,
+    )
+    blocks: list[BudgetBlock] = [
+        BudgetBlock(name="system", content=core_text, priority=1, required=True),
+    ]
+    for b in dynamic_blocks:
+        blocks.append(BudgetBlock(
+            name=b["name"], content=b["content"],
+            priority=b.get("priority", 5),
+            required=b.get("required", False),
+        ))
+    if background:
+        blocks.append(BudgetBlock(name="background", content=background, priority=6))
+    if latest_msg:
+        blocks.append(BudgetBlock(
+            name="latest", content=f"[你要回复的消息]\n{latest_msg}",
+            priority=1, required=True,
+        ))
+    if addressed:
+        blocks.append(BudgetBlock(
+            name="addressed", content="最后一条消息明确 @ 你或直呼你的名字，你必须正面回应，禁止调用 do_not_reply。",
+            priority=1, required=True,
+        ))
+
+    kept, metrics = budget.build_messages(blocks)
+    # 组装 messages
+    messages: list = []
+    system_parts = []
+    dynamic_parts = []
+    bg_block = None
+    latest_block = None
+    for b in kept:
+        if b.name == "system":
+            system_parts.append(b.content)
+        elif b.name in ("mood", "memory", "relation", "health"):
+            dynamic_parts.append(b.content)
+        elif b.name == "background":
+            bg_block = b.content
+        elif b.name == "latest":
+            latest_block = b.content
+        elif b.name == "addressed":
+            system_parts.append(b.content)
+    system_text = "\n\n".join(system_parts)
+    if dynamic_parts:
+        system_text += f"\n\n<state>\n{'\n\n'.join(dynamic_parts)}\n</state>"
+
+    messages.append(SystemMessage(content=system_text))
+    if bg_block:
+        bg_msgs = _background_to_messages(bg_block)
+        if bg_msgs:
+            if isinstance(bg_msgs[0], HumanMessage):
+                bg_msgs[0] = HumanMessage(content="[群聊背景，仅供参考]\n" + (bg_msgs[0].content or ""))
+            else:
+                bg_msgs.insert(0, HumanMessage(content="[群聊背景，仅供参考]"))
+            messages.extend(bg_msgs)
+    if latest_block:
+        messages.append(HumanMessage(content=latest_block))
+    elif not bg_block:
+        # 没有背景也没有最新消息时，把整个 context 塞进去兜底
+        messages.append(HumanMessage(content=latest_text or ""))
+
+    return messages, system_text, metrics
+
+
 class JunJunAgent:
     """单会话 Agent 封装。"""
 
@@ -243,15 +329,9 @@ class JunJunAgent:
         """
         cfg = get_global_config()
         max_iter = int(cfg.raw.get("memory", {}).get("max_agent_iterations", 5))
-        system = system_prompt or build_system_prompt(
-            is_group=self.session.is_group,
-            latest_text=latest_text,
-            mood_block=mood_block,
-            memory_block=memory_block,
-            relation_block=relation_block,
-        )
-        if addressed:
-            system += "\n最后一条消息明确 @ 你或直呼你的名字，你必须正面回应，禁止调用 do_not_reply。"
+        budget_cfg = cfg.raw.get("context_budget", {})
+        budget_enabled = bool(budget_cfg.get("enable", False))
+
         # context_text 包含历史消息（可能含最新消息）。把最新消息剥离单独作为
         # HumanMessage 传入，context 只作为背景参考——模型明确知道「这是背景，这是你要回的」。
         context_lines = context_text.strip().split("\n") if context_text.strip() else []
@@ -281,25 +361,48 @@ class JunJunAgent:
         bg_budget = int(cfg.raw.get("chat", {}).get("background_context_lines", 30))
         background = "\n".join(background_lines[-bg_budget:])
 
-        messages = [SystemMessage(content=system)]
-        if background:
-            bg_msgs = _background_to_messages(background)
-            if bg_msgs:
-                if isinstance(bg_msgs[0], HumanMessage):
-                    bg_msgs[0] = HumanMessage(
-                        content="[群聊背景，仅供参考]\n" + (bg_msgs[0].content or ""))
-                else:
-                    # 首轮是 bot 历史发言：标记单独成条，别让模型以为这话是它说的
-                    bg_msgs.insert(0, HumanMessage(content="[群聊背景，仅供参考]"))
-                messages.extend(bg_msgs)
-        if latest_msg:
-            # 去掉「【最新】」前缀（processor 加的标记），还原原始消息
-            clean_latest = latest_msg.replace("【最新】", "").strip()
-            messages.append(HumanMessage(content=f"[你要回复的消息]\n{clean_latest}"))
+        if budget_enabled and not system_prompt:
+            messages, final_system, budget_metrics = _apply_context_budget(
+                is_group=self.session.is_group,
+                latest_text=latest_text,
+                mood_block=mood_block,
+                memory_block=memory_block,
+                relation_block=relation_block,
+                background=background,
+                latest_msg=latest_msg.replace("【最新】", "").strip() if latest_msg else "",
+                addressed=addressed,
+            )
         else:
-            messages.append(HumanMessage(content=context_text))
+            system = system_prompt or build_system_prompt(
+                is_group=self.session.is_group,
+                latest_text=latest_text,
+                mood_block=mood_block,
+                memory_block=memory_block,
+                relation_block=relation_block,
+            )
+            if addressed:
+                system += "\n最后一条消息明确 @ 你或直呼你的名字，你必须正面回应，禁止调用 do_not_reply。"
+            messages = [SystemMessage(content=system)]
+            if background:
+                bg_msgs = _background_to_messages(background)
+                if bg_msgs:
+                    if isinstance(bg_msgs[0], HumanMessage):
+                        bg_msgs[0] = HumanMessage(
+                            content="[群聊背景，仅供参考]\n" + (bg_msgs[0].content or ""))
+                    else:
+                        # 首轮是 bot 历史发言：标记单独成条，别让模型以为这话是它说的
+                        bg_msgs.insert(0, HumanMessage(content="[群聊背景，仅供参考]"))
+                    messages.extend(bg_msgs)
+            if latest_msg:
+                # 去掉「【最新】」前缀（processor 加的标记），还原原始消息
+                clean_latest = latest_msg.replace("【最新】", "").strip()
+                messages.append(HumanMessage(content=f"[你要回复的消息]\n{clean_latest}"))
+            else:
+                messages.append(HumanMessage(content=context_text))
+            final_system = system
+            budget_metrics = {}
 
-        # ---- 轻量规划循环（P0-12）：疑似复合任务先拆清单，工具循环里持续注入 ----
+        # 轻量规划循环（P0-12）：疑似复合任务先拆清单，工具循环里持续注入 ----
         plan_token = None
         plan_steps = None
         if bool(cfg.raw.get("plan", {}).get("enable", True)):
@@ -326,6 +429,8 @@ class JunJunAgent:
                         # Langfuse v3 CallbackHandler 识别的元数据：trace 按会话归组
                         "langfuse_session_id": self.session.chat_id,
                         "langfuse_tags": ["junjun", "agent"],
+                        "context_budget": budget_metrics,
+                        "system_prompt": final_system[:2000],
                     },
                 },
             )
