@@ -30,6 +30,10 @@ from junjun_adapter_napcat.com_layer import mmc_start_com
 
 message_queue = asyncio.Queue()
 
+# 8095 上当前存活的 WS 连接集合：正常只有 NapCat 一条，但重连交错/误连探针
+# 会短暂出现两条——断开时需要能回退绑定到仍存活的那条。
+_active_conns: set = set()
+
 
 async def message_recv(server_connection: Server.ServerConnection):
     """NapCat 连接生命周期：连入 -> 收发 -> 断开。
@@ -39,6 +43,7 @@ async def message_recv(server_connection: Server.ServerConnection):
     全栈 traceback。这里显式捕获：正常断连打 INFO、异常断连打 WARN，
     并清空发送器连接（外发消息在断线窗口期等待重连而不是写死连接）。
     """
+    _active_conns.add(server_connection)
     await message_handler.set_server_connection(server_connection)
     await nc_message_sender.set_server_connection(server_connection)
     logger.info("NapCat 已连入 Adapter")
@@ -59,8 +64,16 @@ async def message_recv(server_connection: Server.ServerConnection):
     except Server.exceptions.ConnectionClosedError as e:
         logger.warning(f"NapCat 连接异常断开（等待重连）: {type(e).__name__}: {e}")
     finally:
-        nc_message_sender.clear_server_connection()
-        await message_handler.set_server_connection(None)
+        # 只动「本连接」的绑定，并回退到仍存活的其他连接：
+        # 多连接交错时（NapCat 重连/误连探针），后断开者若无条件清空，
+        # 会把仍在用的真实 NapCat 发送绑定清掉——入站正常、出站全丢
+        # （2026-08-06 实测踩坑：探针 WS 断开清掉了真实 NapCat 的绑定）。
+        _active_conns.discard(server_connection)
+        fallback = next(iter(_active_conns), None)
+        if nc_message_sender.server_connection is server_connection:
+            await nc_message_sender.set_server_connection(fallback)
+        if message_handler.server_connection is server_connection:
+            await message_handler.set_server_connection(fallback)
 
 
 async def message_process():
