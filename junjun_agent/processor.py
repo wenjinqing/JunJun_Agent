@@ -361,6 +361,17 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     if not text:
         return
 
+    # ---- Phase 3：发送前 HonestyGuard 代码层诚实校验 ----
+    # 把 persona 里「没调工具不许说发了」从 prompt 规则搬到发送口硬检查。
+    try:
+        from junjun_agent.honesty_guard import enabled as hg_enabled, verify as hg_verify
+        if hg_enabled():
+            ok, text, issues = hg_verify(session, text)
+            if not ok:
+                logger.warning(f"[{session.chat_id}] HonestyGuard 拦截: {issues} [trace={trace_id}]")
+    except Exception:
+        pass
+
     # ---- 感知后续：决策时「还在看」的图/语音/视频，看完后主动补一句 ----
     # （治「我看不到图片」：Agent 已接话 + 有在途感知 -> 完成后观后感推上门）
     if pending_perception:

@@ -121,6 +121,10 @@ enable = false            # false=保持旧行为（system prompt 原样注入�
 max_total_tokens = 6000   # 每轮注入模型的总 token 上限（含 system/背景/最新消息）
 reserve_tokens = 500      # 给模型输出 + 工具调用预留的余量
 
+# ---------- 诚实守卫（Phase 3）：代码层发送前校验行为声称 ----------
+[honesty_guard]
+enable = false            # false=保持旧行为（纯 prompt 规则约束）；true=发送前代码层拦截虚报
+
 # ---------- 黑话 ----------
 [jargon]
 all_global = true  # true=黑话库全群共享 / false=按会话隔离
