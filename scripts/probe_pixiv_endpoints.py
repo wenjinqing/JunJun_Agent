@@ -12,12 +12,12 @@ for line in open(".env", encoding="utf-8"):
     if line.startswith("PIXIV_COOKIE="):
         os.environ["PIXIV_COOKIE"] = line.split("=", 1)[1].strip().strip('"').strip("'")
 
-from junjun_skills.plugins.pixiv_novel.tools import _headers  # noqa: E402
+from junjun_skills.plugins.pixiv.client import _headers  # noqa: E402
 
 
 async def main():
     from curl_cffi.requests import AsyncSession
-    from junjun_skills.plugins.pixiv_novel.tools import _proxy
+    from junjun_skills.plugins.pixiv.client import _proxy
     async with AsyncSession(impersonate="chrome", proxy=_proxy() or None) as s:
         for content in ("illust", "manga", "novel"):
             url = f"https://www.pixiv.net/ranking.php?mode=daily&content={content}&p=1&format=json"
