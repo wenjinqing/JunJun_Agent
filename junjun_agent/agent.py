@@ -10,7 +10,7 @@ import time
 from typing import Optional
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from junjun_core.config import get_global_config
 from junjun_core.observability import get_logger
@@ -21,6 +21,7 @@ from junjun_agent.loop.plan_tracker import (
 )
 from junjun_agent.persona import build_prompt_blocks, build_system_prompt
 from junjun_agent.context_budget import BudgetBlock, ContextBudget
+from junjun_agent.honesty_guard import record_tool_call, start_decision
 
 logger = get_logger("agent")
 
@@ -332,6 +333,9 @@ class JunJunAgent:
         budget_cfg = cfg.raw.get("context_budget", {})
         budget_enabled = bool(budget_cfg.get("enable", False))
 
+        # Phase 3：标记本轮决策开始，工具记录从此刻起算
+        start_decision(self.session)
+
         # context_text 包含历史消息（可能含最新消息）。把最新消息剥离单独作为
         # HumanMessage 传入，context 只作为背景参考——模型明确知道「这是背景，这是你要回的」。
         context_lines = context_text.strip().split("\n") if context_text.strip() else []
@@ -447,6 +451,11 @@ class JunJunAgent:
 
         messages = result.get("messages", [])
         _record_usage(messages, self.session.chat_id)
+
+        # Phase 3：记录本轮真实工具调用，供 HonestyGuard 发送前校验
+        for m in messages:
+            if isinstance(m, ToolMessage):
+                record_tool_call(self.session, m.name, result=str(m.content or ""))
 
         if _called_silence_tool(messages):
             logger.debug(f"[{self.session.chat_id}] agent 选择沉默")
