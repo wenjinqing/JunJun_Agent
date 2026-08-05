@@ -57,6 +57,13 @@ async def _run() -> int:
     except Exception as e:
         logger.warning(f"任务结局持久化挂接失败（忽略）: {e}")
 
+    # 复杂任务（TaskKernel）计划落盘 + 中断标记（重启不续跑，照实登记结局）
+    try:
+        from junjun_agent.task_kernel import enable_persistence as tk_persistence
+        tk_persistence(ROOT / "data" / "task_kernel")
+    except Exception as e:
+        logger.warning(f"任务内核持久化挂接失败（忽略）: {e}")
+
     # 数据库建表 + 写队列
     try:
         from junjun_core.database import init_database, db_writer

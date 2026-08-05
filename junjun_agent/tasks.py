@@ -117,6 +117,7 @@ def _restore_from_records(mgr: "TaskManager", records: list) -> None:
 _KIND_CN = {
     "ai_draw": "画图", "tts": "语音", "bilibili": "B站视频",
     "douyin": "抖音视频", "video_watch": "看视频",
+    "task_kernel": "复杂任务",
 }
 
 

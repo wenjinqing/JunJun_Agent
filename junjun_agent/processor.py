@@ -290,37 +290,55 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     if expression_block:
         memory_block = f"{memory_block}\n{expression_block}" if memory_block else expression_block
 
+    # ---- 路由层：复杂任务 -> 任务通道（TaskKernel），其余走对话通道 ----
+    # 0-token 严格规则，宁漏勿错；[task_kernel] enable 关闭时 try_submit 直接
+    # 返回 None，等于回到现状（灰度开关）。
+    text: Optional[str] = None
+    from junjun_agent.router import route_to_task
+    if route_to_task(meta.text, chat_id=session.chat_id):
+        try:
+            from junjun_agent.task_kernel import kernel
+            text = await kernel.try_submit(
+                meta.text, chat_id=session.chat_id,
+                user_id=meta.user_id or "", callbacks=callbacks)
+        except Exception as e:
+            logger.warning(f"[{session.chat_id}] 任务内核接单异常，回退对话通道: {e}")
+            text = None
+        if text:
+            logger.info(f"[{session.chat_id}] 路由->任务通道，已接单 [trace={trace_id}]")
+
     # ---- L3 主 Agent（Langfuse span：漏斗决策在后台可见）----
-    from junjun_core.observability import lf
-    logger.info(f"[{session.chat_id}] 进入 L3 决策 [trace={trace_id}]")
-    # system prompt 快照写 span metadata——Langfuse UI 渲染 bug 时 WebUI 日志页可直接查
-    from junjun_agent.persona import build_system_prompt
-    _prompt_snapshot = build_system_prompt(
-        is_group=session.is_group, latest_text=meta.text,
-        mood_block=mood_block, memory_block=memory_block, relation_block=relation_block,
-    )
-    with lf.start_span(
-        name=f"agent.{session.chat_id}",
-        input={"latest_text": meta.text, "context_preview": session.memory.render(limit=5, for_security=True)[:500]},
-        metadata={
-            "trace_id": trace_id, "addressed": addressed, "at_bot": meta.at_bot,
-            "system_prompt": _prompt_snapshot[:2000],
-        },
-    ) as _span:
-        text = await session.agent.process(
-            # 群聊 30 条上下文（提高长度）+ 标记最后一条 + 发言者画像注入
-            # for_security=True：保留（管理员）标记供安全验证锚点
-            session.memory.render(limit=30, mark_latest=True, for_security=True),
-            callbacks=callbacks, latest_text=meta.text,
-            addressed=True,  # 只有 @/直呼才走到这里
-            memory_block=memory_block, relation_block=relation_block,
-            mood_block=mood_block, trace_id=trace_id,
-            system_prompt=_prompt_snapshot,  # 复用快照那份，不再构建第二次
+    if text is None:
+        from junjun_core.observability import lf
+        logger.info(f"[{session.chat_id}] 进入 L3 决策 [trace={trace_id}]")
+        # system prompt 快照写 span metadata——Langfuse UI 渲染 bug 时 WebUI 日志页可直接查
+        from junjun_agent.persona import build_system_prompt
+        _prompt_snapshot = build_system_prompt(
+            is_group=session.is_group, latest_text=meta.text,
+            mood_block=mood_block, memory_block=memory_block, relation_block=relation_block,
         )
-        # span output：回复内容或沉默标记，后台直接可见
-        _span.update(output={"reply": text[:500] if text else None, "silenced": text is None})
-        if not text:
-            logger.info(f"[{session.chat_id}] L3 沉默 [trace={trace_id}]")
+        with lf.start_span(
+            name=f"agent.{session.chat_id}",
+            input={"latest_text": meta.text, "context_preview": session.memory.render(limit=5, for_security=True)[:500]},
+            metadata={
+                "trace_id": trace_id, "addressed": addressed, "at_bot": meta.at_bot,
+                "system_prompt": _prompt_snapshot[:2000],
+            },
+        ) as _span:
+            text = await session.agent.process(
+                # 群聊 30 条上下文（提高长度）+ 标记最后一条 + 发言者画像注入
+                # for_security=True：保留（管理员）标记供安全验证锚点
+                session.memory.render(limit=30, mark_latest=True, for_security=True),
+                callbacks=callbacks, latest_text=meta.text,
+                addressed=True,  # 只有 @/直呼才走到这里
+                memory_block=memory_block, relation_block=relation_block,
+                mood_block=mood_block, trace_id=trace_id,
+                system_prompt=_prompt_snapshot,  # 复用快照那份，不再构建第二次
+            )
+            # span output：回复内容或沉默标记，后台直接可见
+            _span.update(output={"reply": text[:500] if text else None, "silenced": text is None})
+            if not text:
+                logger.info(f"[{session.chat_id}] L3 沉默 [trace={trace_id}]")
 
     # 情绪重评（跟随 L3，冷却内跳过；不阻塞发送——先发再评）
     if not text:
