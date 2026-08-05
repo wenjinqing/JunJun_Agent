@@ -20,6 +20,8 @@ dependencies = [
     "langgraph>=1.0.0",
     "langfuse>=3.0.0",
     "openai>=1.0.0",
+    "json5>=0.9.0",
+    "curl-cffi>=0.6.0",
     # workspace 成员（应用本体）：root 依赖它们，uv sync 才会安装完整闭包
     "junjun-core",
     "junjun-adapter-napcat",
