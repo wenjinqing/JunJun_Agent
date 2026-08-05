@@ -27,11 +27,12 @@ class TestStartStagger:
         monkeypatch.setattr(asyncio, "create_task", _fake_create_task)
         before = time.time()
         s.start()
+        now = time.time()
         tasks = [s._tasks[f"t{i}"] for i in range(5)]
         # 第 1 个立即到期，后续按 20s 错开 -> 此刻不到期
-        assert tasks[0].due(before)
+        assert tasks[0].due(now)
         for t in tasks[1:]:
-            assert not t.due(before)
+            assert not t.due(now)
         # 错峰上限：不超过 interval 的一半
         for t in tasks:
             assert (t._last_run - (before - t.interval)) <= t.interval * 0.5 + 1
