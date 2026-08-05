@@ -228,8 +228,8 @@ data/
 config/bot_config.toml
 config/bot_config.toml.bak_*
 
-# pixiv_novel 插件真实配置（含 QQ 白名单，不入库）
-junjun_skills/plugins/pixiv_novel/config.toml
+# pixiv 插件真实配置（含 QQ 白名单、PIXIV_COOKIE，不入库）
+# 注意：pixiv_novel 已并入 pixiv 插件，不再独立存在
 junjun_skills/plugins/pixiv/config.toml
 
 # NapCat 看门狗（含本机路径/QQ号，本地专用）
