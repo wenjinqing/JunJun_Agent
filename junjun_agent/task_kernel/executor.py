@@ -130,6 +130,34 @@ class TaskKernel:
     # ---------- 执行循环 ----------
 
     async def _run(self, plan: TaskPlan) -> None:
+        """Langfuse 根 span：plan 为 trace，步骤为 span，终态指标进 metadata（方案 §六）。
+
+        lf 未启用时是 NoopSpan，零成本——测试与 tracing 降级环境行为不变。
+        """
+        from junjun_core.observability import lf
+        with lf.start_span(
+            name=f"task_kernel.{plan.chat_id}",
+            input={"goal": plan.goal,
+                   "steps": [{"id": s.id, "action": s.action, "desc": s.desc}
+                             for s in plan.steps]},
+            metadata={"plan_id": plan.plan_id, "steps_total": len(plan.steps)},
+        ) as _kspan:
+            try:
+                await self._run_inner(plan)
+            finally:
+                try:
+                    _kspan.update(metadata={
+                        "state": plan.state, "note": plan.note,
+                        "replans": plan.replans,
+                        "steps_done": sum(1 for s in plan.steps if s.status == "done"),
+                        "steps_failed": sum(1 for s in plan.steps if s.status == "failed"),
+                        "verify_failures": getattr(plan, "_verify_failures", 0),
+                        "duration_s": round(time.time() - plan.created_ts, 1),
+                    })
+                except Exception:
+                    pass
+
+    async def _run_inner(self, plan: TaskPlan) -> None:
         from junjun_agent.task_kernel.planner import revise_remaining
         max_replans = int(_cfg().get("max_replans", 1))
         try:
@@ -151,6 +179,9 @@ class TaskKernel:
                                      return_exceptions=True)
                 _persist(plan)
                 failed = [s for s in plan.steps if s.status == "failed"]
+                # 验证失败计数（指标进根 span）：区别于工具/网络类失败
+                plan._verify_failures = getattr(plan, "_verify_failures", 0) + sum(
+                    1 for s in failed if s.error.startswith(("验证未通过", "验收不通过")))
                 for s in failed:
                     if plan.attempts.get(s.id, 0) < 2:
                         logger.info(f"步骤 {s.id} 失败（{s.error[:60]}），重试一次")
@@ -190,26 +221,37 @@ class TaskKernel:
     # ---------- 单步执行 ----------
 
     async def _run_step(self, plan: TaskPlan, step: Step) -> None:
+        from junjun_core.observability import lf
         step.status = "running"
         plan.attempts[step.id] = plan.attempts.get(step.id, 0) + 1
-        try:
-            if step.action == SYNTH_ACTION:
-                result = await self._synthesize(plan, step)
+        with lf.start_span(
+            name=f"task_kernel_step.{step.action}",
+            input={"desc": step.desc, "args_hint": step.args_hint},
+            metadata={"plan_id": plan.plan_id, "step_id": step.id,
+                      "verify": step.verify, "attempt": plan.attempts[step.id]},
+        ) as _sspan:
+            try:
+                if step.action == SYNTH_ACTION:
+                    result = await self._synthesize(plan, step)
+                else:
+                    result = await self._call_tool(plan, step)
+                ok = await self._verify(plan, step, result)
+            except Exception as e:
+                result, ok = "", False
+                step.error = f"{type(e).__name__}: {e}"
+            if ok:
+                step.status = "done"
+                step.result = result[:500]
+                logger.info(f"步骤 {step.id} 完成: {step.desc[:40]}")
             else:
-                result = await self._call_tool(plan, step)
-            ok = await self._verify(plan, step, result)
-        except Exception as e:
-            result, ok = "", False
-            step.error = f"{type(e).__name__}: {e}"
-        if ok:
-            step.status = "done"
-            step.result = result[:500]
-            logger.info(f"步骤 {step.id} 完成: {step.desc[:40]}")
-        else:
-            step.status = "failed"
-            if not step.error:
-                step.error = "验证未通过" if result else "工具无产出"
-            logger.info(f"步骤 {step.id} 失败: {step.error[:80]}")
+                step.status = "failed"
+                if not step.error:
+                    step.error = "验证未通过" if result else "工具无产出"
+                logger.info(f"步骤 {step.id} 失败: {step.error[:80]}")
+            try:
+                _sspan.update(metadata={"status": step.status, "error": step.error[:200]})
+            except Exception:
+                pass
 
     async def _call_tool(self, plan: TaskPlan, step: Step) -> str:
         """按名找注册表工具直接调（继承注册处的超时/熔断/错误分类包装）。"""

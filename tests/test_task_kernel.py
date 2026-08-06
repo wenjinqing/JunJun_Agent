@@ -4,6 +4,7 @@
 """
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -202,6 +203,87 @@ class TestRunLoop:
         await executor.kernel._run(plan)
         # 验收两次都不过 -> 重试后 replan（planner 真调会失败返回 None）-> failed
         assert plan.state == "failed"
+
+
+# ---------- Langfuse 指标（方案 §六：plan 为 trace，步骤为 span） ----------
+
+class _RecSpan:
+    """记录型假 span（lf 未启用时生产用 NoopSpan，这里验证指标字段本身）。"""
+
+    def __init__(self, sink, **kw):
+        self.kw = kw
+        self.updates = []
+        self._sink = sink
+
+    def __enter__(self):
+        self._sink.append(self)
+        return self
+
+    def __exit__(self, *e):
+        return False
+
+    def update(self, **kw):
+        self.updates.append(kw)
+
+
+def _fake_lf(monkeypatch):
+    spans = []
+    import junjun_core.observability as obs
+    monkeypatch.setattr(obs, "lf", SimpleNamespace(
+        start_span=lambda **kw: _RecSpan(spans, **kw), enabled=True))
+    return spans
+
+
+class TestTracing:
+    @pytest.mark.asyncio
+    async def test_root_and_step_spans_recorded(self, harness, monkeypatch):
+        spans = _fake_lf(monkeypatch)
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "搜索结果")])
+        plan = TaskPlan(goal="调研并汇总", chat_id="qq:t1:group", steps=[
+            Step(id="s1", action="web_search", desc="搜资料"),
+            Step(id="s2", action=SYNTH_ACTION, desc="汇总", depends_on=["s1"]),
+        ])
+        plan.deadline_ts = 9e18
+        await executor.kernel._run(plan)
+        root = next(s for s in spans if s.kw["name"].startswith("task_kernel."))
+        steps = [s for s in spans if s.kw["name"].startswith("task_kernel_step.")]
+        assert root.kw["metadata"]["steps_total"] == 2
+        assert len(steps) == 2, "每步一个 span"
+        final = root.updates[-1]["metadata"]
+        assert final["state"] == "done" and final["steps_done"] == 2
+        assert final["steps_failed"] == 0 and final["verify_failures"] == 0
+        assert "duration_s" in final
+
+    @pytest.mark.asyncio
+    async def test_verify_failures_counted(self, harness, monkeypatch):
+        spans = _fake_lf(monkeypatch)
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "很水的结果")])
+        import junjun_llm
+        monkeypatch.setattr(junjun_llm, "get_chat_model",
+                            lambda slot="utils": _FakeModel("不行，内容太空"))
+        plan = TaskPlan(goal="g", chat_id="qq:t2:group", steps=[
+            Step(id="s1", action="web_search", desc="深度调研", verify="llm_judge"),
+        ])
+        plan.deadline_ts = 9e18
+        await executor.kernel._run(plan)
+        root = next(s for s in spans if s.kw["name"].startswith("task_kernel."))
+        final = root.updates[-1]["metadata"]
+        assert final["state"] == "failed"
+        assert final["verify_failures"] == 2, "首次 + 重试各验收失败一次"
+
+    @pytest.mark.asyncio
+    async def test_noop_when_lf_disabled(self, harness, monkeypatch):
+        """lf 空操作（NoopSpan）时执行循环行为完全不变——tracing 不能影响主流程。"""
+        import junjun_core.observability as obs
+        from junjun_core.observability.langfuse_client import _NoopSpan
+        monkeypatch.setattr(obs, "lf", SimpleNamespace(
+            start_span=lambda **kw: _NoopSpan(), enabled=False))
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "结果")])
+        plan = TaskPlan(goal="g", chat_id="qq:t3:group",
+                        steps=[Step(id="s1", action="web_search", desc="搜")])
+        plan.deadline_ts = 9e18
+        await executor.kernel._run(plan)
+        assert plan.state == "done"
 
 
 # ---------- 接单入口 ----------
