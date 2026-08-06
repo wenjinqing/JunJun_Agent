@@ -295,10 +295,14 @@ class TestUserSideControl:
         out = await lively_cmd(ctx)
         assert "主动" in out and itm.chat_muted("qq:1:group") is False
 
-    def test_proactive_respects_mute(self, env):
+    def test_proactive_respects_mute(self, env, monkeypatch):
         """旧主动搭话系统也吃同一个静音（「别烦我」语义覆盖所有主动消息）。"""
+        from junjun_agent.loop import proactive as p
         from junjun_agent.loop.proactive import proactive_manager
         from types import SimpleNamespace
+        # 钉住时钟：测试断言与运行时刻无关（默认 silent_hours 23:00-09:00 会
+        # 让 08:xx 跑的全量回归误挂——2026-08-06 08:20 实踩）
+        monkeypatch.setattr(p, "_in_silent_hours", lambda now=None: False)
         cfg_mod.global_config.raw["proactive_chat"] = {
             "enable": True, "enable_in_private": True, "min_idle_minutes": 0}
         session = SimpleNamespace(chat_id="qq:1:private", is_group=False,
