@@ -13,6 +13,8 @@ npx 冷启动数秒且计入 30s 工具超时，慢且超时常发）：
 
 import asyncio
 import logging
+import os
+import shutil
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -69,7 +71,6 @@ def load_server_configs() -> Dict[str, dict]:
     """
     if not MCP_CONFIG.exists():
         return {}
-    import os
     with open(MCP_CONFIG, "r", encoding="utf-8") as f:
         data = tomlkit.parse(f.read()).unwrap()
 
@@ -85,12 +86,34 @@ def load_server_configs() -> Dict[str, dict]:
         raw_env = dict(cfg.get("env", {}))
         servers[name] = {
             "transport": "stdio",
-            "command": str(cfg["command"]).replace("${REPO_ROOT}", str(PROJECT_ROOT)),
+            "command": _resolve_command(
+                str(cfg["command"]).replace("${REPO_ROOT}", str(PROJECT_ROOT))),
             "args": [str(a).replace("${REPO_ROOT}", str(PROJECT_ROOT)) for a in cfg.get("args", [])],
             "cwd": str(cfg.get("cwd", "")).replace("${REPO_ROOT}", str(PROJECT_ROOT)) or None,
             "env": {k: _sub(str(v)) for k, v in raw_env.items()} or None,
         }
     return servers
+
+
+# 裸命令在 PATH 找不到时的常见安装位置兜底。
+# 2026-08-06 实锤：PyCharm 运行环境 PATH 缺 ~/.local/bin，4 个 uvx 系 server
+# 全部 FileNotFoundError 降级——bot 由谁拉起（IDE/终端/看门狗）不该影响 MCP 可用性。
+_COMMAND_FALLBACKS = {
+    "uvx": Path.home() / ".local" / "bin" / ("uvx.exe" if os.name == "nt" else "uvx"),
+}
+
+
+def _resolve_command(command: str) -> str:
+    """裸命令名（无路径分隔符）PATH 找不到时探兜底位置；已是路径或 PATH 可解析则原样返回。"""
+    if os.sep in command or (os.altsep and os.altsep in command):
+        return command
+    if shutil.which(command) is not None:
+        return command
+    fallback = _COMMAND_FALLBACKS.get(command)
+    if fallback is not None and fallback.exists():
+        logger.info(f"PATH 未找到 {command}，回退到 {fallback}")
+        return str(fallback)
+    return command
 
 
 class MCPManager:
