@@ -301,14 +301,25 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     text: Optional[str] = None
     from junjun_agent.router import route_to_task
     if route_to_task(meta.text, chat_id=session.chat_id):
-        try:
-            from junjun_agent.task_kernel import kernel
-            text = await kernel.try_submit(
-                meta.text, chat_id=session.chat_id,
-                user_id=meta.user_id or "", callbacks=callbacks)
-        except Exception as e:
-            logger.warning(f"[{session.chat_id}] 任务内核接单异常，回退对话通道: {e}")
-            text = None
+        # 路由命中留 Langfuse span：accepted=false 的样本是阶段 4 误路由/规划失败抽检素材
+        from junjun_core.observability import lf
+        with lf.start_span(
+            name=f"router.{session.chat_id}",
+            input={"latest_text": meta.text},
+            metadata={"trace_id": trace_id, "route": "task"},
+        ) as _rspan:
+            try:
+                from junjun_agent.task_kernel import kernel
+                text = await kernel.try_submit(
+                    meta.text, chat_id=session.chat_id,
+                    user_id=meta.user_id or "", callbacks=callbacks)
+            except Exception as e:
+                logger.warning(f"[{session.chat_id}] 任务内核接单异常，回退对话通道: {e}")
+                text = None
+            try:
+                _rspan.update(metadata={"accepted": bool(text)})
+            except Exception:
+                pass
         if text:
             logger.info(f"[{session.chat_id}] 路由->任务通道，已接单 [trace={trace_id}]")
 
