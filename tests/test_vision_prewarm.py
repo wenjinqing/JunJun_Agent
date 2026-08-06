@@ -16,6 +16,21 @@ def _clean():
     vision._PENDING.clear()
 
 
+@pytest.fixture(autouse=True)
+def _memory_db(monkeypatch):
+    """识图成功会 Images.create 落库——绝不许写生产库（2026-08-06 第三次
+    污染事故实锤：本文件每次跑全量都往 data/junjun.db 写「一只猫」）。"""
+    import junjun_core.database.models as m
+    from peewee import SqliteDatabase
+    test_db = SqliteDatabase(":memory:")
+    with test_db.bind_ctx(m.ALL_TABLES):
+        test_db.create_tables(m.ALL_TABLES)
+        monkeypatch.setattr(m, "db", test_db)
+        import junjun_core.database as pkg
+        monkeypatch.setattr(pkg, "db", test_db)
+        yield test_db
+
+
 def _fake_model(track: dict, desc: str = "一只猫"):
     class _M:
         async def ainvoke(self, msgs):

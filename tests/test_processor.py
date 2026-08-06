@@ -43,6 +43,22 @@ def fake_gateway(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _memory_db(monkeypatch):
+    """消息管线会落库（_store_inbound/_store_outbound/intimacy）——绝不许写
+    生产库（2026-08-06 第三次污染事故实锤：本文件与 test_queue_predecision
+    把「第一条。第二条。」「私聊回复」等百余行写进了 data/junjun.db）。"""
+    import junjun_core.database.models as m
+    from peewee import SqliteDatabase
+    test_db = SqliteDatabase(":memory:")
+    with test_db.bind_ctx(m.ALL_TABLES):
+        test_db.create_tables(m.ALL_TABLES)
+        monkeypatch.setattr(m, "db", test_db)
+        import junjun_core.database as pkg
+        monkeypatch.setattr(pkg, "db", test_db)
+        yield test_db
+
+
+@pytest.fixture(autouse=True)
 def _no_langfuse(monkeypatch):
     import junjun_llm.tracing as tr
     monkeypatch.setattr(tr, "get_callbacks", lambda: [])

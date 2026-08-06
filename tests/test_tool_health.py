@@ -12,6 +12,10 @@ import junjun_skills.health as health
 @pytest.fixture(autouse=True)
 def clean_state(tmp_path, monkeypatch):
     monkeypatch.setattr(health, "_STATE_PATH", tmp_path / "tool_health.json")
+    # registry 错误包装还会写 patches 失败日志——一并隔离
+    # （2026-08-06 实锤：exploding_tool/flaky_tool 污染了生产 data/tool_failures.jsonl）
+    from junjun_skills import patches
+    monkeypatch.setattr(patches, "_LOG_PATH", tmp_path / "tool_failures.jsonl")
     health._reset_for_test()
     yield
     health._reset_for_test()
