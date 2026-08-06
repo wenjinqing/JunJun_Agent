@@ -72,9 +72,30 @@ def _vlm_sem() -> asyncio.Semaphore:
     return _VLM_SEM
 
 
+def _downscale(data: bytes, max_side: int = 1024) -> bytes:
+    """VLM 前压缩：QQ 原图常 2-4K 分辨率，base64 后数 MB，32B VLM 30s 超时
+    三连（2026-08-06 生产实锤）。缩到长边 1024 + JPEG q80 后通常 <200KB，
+    识图从超时边缘降到秒级。失败原样返回（宁可慢，不可丢图）。"""
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(data))
+        if max(img.size) <= max_side and len(data) < 400_000:
+            return data
+        img = img.convert("RGB")
+        img.thumbnail((max_side, max_side))
+        buf = _io.BytesIO()
+        img.save(buf, "JPEG", quality=80)
+        return buf.getvalue()
+    except Exception:
+        return data
+
+
 async def _describe(data: bytes, *, model, prompt: str = _DESCRIBE_PROMPT) -> Optional[str]:
     from langchain_core.messages import HumanMessage
     from junjun_core.retry import retry_async
+    data = _downscale(data)
+    mime = "image/jpeg" if data[:2] == b"\xff\xd8" else "image/png"
     b64 = base64.b64encode(data).decode()
 
     async def _call():
@@ -82,7 +103,7 @@ async def _describe(data: bytes, *, model, prompt: str = _DESCRIBE_PROMPT) -> Op
             return await asyncio.wait_for(
                 model.ainvoke([HumanMessage(content=[
                     {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                 ])]),
                 timeout=_DESCRIBE_TIMEOUT,
             )
@@ -92,7 +113,8 @@ async def _describe(data: bytes, *, model, prompt: str = _DESCRIBE_PROMPT) -> Op
         resp = await retry_async(_call, attempts=3, base_delay=1.0, label="vlm.describe")
         return str(resp.content).strip() or None
     except Exception as e:
-        logger.warning(f"VLM 识图重试 3 次均失败（降级占位）: {e}")
+        # TimeoutError 的 str() 是空串——必须带 type 否则日志只剩冒号（2026-08-06 实锤）
+        logger.warning(f"VLM 识图重试 3 次均失败（降级占位）: {type(e).__name__}: {e}")
         return None
 
 

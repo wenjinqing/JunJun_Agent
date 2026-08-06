@@ -107,6 +107,13 @@ _ECHO_NUDGE = (
     "注意：你上一轮的回复还没有发送出去，对方目前什么都没看到。"
 )
 
+# 必回场景模型空输出（疑似合规自我审查）时的补救追问
+_EMPTY_NUDGE = (
+    "（系统提示）你刚才什么都没说（空回复），对方还在等你。"
+    "请直接正面回应对方的消息；如果内容让你不方便展开，"
+    "用你平时的口气简单回应或坦然说不方便，但不能一个字都不说。"
+)
+
 
 def _plain_reply_text(msg) -> str:
     """轻量提取 AIMessage 文本（echo 补救轮用）：拼接分块 + 砍 think 链。"""
@@ -164,6 +171,23 @@ def _record_usage(messages: list, chat_id: str, request_type: str = "agent") -> 
                 )
     except Exception as e:
         logger.debug(f"token 用量记录失败（忽略）: {e}")
+
+
+def _compact_budget_metrics(metrics: dict) -> str:
+    """预算指标压成一行（≤200 字符）。
+
+    langfuse v4 把 langchain config metadata 的非 langfuse_ 键按 propagated
+    attribute 处理，>200 字符直接丢弃还刷警告（2026-08-06 生产实锤：
+    context_budget/system_prompt 每轮决策被 drop 两条）。完整 block 明细
+    进不了 propagated attribute，compact 摘要保核心指标（§六 prompt 体积观测）。
+    """
+    if not metrics:
+        return ""
+    sizes = ",".join(f"{k}:{v}" for k, v in (metrics.get("block_sizes") or {}).items())
+    s = (f"kept={metrics.get('kept_total_tokens')}/{metrics.get('max_total_tokens')}"
+         f" evict={metrics.get('evicted_total_tokens')}"
+         f"[{','.join(metrics.get('evicted_names') or [])}] sizes={sizes}")
+    return s[:200]
 
 
 def _apply_context_budget(
@@ -433,8 +457,10 @@ class JunJunAgent:
                         # Langfuse v3 CallbackHandler 识别的元数据：trace 按会话归组
                         "langfuse_session_id": self.session.chat_id,
                         "langfuse_tags": ["junjun", "agent"],
-                        "context_budget": budget_metrics,
-                        "system_prompt": final_system[:2000],
+                        # propagated attribute 限 200 字符：预算只留紧凑摘要；
+                        # system_prompt 不在这里放（会被丢），完整 prompt 由
+                        # callback 的 generation 级 input 自然留存
+                        "context_budget": _compact_budget_metrics(budget_metrics),
                     },
                 },
             )
@@ -622,4 +648,33 @@ class JunJunAgent:
                     logger.warning(f"复读补救轮异常（按原稿处理）: {type(e).__name__}: {e}")
                     if not addressed:
                         return None
+
+        # 必回场景空输出兜底（2026-08-06 生产实锤：@必回消息模型返回空 content——
+        # 疑似合规自我审查——全程无日志只剩一条「L3 沉默」，用户被晾。
+        # 与 GraphRecursionError 同原则：装死是最差的回复，先追问再诚实兜底）
+        if not text and addressed:
+            logger.warning(f"[{self.session.chat_id}] 必回场景模型空输出，追问一次 "
+                           f"[trace={trace_id}]")
+            try:
+                retry = await agent.ainvoke(
+                    {"messages": messages + [HumanMessage(content=_EMPTY_NUDGE)]},
+                    config={
+                        "callbacks": callbacks or [],
+                        "recursion_limit": 2 * eff_iter + 1,
+                        "metadata": {
+                            "chat_id": self.session.chat_id,
+                            "trace_id": trace_id,
+                            "langfuse_session_id": self.session.chat_id,
+                            "langfuse_tags": ["junjun", "agent", "empty-retry"],
+                        },
+                    },
+                )
+                rmsgs = retry.get("messages", messages)
+                _record_usage(rmsgs, self.session.chat_id)
+                if not _called_silence_tool(rmsgs):
+                    text = (_plain_reply_text(rmsgs[-1] if rmsgs else None) or "").strip()
+            except Exception as e:
+                logger.warning(f"空输出补救轮异常: {type(e).__name__}: {e}")
+            if not text:
+                return "……抱歉，刚才那句我死活没组织出来。换个说法再问我一次？"
         return text or None
