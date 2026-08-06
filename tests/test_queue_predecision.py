@@ -10,6 +10,21 @@ import pytest
 from junjun_agent.funnel.session_queue import SessionQueue
 
 
+@pytest.fixture(autouse=True)
+def _memory_db(monkeypatch):
+    """junjun_processor 会落库（_store_inbound）——绝不许写生产库
+    （2026-08-06 第三次污染事故实锤：「画好了画好了~」写进了 data/junjun.db）。"""
+    import junjun_core.database.models as m
+    from peewee import SqliteDatabase
+    test_db = SqliteDatabase(":memory:")
+    with test_db.bind_ctx(m.ALL_TABLES):
+        test_db.create_tables(m.ALL_TABLES)
+        monkeypatch.setattr(m, "db", test_db)
+        import junjun_core.database as pkg
+        monkeypatch.setattr(pkg, "db", test_db)
+        yield test_db
+
+
 class TestDrainPreHandler:
     @pytest.mark.asyncio
     async def test_merged_messages_run_pre_handler(self):

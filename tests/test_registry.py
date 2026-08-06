@@ -6,6 +6,16 @@ from langchain_core.tools import tool
 from junjun_skills import registry
 
 
+@pytest.fixture(autouse=True)
+def _isolate_failure_state(tmp_path, monkeypatch):
+    """错误包装层会写 data/tool_health.json + data/tool_failures.jsonl——
+    绝不许写生产数据（2026-08-06 实锤：flaky_async/noisy 等测试工具
+    污染了两个生产文件，bot 启动会读到不存在的工具降级状态）。"""
+    from junjun_skills import health, patches
+    monkeypatch.setattr(health, "_STATE_PATH", tmp_path / "tool_health.json")
+    monkeypatch.setattr(patches, "_LOG_PATH", tmp_path / "tool_failures.jsonl")
+
+
 @tool
 def dummy_skill(x: str) -> str:
     """测试用工具。
