@@ -14,6 +14,9 @@
 - 网络故障/超时 -> 保持原状态（宁可用错，不可错杀）
 - 每 check_hours 懒复查一次（用到池时才触发，不占调度器）；
   复查覆盖文件里全部 key——手动 top up 的 key 下一轮自动复活
+- generation 代数：健康集合每次变化 +1。models.get_chat_model 发现代数变了
+  会重建 fallback 链剔除死腿（2026-08-06 实锤：巡检标死了但链是启动时
+  一次性展开的，死 key 永远留在链上每次调用白撞 3 次重试）
 """
 
 import asyncio
@@ -54,6 +57,7 @@ class SFKeyPool:
         self._checked_at: float = 0.0       # 上次余额巡检时间（0=从未）
         self._rr = 0                        # 轮转游标
         self._refreshing = False
+        self.generation = 0                 # 健康集合变化代数（models 链缓存失效信号）
 
     # ---------------------------------------------------------------- key 文件
 
@@ -63,6 +67,7 @@ class SFKeyPool:
         except OSError:
             if self._keys:
                 logger.warning(f"号池文件消失: {self._path}，按空池处理")
+                self.generation += 1
             self._keys, self._mtime = [], 0.0
             return
         if mtime == self._mtime:
@@ -72,6 +77,8 @@ class SFKeyPool:
             line = line.strip()
             if line and not line.startswith("#"):
                 keys.append(line)
+        if keys != self._keys:
+            self.generation += 1
         self._keys = keys
         self._dead = {k: v for k, v in self._dead.items() if k in keys}  # 文件删掉的同步清
         self._mtime = mtime
@@ -89,6 +96,16 @@ class SFKeyPool:
         rot = self._rr % len(alive)
         self._rr += 1
         return alive[rot:] + alive[:rot]
+
+    def tick(self) -> None:
+        """轻量心跳：热加载 + 到点触发懒巡检（不消耗轮转游标）。
+
+        models.get_chat_model 每次调用打一下——日常 LLM 调用即巡检心跳，
+        不再依赖 ASR/看视频等偶尔的路径顺带触发（2026-08-06：主链全程
+        不碰 healthy_keys，巡检标死永远不生效）。
+        """
+        self._reload_if_changed()
+        self._maybe_refresh()
 
     def status(self) -> dict:
         """WebUI/排查用：总数/健康/丢弃明细。"""
@@ -137,6 +154,8 @@ class SFKeyPool:
                     dead[key] = self._dead[key]
             revived = [k[:8] for k in self._dead if k not in dead]
             dropped = [k[:8] for k in dead if k not in self._dead]
+            if set(dead) != set(self._dead):
+                self.generation += 1      # 健康集合变了：通知 models 重建链
             self._dead = dead
             self._checked_at = time.time()
             if dropped:
