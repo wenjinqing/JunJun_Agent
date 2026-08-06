@@ -43,6 +43,42 @@ class TestMCPConfig:
         monkeypatch.setattr(c, "MCP_CONFIG", tmp_path / "nope.toml")
         assert c.load_server_configs() == {}
 
+    def test_resolve_command_keeps_path_and_resolvable(self, monkeypatch):
+        """已是路径或 PATH 可解析的命令原样返回（现状行为不变）。"""
+        import junjun_mcp_client.client as c
+        monkeypatch.setattr(c.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+        assert c._resolve_command("uvx") == "uvx"
+        assert c._resolve_command("C:/tools/uvx.exe") == "C:/tools/uvx.exe"
+
+    def test_resolve_command_uvx_fallback(self, tmp_path, monkeypatch):
+        """PATH 找不到 uvx 时回退到 ~/.local/bin/uvx（2026-08-06 PyCharm 环境实锤）。"""
+        import junjun_mcp_client.client as c
+        fake = tmp_path / "uvx.exe"
+        fake.write_text("", encoding="utf-8")
+        monkeypatch.setattr(c.shutil, "which", lambda cmd: None)
+        monkeypatch.setitem(c._COMMAND_FALLBACKS, "uvx", fake)
+        assert c._resolve_command("uvx") == str(fake)
+
+    def test_resolve_command_no_fallback_keeps_bare(self, tmp_path, monkeypatch):
+        """PATH 与兜底位置都没有：保持裸命令（交给 spawn 报错，日志可见）。"""
+        import junjun_mcp_client.client as c
+        monkeypatch.setattr(c.shutil, "which", lambda cmd: None)
+        monkeypatch.setitem(c._COMMAND_FALLBACKS, "uvx", tmp_path / "nope.exe")
+        assert c._resolve_command("uvx") == "uvx"
+
+    def test_load_config_resolves_uvx(self, tmp_path, monkeypatch):
+        """端到端：toml 里 command = "uvx" 且 PATH 缺失时，加载结果指向兜底路径。"""
+        import junjun_mcp_client.client as c
+        fake = tmp_path / "uvx.exe"
+        fake.write_text("", encoding="utf-8")
+        cfg = tmp_path / "mcp_servers.toml"
+        cfg.write_text('[servers.d]\nenable = true\ncommand = "uvx"\nargs = ["x"]\n',
+                       encoding="utf-8")
+        monkeypatch.setattr(c, "MCP_CONFIG", cfg)
+        monkeypatch.setattr(c.shutil, "which", lambda cmd: None)
+        monkeypatch.setitem(c._COMMAND_FALLBACKS, "uvx", fake)
+        assert c.load_server_configs()["d"]["command"] == str(fake)
+
 
 class TestPluginLoader:
     def test_load_valid_plugin(self, tmp_path, monkeypatch):
