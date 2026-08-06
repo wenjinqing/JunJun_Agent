@@ -7,7 +7,8 @@ import pytest
 from peewee import SqliteDatabase
 
 from junjun_express.mood import MoodManager, _REGRESS_AFTER
-from junjun_skills.builtin.reminder_skills import parse_remind_time
+from junjun_skills.builtin.reminder_skills import (
+    parse_remind_time, parse_repeat_type, parse_weekly_time)
 
 
 @pytest.fixture(autouse=True)
@@ -144,6 +145,57 @@ class TestParseRemindTime:
         assert parse_remind_time("25点", now=self.NOW) is None
 
 
+class TestParseRepeatType:
+    """周期表达识别（2026-08-06：eval 抓出「每天推送」能力缺口后补齐）。"""
+
+    def test_daily_meitian(self):
+        assert parse_repeat_type("每天早上8点") == ("daily", "早上8点")
+
+    def test_daily_tiantian(self):
+        assert parse_repeat_type("天天晚上9点提醒我") == ("daily", "晚上9点提醒我")
+
+    def test_tiantian_guard_mingtian(self):
+        """「明天天气」不算周期（router 同款子串坑）。"""
+        assert parse_repeat_type("明天8点")[0] == ""
+        assert parse_repeat_type("今天天气提醒我带伞")[0] == ""
+
+    def test_weekly(self):
+        assert parse_repeat_type("每周五晚上8点") == ("weekly", "周五晚上8点")
+
+    def test_weekly_xingqi(self):
+        assert parse_repeat_type("每星期日中午12点") == ("weekly", "周日中午12点")
+
+    def test_none(self):
+        assert parse_repeat_type("明天8点") == ("", "明天8点")
+
+
+class TestParseWeeklyTime:
+    NOW = datetime(2026, 7, 16, 14, 0)  # 周四
+
+    def test_friday_evening(self):
+        ts = parse_weekly_time("周五晚上8点", now=self.NOW)
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 17, 20, 0)
+
+    def test_same_day_passed_rolls_week(self):
+        ts = parse_weekly_time("周四8点", now=self.NOW)  # 今天周四 8 点已过
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 23, 8, 0)
+
+    def test_same_day_future_stays_today(self):
+        ts = parse_weekly_time("周四16点", now=self.NOW)  # 今天 16 点未过
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 16, 16, 0)
+
+    def test_half_and_noon(self):
+        ts = parse_weekly_time("周日中午12点半", now=self.NOW)
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 19, 12, 30)
+
+    def test_digit_weekday(self):
+        ts = parse_weekly_time("星期5晚上8点", now=self.NOW)
+        assert datetime.fromtimestamp(ts) == datetime(2026, 7, 17, 20, 0)
+
+    def test_gibberish_returns_none(self):
+        assert parse_weekly_time("随便什么时候", now=self.NOW) is None
+
+
 class TestReminderLifecycle:
     def test_create_list_cancel(self):
         from junjun_agent.loop.reminder import create_reminder, list_pending, cancel_reminder
@@ -215,6 +267,31 @@ class TestReminderSkills:
         from junjun_skills.builtin.reminder_skills import set_reminder
         out = set_reminder.invoke({"content": "x", "time_spec": "随便什么时候", "user_id": "111"})
         assert "没听懂" in out
+
+    def test_set_reminder_daily_repeat(self):
+        """周期提醒落库 repeat_type=daily（eval daily-tech-news case 对应能力）。"""
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        from junjun_skills.builtin.reminder_skills import set_reminder
+        from junjun_core.database import ReminderTasks
+        current_chat_id.set("qq:999:group")
+        out = set_reminder.invoke({"content": "推科技新闻", "time_spec": "每天早上8点",
+                                   "user_id": "111"})
+        assert "已设好" in out and "每天" in out
+        row = ReminderTasks.get(ReminderTasks.content == "推科技新闻")
+        assert row.repeat_type == "daily"
+        assert row.remind_time > time.time()
+
+    def test_set_reminder_weekly_repeat(self):
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        from junjun_skills.builtin.reminder_skills import set_reminder
+        from junjun_core.database import ReminderTasks
+        current_chat_id.set("qq:999:group")
+        out = set_reminder.invoke({"content": "交周报", "time_spec": "每周五晚上8点",
+                                   "user_id": "111"})
+        assert "已设好" in out and "每周" in out
+        row = ReminderTasks.get(ReminderTasks.content == "交周报")
+        assert row.repeat_type == "weekly"
+        assert datetime.fromtimestamp(row.remind_time).weekday() == 4  # 周五
 
     def test_manage_mood_skill(self):
         from junjun_skills.builtin.memory_skills import current_chat_id
