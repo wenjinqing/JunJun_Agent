@@ -65,21 +65,78 @@ def parse_remind_time(spec: str, *, now: Optional[datetime] = None) -> Optional[
     return None
 
 
+_WEEKDAY_MAP = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+_WEEKLY_RE = re.compile(r"每(?:周|星期)([一二三四五六日天1-7])")
+_WEEKDAY_RE = re.compile(r"(?:周|星期)([一二三四五六日天1-7])")
+# 「天天」单独处理：「明天天气」子串撞车（router 同款坑）——前面是 明/今/昨 时不算
+_TIANTIAN_EXCLUDE = ("明", "今", "昨")
+
+
+def parse_repeat_type(spec: str) -> tuple:
+    """识别周期表达，返回 (repeat_type, 去掉周期词后的时间描述)。
+
+    「每天早上8点」-> ("daily", "早上8点")；「每周五晚上8点」-> ("weekly", "周五晚上8点")；
+    无周期词 -> ("", 原样)。repeat_type 对应 ReminderTasks.repeat_type（""/daily/weekly）。
+    """
+    for w in ("每天", "每日"):
+        if w in spec:
+            return "daily", spec.replace(w, "", 1).strip()
+    idx = spec.find("天天")
+    if idx != -1 and (idx == 0 or spec[idx - 1] not in _TIANTIAN_EXCLUDE):
+        return "daily", spec.replace("天天", "", 1).strip()
+    m = _WEEKLY_RE.search(spec)
+    if m:
+        rest = (spec[:m.start()] + "周" + m.group(1) + spec[m.end():]).strip()
+        return "weekly", rest
+    return "", spec
+
+
+def parse_weekly_time(spec: str, *, now: Optional[datetime] = None) -> Optional[float]:
+    """「周五晚上8点」-> 下一个该 weekday 的 timestamp（今天已过则顺延一周）。"""
+    now = now or datetime.now()
+    wd = _WEEKDAY_RE.search(spec)
+    hm = _ABS_RE.search(spec)
+    if not wd or not hm:
+        return None
+    ch = wd.group(1)
+    weekday = (int(ch) - 1) % 7 if ch.isdigit() else _WEEKDAY_MAP[ch]
+    hour, minute = int(hm.group(3)), int(hm.group(4) or 0)
+    if hm.group(4) is None and "半" in spec:
+        minute = 30
+    if any(w in spec for w in _PM_WORDS) and hour < 12:
+        hour += 12
+    elif "中午" in spec and hour < 6:
+        hour += 12
+    if hour > 23 or minute > 59:
+        return None
+    days_ahead = (weekday - now.weekday()) % 7
+    target = (now + timedelta(days=days_ahead)).replace(
+        hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=7)
+    return target.timestamp()
+
+
 @tool
 def set_reminder(content: str, time_spec: str, user_id: str) -> str:
-    """设置提醒。用户说"10分钟后提醒我""明天8点叫我"时使用。
+    """设置提醒（单次与周期都支持）。用户说"10分钟后提醒我""明天8点叫我"
+    "每天早上8点给我推新闻""每周五晚上提醒我交周报"时使用。
     Args:
         content: 提醒内容，如"开会"
-        time_spec: 时间描述原文，如"10分钟后""明天8点""7月10日5:30"
+        time_spec: 时间描述原文，如"10分钟后""明天8点""每天早上8点""每周五晚上8点"
         user_id: 要提醒的用户 QQ 号
     """
-    ts = parse_remind_time(time_spec)
+    repeat, spec = parse_repeat_type(time_spec.strip())
+    ts = parse_weekly_time(spec) if repeat == "weekly" else parse_remind_time(spec)
     if ts is None:
-        return f"没听懂时间「{time_spec}」，换个说法？（支持：X分钟后 / 明天8点 / 7月10日5:30）"
+        return (f"没听懂时间「{time_spec}」，换个说法？"
+                f"（支持：X分钟后 / 明天8点 / 每天早上8点 / 每周五晚上8点 / 7月10日5:30）")
     from junjun_agent.loop.reminder import create_reminder
-    task_id = create_reminder(current_chat_id.get(), user_id, content, ts)
+    task_id = create_reminder(current_chat_id.get(), user_id, content, ts,
+                              repeat_type=repeat)
     when = time.strftime("%m月%d日 %H:%M", time.localtime(ts))
-    return f"提醒已设好（{when}，编号 {task_id}）。"
+    freq = {"daily": "，之后每天", "weekly": "，之后每周"}.get(repeat, "")
+    return f"提醒已设好（{when} 起{freq}，编号 {task_id}）。"
 
 
 @tool
