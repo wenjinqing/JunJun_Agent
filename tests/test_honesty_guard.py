@@ -27,7 +27,13 @@ def test_block_draw_claim_without_tool(session):
     ok, text, issues = verify(session, "画好了，等下发给你")
     assert not ok
     assert "ai_draw" in " ".join(issues)
-    assert "系统拦住我了" in text
+    # 修正稿引用模型实际说出口的短语，不是 regex 源码（2026-08-06 实锤：
+    # 用户收到『画[好了|完了|出来]』一脸懵）
+    assert "画好" in text
+    assert "[" not in text and "系统拦住我了" not in text
+    assert "不能骗你" in text
+    # 不许承诺「我重新来」——守卫自己不重试，空头承诺恰是它在防的不诚实
+    assert "我重新来" not in text
 
 
 def test_allow_draw_claim_with_tool(session):
@@ -66,3 +72,83 @@ def test_old_tool_calls_pruned_but_not_current(session):
     record_tool_call(session, "ai_draw", result="new")
     ok, _, _ = verify(session, "画好了")
     assert ok
+
+
+class TestCharClassLandmines:
+    """字符组误写回归（2026-08-06 实锤）：[a|b] 是字符组不是交替，
+    单字命中导致日常表达被当成行为声称误拦。"""
+
+    @pytest.mark.parametrize("innocent", [
+        "跟我说说发生了什么",          # 「说说发」≠ 发说说声称
+        "帮我画出这道数学题的思路",      # 「画出」≠ 画好了
+        "这种事已经发生过了",           # 「已经发」≠ 已经发了
+        "语音发不出去啊怎么办",         # 「语音发」≠ 语音已发
+        "消息发不出去，急",            # 「消息发」≠ 消息已发
+        "你画画了吗",                  # 疑问不是声称
+        "他已经取消了行程",            # 第三方取消 ≠ 我取消订阅
+    ])
+    def test_innocent_phrases_not_intercepted(self, session, innocent):
+        start_decision(session)
+        ok, text, issues = verify(session, innocent)
+        assert ok, f"日常表达被误拦: {innocent} -> {issues}"
+
+    @pytest.mark.parametrize("claim,tool", [
+        ("画好了，等下给你", "ai_draw"),
+        ("在画了在画了", "ai_draw"),       # 进行中声称也要证据
+        ("等下就发给你", "ai_draw"),
+        ("语音发好了", "unified_tts"),
+        ("说说发了，去看", "send_feed"),
+        ("提醒设好了", "set_reminder"),
+        ("订阅好了", "subscribe_updates"),
+    ])
+    def test_real_claims_still_caught(self, session, claim, tool):
+        start_decision(session)
+        ok, _, issues = verify(session, claim)
+        assert not ok, f"真声称漏拦: {claim}"
+        assert tool in " ".join(issues)
+
+
+class _ScriptedGraph:
+    """按脚本逐次返回消息列表的假 agent 图。"""
+
+    def __init__(self, runs):
+        self.runs = list(runs)
+        self.calls = 0
+
+    async def ainvoke(self, params, config=None):
+        run = self.runs[min(self.calls, len(self.runs) - 1)]
+        self.calls += 1
+        return {"messages": run}
+
+
+class TestRetryPathToolLedger:
+    """2026-08-06 生产误拦回归：意图补救轮真调了 ai_draw，台账却只记首轮
+    （空的）——诚实的「在画了」被 HonestyGuard 换成系统腔替换稿。"""
+
+    @pytest.mark.asyncio
+    async def test_intent_retry_tool_calls_enter_ledger(self, monkeypatch):
+        import junjun_agent.agent as agent_mod
+        from langchain_core.messages import AIMessage, ToolMessage
+        from junjun_core.gateway.session_manager import ChatSession
+        from junjun_memory.short_term import ShortTermMemory
+
+        first = [AIMessage(content="好，画好了给你")]  # 首轮嘴炮没调工具
+        second = [
+            AIMessage(content="", tool_calls=[
+                {"name": "ai_draw", "args": {"prompt": "猫"}, "id": "t1"}]),
+            ToolMessage(content="图片任务已接受，正在生成",
+                        tool_call_id="t1", name="ai_draw"),
+            AIMessage(content="在画了，等下发出来"),
+        ]
+        scripted = _ScriptedGraph([first, second])
+        monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
+                            lambda self, full=False, **_kw: scripted)
+        session = ChatSession("qq:1:private", "qq", user_id="1")
+        session.memory = ShortTermMemory()
+        agent = agent_mod.JunJunAgent(session, model=object())
+        out = await agent.process("甲: 帮我画只猫", latest_text="帮我画只猫",
+                                  addressed=True)
+        assert out == "在画了，等下发出来"
+        assert scripted.calls == 2  # 意图追问了一轮
+        ok, _, issues = verify(session, out)
+        assert ok, f"补救轮真调了 ai_draw 却被误拦: {issues}"
