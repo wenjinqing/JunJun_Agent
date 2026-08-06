@@ -47,6 +47,28 @@ class TaskSlot:
 
 
 _slots = None
+_slots_pool_gen = -1  # 槽缓存展开时的号池代数（-1=无关/未知）
+
+
+def _maybe_rebuild_slots() -> None:
+    """号池健康集合变了（巡检杀/复活 key、文件热更）-> 重建槽缓存剔除死腿。
+
+    2026-08-06 实锤：fallback 链是启动时一次性展开的，巡检把欠费 key
+    标死之后没人重建链——死 key 永远留在链上，每次调用先白撞 3 次重试
+    才 fallback。同时给号池打 tick 心跳：主链从此不再依赖 ASR 等偶尔
+    路径顺带触发懒巡检。
+    """
+    if _slots is None:
+        return
+    try:
+        from junjun_llm.key_pool import sf_pool
+    except Exception:
+        return
+    sf_pool.tick()
+    if _slots_pool_gen != sf_pool.generation:
+        logger.info(f"号池状态变化（gen {_slots_pool_gen} -> {sf_pool.generation}），"
+                    f"重建模型 fallback 链")
+        reset_slots()
 
 
 def _spec_from(cfg: dict, defaults: dict) -> Optional[ModelSpec]:
@@ -98,7 +120,7 @@ def _pool_specs(cfg: dict, defaults: dict) -> List[ModelSpec]:
 
 
 def _load_slots():
-    global _slots
+    global _slots, _slots_pool_gen
     if _slots is not None:
         return _slots
     if not MODEL_CONFIG_PATH.exists():
@@ -120,6 +142,11 @@ def _load_slots():
             logger.warning(f"任务槽 [{name}] 未配置完整（检查对应 env）")
         slots[name] = TaskSlot(name=name, specs=specs)
     _slots = slots
+    try:
+        from junjun_llm.key_pool import sf_pool
+        _slots_pool_gen = sf_pool.generation   # 记录展开时的号池代数
+    except Exception:
+        _slots_pool_gen = -1
     return slots
 
 
@@ -138,6 +165,7 @@ def _build_chat(spec: ModelSpec) -> ChatOpenAI:
 
 def get_chat_model(task: str):
     """取任务槽模型；多条目时返回带 with_fallbacks 的链（调用失败自动切下一个）。"""
+    _maybe_rebuild_slots()
     slot = _load_slots().get(task)
     if slot is None or not slot.specs:
         raise ValueError(f"任务槽未配置或不可用: {task}（检查 model_config.toml 与对应 env）")

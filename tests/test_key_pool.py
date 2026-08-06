@@ -88,6 +88,50 @@ class TestRotation:
         assert len(set(seen)) == 3  # 每次起始 key 不同，负载摊开
 
 
+class TestGeneration:
+    """健康集合变化代数：models 槽缓存的失效信号（2026-08-06 欠费 key 不出链修复）。"""
+
+    def test_first_load_bumps(self, pool):
+        assert pool.generation == 0
+        pool.healthy_keys()
+        assert pool.generation == 1
+
+    def test_unchanged_file_no_bump(self, pool):
+        pool.healthy_keys()
+        g = pool.generation
+        pool.healthy_keys()
+        assert pool.generation == g
+
+    def test_file_change_bumps(self, pool):
+        pool.healthy_keys()
+        g = pool.generation
+        pool._path.write_text("sk-zzz\n", encoding="utf-8")
+        import os
+        os.utime(pool._path, (time.time() + 1, time.time() + 1))  # 确保 mtime 变化
+        pool.healthy_keys()
+        assert pool.generation == g + 1
+
+    @pytest.mark.asyncio
+    async def test_refresh_dead_change_bumps_once(self, pool, monkeypatch):
+        """巡检杀死 key：代数 +1；下一轮结果不变不重复 bump（防无谓重建链）。"""
+        pool.healthy_keys()
+        g = pool.generation
+
+        async def fake(client, base, key):
+            return ("dead", "余额 ¥0") if key == "sk-bbb" else ("alive", "¥9")
+        monkeypatch.setattr(pool, "_check_key", fake)
+        await pool.refresh()
+        assert pool.generation == g + 1
+        await pool.refresh()
+        assert pool.generation == g + 1
+
+    def test_tick_no_rotation_consumed(self, pool):
+        """tick 是心跳不是取号：触发加载/懒巡检但不消耗轮转游标。"""
+        pool.tick()
+        assert pool._rr == 0
+        assert len(pool._keys) == 3
+
+
 class _Resp:
     def __init__(self, code, payload=None, text=""):
         self.status_code = code
@@ -225,4 +269,60 @@ api_key_env = "DEEPSEEK_API_KEY"
         models.reset_slots()
         slot = models._load_slots()["agent"]
         assert [s.api_key for s in slot.specs] == ["ds-key"]
+        models.reset_slots()
+
+    def test_dead_key_evicted_on_rebuild(self, tmp_path, monkeypatch):
+        """巡检标死 -> 号池代数变 -> get_chat_model 重建链，欠费 key 出链
+        （2026-08-06 实锤：标死没人重建链，死 key 永远留在 fallback 链上）。
+        也覆盖启动竞态：首轮展开含全部 key，巡检完成后下一轮取模型即剔除。"""
+        import junjun_llm.models as models
+        from junjun_llm.key_pool import sf_pool
+        toml = tmp_path / "model_config.toml"
+        toml.write_text("""
+[[task.agent.models]]
+base_url_env = "SF_LLM_BASE_URL"
+model_env = "SF_LLM_MODEL"
+api_key_env = "SF_POOL"
+""", encoding="utf-8")
+        monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
+        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.siliconflow.cn/v1")
+        monkeypatch.setenv("SF_LLM_MODEL", "Qwen/x")
+        # tick 打桩：不碰真实 data/sf_keys.txt、不触发真实巡检
+        monkeypatch.setattr(sf_pool, "tick", lambda: None)
+        alive = ["k1", "k2"]
+        monkeypatch.setattr(sf_pool, "healthy_keys", lambda: list(alive))
+        monkeypatch.setattr(sf_pool, "generation", 1)
+        models.reset_slots()
+        models.get_chat_model("agent")
+        assert [s.api_key for s in models._load_slots()["agent"].specs] == ["k1", "k2"]
+
+        # 巡检杀死 k2：代数 +1，健康列表缩短 -> 下次取模型自动重建链
+        alive[:] = ["k1"]
+        monkeypatch.setattr(sf_pool, "generation", 2)
+        models.get_chat_model("agent")
+        assert [s.api_key for s in models._load_slots()["agent"].specs] == ["k1"]
+        models.reset_slots()
+
+    def test_unchanged_generation_no_rebuild(self, tmp_path, monkeypatch):
+        """号池状态没变：槽缓存保持复用，不每轮重建（防性能回退）。"""
+        import junjun_llm.models as models
+        from junjun_llm.key_pool import sf_pool
+        toml = tmp_path / "model_config.toml"
+        toml.write_text("""
+[[task.agent.models]]
+base_url_env = "SF_LLM_BASE_URL"
+model_env = "SF_LLM_MODEL"
+api_key_env = "SF_POOL"
+""", encoding="utf-8")
+        monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
+        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.siliconflow.cn/v1")
+        monkeypatch.setenv("SF_LLM_MODEL", "Qwen/x")
+        monkeypatch.setattr(sf_pool, "tick", lambda: None)
+        monkeypatch.setattr(sf_pool, "healthy_keys", lambda: ["k1"])
+        monkeypatch.setattr(sf_pool, "generation", 5)
+        models.reset_slots()
+        models.get_chat_model("agent")
+        cached = models._slots
+        models.get_chat_model("agent")
+        assert models._slots is cached  # 同一代数：缓存对象不变
         models.reset_slots()
