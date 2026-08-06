@@ -240,3 +240,54 @@ async def test_keyword_reaction_injected():
     assert hits, "关键词应命中"
     prompt = build_system_prompt(is_group=True, latest_text="你是不是机器人啊")
     assert "特别注意" in prompt
+
+
+class _RecSpan:
+    """记录型假 span（对齐 test_task_kernel 的桩）。"""
+
+    def __init__(self, sink, **kw):
+        self.kw = kw
+        self.updates = []
+        self._sink = sink
+
+    def __enter__(self):
+        self._sink.append(self)
+        return self
+
+    def __exit__(self, *e):
+        return False
+
+    def update(self, **kw):
+        self.updates.append(kw)
+
+
+@pytest.mark.asyncio
+async def test_honesty_guard_interception_traced(session, fake_gateway, monkeypatch):
+    """2026-08-06 实锤：HonestyGuard 替换稿曾被发出但 trace 里是原文——
+    校验必须挪进 span，实发稿 + 原文 + 拦截理由全部进 trace。"""
+    from types import SimpleNamespace
+    import junjun_core.observability as obs
+    import junjun_core.config.config as cfg_mod
+
+    spans = []
+    monkeypatch.setattr(obs, "lf", SimpleNamespace(
+        start_span=lambda **kw: _RecSpan(spans, **kw), enabled=True))
+    cfg = cfg_mod.get_global_config()
+    monkeypatch.setitem(cfg.raw, "honesty_guard", {"enable": True})
+
+    _install_fake_agent(session, "画好了，等下发给你")  # 声称但没调工具
+    await _add_and_handle(session, _meta("君君帮我画只猫", at_bot=True))
+
+    assert len(fake_gateway.sent) == 1
+    sent_text = fake_gateway.sent[0].segments[0].data
+    assert "不能骗你" in sent_text          # 实发的是替换稿
+    assert "画好" in sent_text              # 引用实际说出口的短语
+    assert "[" not in sent_text             # 没有 regex 源码糊脸
+
+    span = next(s for s in spans if s.kw["name"].startswith("agent."))
+    final = span.updates[-1]["output"]
+    assert final["reply"][:20] == sent_text[:20]     # trace 里就是实发稿
+    hg = final["honesty_guard"]
+    assert hg["intercepted"] is True
+    assert "画好了，等下发给你" in hg["original"]    # 原文也可查
+    assert any("ai_draw" in i for i in hg["issues"])

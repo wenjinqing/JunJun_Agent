@@ -363,25 +363,39 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
                 mood_block=mood_block, trace_id=trace_id,
                 system_prompt=None if budget_enabled else _prompt_snapshot,
             )
+            # ---- Phase 3：发送前 HonestyGuard 代码层诚实校验（span 内做）----
+            # 曾经 span 先记录原文、校验在 span 外替换——trace 里是原文，用户
+            # 收到的是替换稿，「实发文本 trace 里找不到」（2026-08-06 实锤）。
+            # 现在：拦截的原文/理由/实发稿全部进 span output。
+            hg_issues: list = []
+            hg_original: Optional[str] = None
+            if text:
+                try:
+                    from junjun_agent.honesty_guard import (
+                        enabled as hg_enabled, verify as hg_verify)
+                    if hg_enabled():
+                        ok, fixed, hg_issues = hg_verify(session, text)
+                        if not ok:
+                            hg_original = text
+                            text = fixed
+                            logger.warning(f"[{session.chat_id}] HonestyGuard 拦截: "
+                                           f"{hg_issues} [trace={trace_id}]")
+                except Exception:
+                    pass
+
             # span output：回复内容或沉默标记，后台直接可见
-            _span.update(output={"reply": text[:500] if text else None, "silenced": text is None})
+            _out = {"reply": text[:500] if text else None, "silenced": text is None}
+            if hg_issues:
+                _out["honesty_guard"] = {
+                    "intercepted": True, "issues": hg_issues,
+                    "original": (hg_original or "")[:500]}
+            _span.update(output=_out)
             if not text:
                 logger.info(f"[{session.chat_id}] L3 沉默 [trace={trace_id}]")
 
     # 情绪重评（跟随 L3，冷却内跳过；不阻塞发送——先发再评）
     if not text:
         return
-
-    # ---- Phase 3：发送前 HonestyGuard 代码层诚实校验 ----
-    # 把 persona 里「没调工具不许说发了」从 prompt 规则搬到发送口硬检查。
-    try:
-        from junjun_agent.honesty_guard import enabled as hg_enabled, verify as hg_verify
-        if hg_enabled():
-            ok, text, issues = hg_verify(session, text)
-            if not ok:
-                logger.warning(f"[{session.chat_id}] HonestyGuard 拦截: {issues} [trace={trace_id}]")
-    except Exception:
-        pass
 
     # ---- 感知后续：决策时「还在看」的图/语音/视频，看完后主动补一句 ----
     # （治「我看不到图片」：Agent 已接话 + 有在途感知 -> 完成后观后感推上门）

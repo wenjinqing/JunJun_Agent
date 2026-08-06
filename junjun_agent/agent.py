@@ -154,6 +154,19 @@ def _intent_nudge(latest_text: str, result_messages: list, available: set):
     return None
 
 
+def _record_tool_calls(session, messages: list) -> None:
+    """把消息列表里的 ToolMessage 记入 HonestyGuard 台账（供发送前诚实校验）。
+
+    每个产生最终文本的执行路径都必须过这里——首轮和各个补救轮（意图/复读/
+    空输出）一样算数。2026-08-06 实锤：只记首轮时，意图补救轮真调了 ai_draw
+    台账却是空的，诚实的「在画了」被 HonestyGuard 误拦换成系统腔。
+    重复记录无害：台账是追加日志，校验端按工具名建集合。
+    """
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            record_tool_call(session, m.name, result=str(m.content or ""))
+
+
 def _record_usage(messages: list, chat_id: str, request_type: str = "agent") -> None:
     """从 AIMessage.usage_metadata 提取 token 用量落库（失败静默）。"""
     try:
@@ -479,9 +492,7 @@ class JunJunAgent:
         _record_usage(messages, self.session.chat_id)
 
         # Phase 3：记录本轮真实工具调用，供 HonestyGuard 发送前校验
-        for m in messages:
-            if isinstance(m, ToolMessage):
-                record_tool_call(self.session, m.name, result=str(m.content or ""))
+        _record_tool_calls(self.session, messages)
 
         if _called_silence_tool(messages):
             logger.debug(f"[{self.session.chat_id}] agent 选择沉默")
@@ -516,6 +527,7 @@ class JunJunAgent:
                     )
                     messages = retry.get("messages", messages)
                     _record_usage(messages, self.session.chat_id)
+                    _record_tool_calls(self.session, messages)  # 补救轮的工具也算数
                     if _called_silence_tool(messages):
                         return None
                 except Exception as e:
@@ -632,6 +644,7 @@ class JunJunAgent:
                     )
                     rmsgs = retry.get("messages", messages)
                     _record_usage(rmsgs, self.session.chat_id)
+                    _record_tool_calls(self.session, rmsgs)  # 重说轮的工具也算数
                     if _called_silence_tool(rmsgs):
                         return None
                     rtext = _plain_reply_text(rmsgs[-1] if rmsgs else None)
@@ -671,6 +684,7 @@ class JunJunAgent:
                 )
                 rmsgs = retry.get("messages", messages)
                 _record_usage(rmsgs, self.session.chat_id)
+                _record_tool_calls(self.session, rmsgs)  # 空输出补救轮的工具也算数
                 if not _called_silence_tool(rmsgs):
                     text = (_plain_reply_text(rmsgs[-1] if rmsgs else None) or "").strip()
             except Exception as e:
