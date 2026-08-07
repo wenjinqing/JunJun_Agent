@@ -65,10 +65,13 @@ class SFKeyPool:
         try:
             mtime = self._path.stat().st_mtime
         except OSError:
+            # 宁可用旧，不可错杀：文件替换（删旧->rename 新）的毫秒窗口、
+            # 杀软锁文件都会让 stat 瞬时失败——此时清空池会把全部池系
+            # LLM 调用打挂。保留 last-known-good keys，等文件恢复再重载
             if self._keys:
-                logger.warning(f"号池文件消失: {self._path}，按空池处理")
-                self.generation += 1
-            self._keys, self._mtime = [], 0.0
+                logger.warning(f"号池文件暂时不可读: {self._path}，沿用内存中的 {len(self._keys)} 个 key")
+            else:
+                self._mtime = 0.0
             return
         if mtime == self._mtime:
             return

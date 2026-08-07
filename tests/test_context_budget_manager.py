@@ -7,10 +7,23 @@ from junjun_agent.context_budget import BudgetBlock, ContextBudget
 
 def test_estimate_tokens_basic():
     cb = ContextBudget(1000)
-    # 纯中文：每个字约 1/3 token
-    assert cb.estimate_tokens("你好世界") == 1  # 4/3 = 1.33 -> int = 1
-    # 纯英文单词
-    assert cb.estimate_tokens("hello world") == 2  # 2 words / 0.75 = 2.67 -> 2
+    # 纯中文：cl100k 约 1.5 字/token
+    assert cb.estimate_tokens("你好世界") == 2  # 4/1.5 = 2.67 -> int = 2
+    # 纯英文：约 4 字符/token
+    assert cb.estimate_tokens("hello world") == 2  # 11/4 = 2.75 -> 2
+
+
+def test_estimate_tokens_chinese_not_underestimated():
+    """回归：中文块曾被低估 10 倍（word 估算把无空格全文算 1 个词取 min）。
+    驱逐逻辑因此永不触发、Langfuse 指标失真（2026-08-06 审查实锤）。"""
+    cb = ContextBudget(1000)
+    # 真实形态的中文记忆块（多行、无空格）
+    block = "\n".join(f"群友{i}：今天聊的话题还挺有意思的嘛" for i in range(30))
+    est = cb.estimate_tokens(block)
+    cjk = sum(1 for ch in block if "一" <= ch <= "鿿")
+    assert est >= cjk / 2, f"中文估算失真：{cjk} 字估出 {est} token"
+    # 18 字无空格中文句不许估成 1
+    assert cb.estimate_tokens("今天天气不错我们一起去公园散步吧") >= 10
 
 
 def test_fit_keeps_all_when_under_budget():

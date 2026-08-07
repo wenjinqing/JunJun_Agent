@@ -24,6 +24,12 @@ QQ 机器人「君君」单仓 monorepo。北极星指标：像真人。
 - 控制台 GBK：打印中文用 `unicode_escape` 或写文件，避免乱码报错。
 - Agent 技能手册（md skills）：`junjun_skills/agent_skills/<name>.md`，frontmatter
   必须带 `name` + `when`；新增后跑 `tests/test_agent_skills.py`。
+- **加宽命中面必须配误判回归测试**：router 词表、意图组关键词、守卫 pattern、
+  工具掩码阈值——凡是「让更多输入命中」的改动，必须同 commit 带「不该命中的
+  日常句子」断言。项目事故全在误伤方向（2026-08-06 审查：eval 驱动补缺口时
+  连续四处宽化回归）。
+- 估算/判定宁可保守方向的反面教训记牢：token 估算宁高估勿低估（低估=预算
+  形同虚设）；号池文件故障宁用旧 key 勿清空（错杀=全线硬失败）。
 
 ## 关键结构
 

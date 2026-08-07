@@ -48,22 +48,19 @@ class ContextBudget:
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
-        """快速估算 token 数。
+        """快速估算 token 数（无 tiktoken 依赖）。
 
-        对中文为主的场景：字符数 / 3.0；对英文为主：按空白分词后 / 0.75；
-        混合文本取两者较小值，避免高估。无 tiktoken 依赖。
+        cl100k_base 实测约 1.5 个中文字符/token、4 个英文字符/token。
+        曾按「中英文估算取 min」实现——中文无空格，text.split() 把全文算成
+        1 个词，609 字中文块估出 33 token（低估 10 倍），驱逐逻辑永不触发、
+        Langfuse 指标全线失真（2026-08-06 审查实锤）。宁高估勿低估：
+        高估只是提前驱逐，低估是预算形同虚设。
         """
         if not text:
             return 0
-        # 中文字符按 1/3 token 估算（cl100k_base 约 1.5 中文字符/token，放宽到 3 留余量）
         cjk_chars = sum(1 for ch in text if "一" <= ch <= "鿿")
         non_cjk_len = len(text) - cjk_chars
-        cjk_estimate = cjk_chars / 3.0 + non_cjk_len / 4.0
-        # 英文单词估算
-        words = len(text.split())
-        word_estimate = words / 0.75 + (non_cjk_len - words) / 4.0
-        # 混合取较小值，作为「紧预算」；至少 1
-        return max(1, int(min(cjk_estimate, word_estimate)))
+        return max(1, int(cjk_chars / 1.5 + non_cjk_len / 4.0))
 
     def fit(self, blocks: List[BudgetBlock]) -> BudgetFit:
         """按预算保留块，返回 fit 结果。

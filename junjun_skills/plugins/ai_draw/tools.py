@@ -137,6 +137,7 @@ def is_minor_nsfw(prompt: str) -> bool:
 # R18 路由标记（_ANIME_WORDS 的成年向子集）：带这些词会被路由到唯一能出
 # R18 的 anime 模型——群聊硬门认这套。未带标记的露骨描述走默认模型，
 # ModelScope 平台过滤层会杀，不需要也不该在这里拦（误伤正常二次元请求）。
+# 同步纪律：junjun_agent/agent.py 的 _NUDGE_NSFW_WORDS 是这套词的镜像，改一处必须改另一处
 _R18_MARKERS = ("涩图", "色图", "涩涩", "r18", "nsfw")
 
 

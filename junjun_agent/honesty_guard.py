@@ -111,10 +111,23 @@ def record_tool_call(session, tool_name: str, *, args: dict = None, result: str 
     })
 
 
+# 失败/拒绝类工具结果：不能作为「声称已完成」的证据。
+# 2026-08-06 审查实锤：台账只认工具名不认结果——群聊 R18 拒画（工具正常
+# 返回引导文案）也入账，模型嘴硬「在画了」照样过检，防线在最需要它的场景失效。
+_FAILURE_RESULT_RE = re.compile(
+    r"^\[TOOL_ERROR\]"        # 注册表错误包装
+    r"|画不了|别派单|不会生成|暂时画不了"   # ai_draw 拒画/未成年红线/未配置
+    r"|还在弄|还没完|排队|排满|马上完"      # TaskManager 占线话术（任务没接受）
+    r"|这次.*失败|再试一次"                 # 任务失败降级文案
+)
+
+
 def _recent_tool_names(session) -> Set[str]:
-    """本轮决策以来调用的工具名集合。"""
+    """本轮决策以来【成功】调用的工具名集合（失败/拒绝结果不算证据）。"""
     start_ts = getattr(session, "_hg_decision_ts", 0)
-    return {c["name"] for c in getattr(session, "_tool_log", []) if c.get("ts", 0) >= start_ts}
+    return {c["name"] for c in getattr(session, "_tool_log", [])
+            if c.get("ts", 0) >= start_ts
+            and not _FAILURE_RESULT_RE.search(c.get("result") or "")}
 
 
 def verify(session, text: str) -> Tuple[bool, str, List[str]]:

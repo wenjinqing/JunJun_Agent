@@ -49,3 +49,12 @@ class TestRouteToTask:
     def test_question_with_please_still_routes(self):
         # 带「帮我/给我」的疑问句仍是委托
         assert route_to_task("能帮我调研一下然后写份报告吗") is True
+
+    def test_report_as_object_not_deliverable(self):
+        # 「报告/摘要」作宾语（查询已有之物）不是产出诉求——2026-08-06 审查实锤：
+        # 扩词后这类单步查询全被拆步骤
+        assert route_to_task("帮我查一下上次的体检报告出来了没") is False
+        assert route_to_task("查一下这篇论文的摘要讲的啥") is False
+        assert route_to_task("帮我看看这份调研的摘要写得行不行") is False
+        # 真产出诉求仍然命中
+        assert route_to_task("帮我查资料整理成一份行业报告") is True
