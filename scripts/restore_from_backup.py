@@ -59,6 +59,11 @@ def main() -> int:
     if with_images:
         rows = src.execute(
             f"SELECT {','.join(_IMG_COLS)} FROM images").fetchall()
+        # 备份本身带着旧库的测试污染（2026-08-04 Images 事故：675 行
+        # 「一只猫」假识图缓存骑备份回流，2026-08-07 实锤）——按
+        # cleanup_test_pollution.py 的同一定义在源头滤掉
+        rows = [r for r in rows
+                if not (r[2] == "一只猫" and r[3] <= 1786031506.0)]
         have = {r[0] for r in dst.execute("SELECT image_hash FROM images")}
         new = [r for r in rows if r[1] not in have]  # r[1] = image_hash
         print(f"识图缓存: 备份 {len(rows)} 行，可新增 {len(new)} 行")
