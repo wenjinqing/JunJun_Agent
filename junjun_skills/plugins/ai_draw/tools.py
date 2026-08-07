@@ -134,6 +134,18 @@ def is_minor_nsfw(prompt: str) -> bool:
     return has_minor and has_nsfw
 
 
+# R18 路由标记（_ANIME_WORDS 的成年向子集）：带这些词会被路由到唯一能出
+# R18 的 anime 模型——群聊硬门认这套。未带标记的露骨描述走默认模型，
+# ModelScope 平台过滤层会杀，不需要也不该在这里拦（误伤正常二次元请求）。
+_R18_MARKERS = ("涩图", "色图", "涩涩", "r18", "nsfw")
+
+
+def has_r18_marker(prompt: str) -> bool:
+    """描述带 R18 路由标记 -> True（群聊硬门的「真会出 R18」判定）。"""
+    low = (prompt or "").lower()
+    return any(w in low for w in _R18_MARKERS)
+
+
 def is_anime(prompt: str) -> bool:
     """命中二次元/动漫画风词 -> True（路由到二次元特化模型）。"""
     low = (prompt or "").lower()
@@ -347,6 +359,10 @@ async def draw_cmd(ctx):
                 "不填按描述自动路由。")
     if is_minor_nsfw(prompt):
         return "这种不行哦，涉及未成年人的色色内容君君绝对不画！换个描述吧。"
+    # 群聊 R18 硬门（2026-08-06 实锤「分不清群聊私聊」：群场景此前只靠模型
+    # 自觉，命令/工具层无兜底——/draw 涩图 xxx 在群里真的会派单出图）
+    if ctx.session.is_group and has_r18_marker(prompt):
+        return "这种图群里不画哦，人多眼杂 + 账号风控。私聊我，悄悄给你画。"
 
     chat_id = ctx.session.chat_id
     now = time.time()
@@ -450,6 +466,11 @@ async def ai_draw(prompt: str, model: str = "") -> str:
         return f"不认识模型「{model}」，可选：zimage / anime / qwen。"
     from junjun_skills.builtin.memory_skills import current_chat_id
     chat_id = current_chat_id.get("")
+    # 群聊 R18 硬门：模型在群里违规调工具也不能真出图（最后一道防线）。
+    # 返回引导文案让模型照着婉拒——比空拒绝更像人，也不会占派单位。
+    if chat_id.endswith(":group") and has_r18_marker(prompt):
+        return ("群里画不了这种（公共场合 + 账号风控）。"
+                "笑着让对方私聊你——照这个意思回他，别派单。")
     if not chat_id:
         # 无会话路由（边缘场景）：同步生成 + [IMAGE:] 标记，由 processor 提取发图
         url, _ = await _draw_pipeline(prompt, model_alias)

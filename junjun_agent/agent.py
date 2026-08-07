@@ -130,7 +130,11 @@ def _plain_reply_text(msg) -> str:
     return text
 
 
-def _intent_nudge(latest_text: str, result_messages: list, available: set):
+_NUDGE_NSFW_WORDS = ("涩图", "色图", "r18", "nsfw")
+
+
+def _intent_nudge(latest_text: str, result_messages: list, available: set,
+                  *, is_group: bool = False):
     """强意图命中但对应工具没调 -> (系统追问文本, 是否需全绑补救)，否则 None。
 
     背景：弱模型常把「帮我盯着xxx」当成记忆任务只调 save_memory 或纯口头
@@ -148,6 +152,12 @@ def _intent_nudge(latest_text: str, result_messages: list, available: set):
                 continue             # 该意图组已调用——继续检查其余意图组
                                        # （曾 return None 短路：「提醒我开会，顺便画只猫」
                                        #  只查了第一个意图，ai_draw 没调也永不追问）
+            # 群聊涩图意图不追问：模型不调 ai_draw 是政策正确（公共场合+风控），
+            # 追问等于把它往违规上推——意图机制此前没有场景感
+            # （2026-08-06 实锤「分不清群聊私聊」的一环）
+            if is_group and tool_name == "ai_draw" and \
+                    any(w in text.lower() for w in _NUDGE_NSFW_WORDS):
+                continue
             intent = next(kw for kw in keywords if kw in text)
             return (_NUDGE_PROMPT.format(intent=intent, tool=tool_name),
                     tool_name not in available)
@@ -502,7 +512,8 @@ class JunJunAgent:
         if bool(cfg.raw.get("agent", {}).get("intent_retry", True)):
             try:
                 available = {t.name for t in get_tools(self.session)}
-                nudge_info = _intent_nudge(latest_text, messages, available)
+                nudge_info = _intent_nudge(latest_text, messages, available,
+                                           is_group=self.session.is_group)
             except Exception:
                 nudge_info = None
             if nudge_info:

@@ -43,3 +43,20 @@ class TestExistingAnchorsIntact:
 
     def test_tool_error_map_rule(self):
         assert "[TOOL_ERROR kind=...]" in _prompt()
+
+
+class TestSceneSpecializedR18Rule:
+    """涩图规则按场景只给适用的一半（2026-08-06 实锤「分不清群聊私聊」：
+    让弱模型自己组合「当前场景 + 双分支规则」不可靠）。"""
+
+    def test_group_prompt_only_refusal_branch(self):
+        p = build_system_prompt(is_group=True, nickname="君君", latest_text="在吗")
+        assert "群里有人要涩图" in p
+        assert "私聊里可以画" not in p      # 群场景不给授权分支，防误组合
+        assert "绝对红线" in p              # 未成年红线任何场景都在
+
+    def test_private_prompt_only_permission_branch(self):
+        p = build_system_prompt(is_group=False, nickname="君君", latest_text="在吗")
+        assert "私聊里可以画" in p
+        assert "群里不行" not in p
+        assert "绝对红线" in p

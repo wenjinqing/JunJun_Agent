@@ -141,7 +141,7 @@ def _build_core_parts(
     return core_parts, dynamic_blocks
 
 
-def _build_rules_and_admin(reaction_text: str = "") -> list[str]:
+def _build_rules_and_admin(reaction_text: str = "", *, is_group: bool = True) -> list[str]:
     """规则层 + 安全段（稳定且必需）。"""
     # 规则层（正面约束，一句话）
     rules = [
@@ -159,10 +159,18 @@ def _build_rules_and_admin(reaction_text: str = "") -> list[str]:
         # 落库类操作（订阅/提醒等）不许空口确认——LLM 会讨好用户假装已办
         "订阅、提醒这类需要实际生效的事，必须真的调用对应工具并拿到成功回执才能说「办好了」；没调工具或工具失败就直说办不了，绝不假装完成。",
         # 涩图边界（2026-08-04 起私聊放开成年向）：模型对齐倾向拒画或口头答应
-        # 不调工具，需要 system 级明确授权——人格卡里的口味描述压不过对齐训练
-        "对方要涩图/R18 图时：私聊里可以画——调 ai_draw 且描述里带上「涩图」字样"
-        "（会自动路由到会画的模型），别拒绝、也别只口头答应不调工具；"
-        "群里不行，笑着让 ta 私聊。涉及未成年人的色情内容是绝对红线，任何场景直接拒绝。",
+        # 不调工具，需要 system 级明确授权——人格卡里的口味描述压不过对齐训练。
+        # 按场景只给适用的一半（2026-08-06 实锤「分不清群聊私聊」：让弱模型自己
+        # 组合「当前场景+双分支规则」不可靠——群里该看见的只有拒绝分支）
+        (
+            "群里有人要涩图/R18 图：这里人多眼杂，不行——笑着挡回去，"
+            "但必须顺手给个台阶：让 ta 私聊你。光拒绝不给台阶算没处理好。"
+            "涉及未成年人的色情内容是绝对红线，任何场景直接拒绝。"
+            if is_group else
+            "对方要涩图/R18 图时：私聊里可以画——调 ai_draw 且描述里带上「涩图」字样"
+            "（会自动路由到会画的模型），别拒绝、也别只口头答应不调工具。"
+            "涉及未成年人的色情内容是绝对红线，任何场景直接拒绝。"
+        ),
         # 媒体产出诚实锚（2026-08-04 实锤幻觉：没调 TTS 却声称「语音马上就好」
         # 还接受了对不存在歌声的夸奖、编造「唱了两首」）
         "语音、图片、文件、点歌这类只能靠工具产出的东西：没调工具或工具没成功，就等于没发出去——绝不能说「发了/唱了/画了/马上就好/等到了」，也不能接受别人对不存在作品的夸奖（要澄清没发过）；说「等下就发」之前必须已经调用了工具。",
@@ -220,7 +228,7 @@ def build_prompt_blocks(
     reaction_text = f"特别注意：{'；'.join(reactions)}" if reactions else ""
 
     # rules + admin 是稳定必需段
-    core_parts.extend(_build_rules_and_admin(reaction_text))
+    core_parts.extend(_build_rules_and_admin(reaction_text, is_group=is_group))
 
     # 动态块：按重要性分配优先级（数字越小越重要）
     if mood_block:
