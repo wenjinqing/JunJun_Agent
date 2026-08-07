@@ -19,6 +19,7 @@ import urllib.parse
 from pathlib import Path
 
 from junjun_agent.commands import register_command
+from junjun_agent.interceptors import register_interceptor
 from junjun_core import napcat_client
 from junjun_core.observability import get_logger
 
@@ -655,3 +656,32 @@ async def novel_cmd(ctx):
     if kind == "novel":
         return await _do_single(ctx, nid)
     return await _do_series(ctx, nid)
+
+
+# ---------------- 私聊裸链接直通道（2026-08-07） ----------------
+# 背景：私聊直接贴 P 站小说链接（不带 /novel 前缀）时消息进 LLM，而模型
+# 刚在上下文里看过命令回执「《X》抓取完成，txt 已发你～」，自我模仿出
+# 「发你了，《上一篇标题》」——根本没抓取（生产实锤：12:18:50 贴链接
+# id=27148219，5 秒后 bot 报出上一篇的标题；HonestyGuard 当时没有
+# 「发你了《》」类规则，放行）。裸链接是解析问题不是智能问题：与
+# nsfw_draw_hit 同模式，私聊直通 /novel 命令同链路（群拒/白名单/
+# Cookie/冷却/抓取全复用）。群聊不拦截，交给 LLM（txt 本就私聊限定，
+# 工具会解释性拒绝并引导私聊）。
+_NOVEL_LINK_RE = r"https?://(?:www\.)?pixiv\.net/novel/(?:show\.php\?id=\d+|series/\d+)"
+_NOVEL_LINK_NEGATIONS = ("别下", "不用下", "别抓", "不用抓", "看看就行", "只是分享")
+
+
+@register_interceptor(_NOVEL_LINK_RE, name="pixiv_novel_link",
+                      plugin="pixiv", priority=-5)
+async def pixiv_novel_link_hit(ctx) -> bool:
+    """私聊裸 P 站小说链接直通 /novel 同链路，防 LLM 空口「发你了」。"""
+    if ctx.session.is_group:
+        return False  # 群里交给 LLM 婉拒/引导私聊
+    if any(neg in (ctx.meta.text or "") for neg in _NOVEL_LINK_NEGATIONS):
+        return False  # 「别下，看看就行」是制止不是请求
+    from junjun_agent.commands import CommandContext
+    reply_text = await novel_cmd(CommandContext(
+        session=ctx.session, meta=ctx.meta, args=ctx.args))
+    if reply_text:
+        await ctx.reply(reply_text)
+    return True

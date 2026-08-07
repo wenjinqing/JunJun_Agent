@@ -39,7 +39,13 @@ def _called_silence_tool(messages: list) -> bool:
 
 # 意图自检规则：强意图词 -> 必须真正调用的工具。元数据与注册表 INTENT 层
 # 挂载共用单一数据源（顺序敏感，先长后短，「取消订阅」含「订阅」必须先匹配）。
-_INTENT_RULES = [(kws, primary) for kws, _group, primary in intent_groups() if primary]
+# 证据集 = 组内行动工具（list_* 只读不算办事）：组内任一行动工具被调即算办过
+# ——只认 primary 会误追问：「调研」派了 run_background_task 明明办成了，
+# 旧逻辑还要求必须 deep_research（2026-08-07 加搜索组时一并修正）。
+_INTENT_RULES = [
+    (kws, primary, frozenset(t for t in group if not t.startswith("list_")))
+    for kws, group, primary in intent_groups() if primary
+]
 
 _NUDGE_PROMPT = (
     "（系统追问）对方的请求包含明确的「{intent}」意图，必须调用 {tool} 工具"
@@ -146,9 +152,9 @@ def _intent_nudge(latest_text: str, result_messages: list, available: set,
     if not text:
         return None
     called = _called_tool_names(result_messages)
-    for keywords, tool_name in _INTENT_RULES:
+    for keywords, tool_name, evidence in _INTENT_RULES:
         if any(kw in text for kw in keywords):
-            if tool_name in called:
+            if tool_name in called or (evidence & called):
                 continue             # 该意图组已调用——继续检查其余意图组
                                        # （曾 return None 短路：「提醒我开会，顺便画只猫」
                                        #  只查了第一个意图，ai_draw 没调也永不追问）

@@ -34,6 +34,13 @@ class TestHonestyAnchors:
         assert "不会唱歌" in p
         assert "play_music" in p  # 提供替代方案（放原曲）
 
+    def test_search_rule_names_only_real_tools(self):
+        """规则只许引用真实注册的工具（2026-08-07：mcp_search 是幻影工具，
+        全仓无任何注册——prompt 教模型调不存在的工具等于教它编）。"""
+        p = _prompt()
+        assert "web_search" in p
+        assert "mcp_search" not in p
+
 
 class TestExistingAnchorsIntact:
     """既有防幻觉锚不因新增被挤掉。"""
