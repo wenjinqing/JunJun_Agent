@@ -279,3 +279,77 @@ class TestCooldownAndCookie:
         monkeypatch.setenv("PIXIV_COOKIE", "PHPSESSID=111_abcd")
         ok = await tools.novel_cmd(_ctx("/novel search 测试"))
         assert "搜索结果单篇" in ok
+
+
+class TestNovelLinkInterceptor:
+    """私聊裸链接直通道（2026-08-07 实锤：私聊裸链接进 LLM，模型模仿上文
+    命令回执空口「发你了，《上一篇标题》」——根本没抓取。裸链接是解析问题，
+    直通 /novel 同链路）。"""
+
+    def test_link_pattern(self):
+        assert re.search(tools._NOVEL_LINK_RE,
+                         "https://www.pixiv.net/novel/show.php?id=27148219")
+        assert re.search(tools._NOVEL_LINK_RE,
+                         "看这个 https://www.pixiv.net/novel/series/1234567 谢谢")
+        assert not re.search(tools._NOVEL_LINK_RE,
+                             "https://www.pixiv.net/artworks/12345")
+        assert not re.search(tools._NOVEL_LINK_RE,
+                             "https://www.pixiv.net/users/12345")
+
+    @pytest.mark.asyncio
+    async def test_private_single_link_fetches(
+            self, _env, _fake_pixiv, _fake_gateway, _fake_upload):
+        url = "https://www.pixiv.net/novel/show.php?id=201"
+        ctx = commands.CommandContext(session=_session(False),
+                                      meta=_meta(url), args=url)
+        assert await tools.pixiv_novel_link_hit(ctx) is True
+        # 真抓了正文并上传（不是空口「发你了」）
+        assert any("单篇201" in u["content"] for u in _fake_upload)
+        assert _fake_upload[0]["user_id"] == "12345"
+        texts = [s.data for rs in _fake_gateway for s in rs.segments
+                 if s.type == "text"]
+        assert any("抓取完成" in t for t in texts)
+
+    @pytest.mark.asyncio
+    async def test_private_series_link_fetches(
+            self, _env, _fake_pixiv, _fake_gateway, _fake_upload):
+        url = "https://www.pixiv.net/novel/series/900"
+        ctx = commands.CommandContext(session=_session(False),
+                                      meta=_meta(url), args=url)
+        assert await tools.pixiv_novel_link_hit(ctx) is True
+        await _drain_series_tasks()
+        assert any("第一章 开始" in u["content"] and "第二章 继续" in u["content"]
+                   for u in _fake_upload)
+
+    @pytest.mark.asyncio
+    async def test_group_link_not_consumed(self, _env, _fake_pixiv, _fake_gateway):
+        """群聊不拦截（txt 私聊限定）：交给 LLM 引导私聊，不抓取。"""
+        url = "https://www.pixiv.net/novel/show.php?id=201"
+        ctx = commands.CommandContext(session=_session(True),
+                                      meta=_meta(url), args=url)
+        assert await tools.pixiv_novel_link_hit(ctx) is False
+        assert _fake_pixiv == []
+        assert _fake_gateway == []
+
+    @pytest.mark.asyncio
+    async def test_negation_not_consumed(self, _env, _fake_pixiv, _fake_gateway):
+        """「别下，看看就行」是制止不是请求。"""
+        url = "https://www.pixiv.net/novel/show.php?id=201"
+        text = f"别下，{url} 看看就行"
+        ctx = commands.CommandContext(session=_session(False),
+                                      meta=_meta(text), args=url)
+        assert await tools.pixiv_novel_link_hit(ctx) is False
+        assert _fake_pixiv == []
+
+    @pytest.mark.asyncio
+    async def test_non_whitelist_consumed_with_rejection(
+            self, _env, _fake_pixiv, _fake_gateway):
+        """白名单外用户：消费掉并回「没开放」，不抓取、不落 LLM 幻觉。"""
+        url = "https://www.pixiv.net/novel/show.php?id=201"
+        ctx = commands.CommandContext(session=_session(False),
+                                      meta=_meta(url, user_id="99999"), args=url)
+        assert await tools.pixiv_novel_link_hit(ctx) is True
+        assert _fake_pixiv == []
+        texts = [s.data for rs in _fake_gateway for s in rs.segments
+                 if s.type == "text"]
+        assert any("没有对你开放" in t for t in texts)

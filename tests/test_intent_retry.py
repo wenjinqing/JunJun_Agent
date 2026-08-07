@@ -98,6 +98,45 @@ class TestIntentNudge:
         assert _called_tool_names(msgs) == {"a", "b"}
 
 
+class TestSearchIntent:
+    """搜索意图自检（2026-08-07 实锤：「上网查一下绝区零配队排名」一轮没调
+    工具就空口答 + recursion 后「网有点抽」搪塞——搜索意图此前不在自检清单，
+    persona 劝告压不过弱模型的懒惰）。"""
+
+    def test_search_intent_nudged(self):
+        tools = ALL_TOOLS | {"web_search"}
+        msgs = [_ai_with_tools()]
+        nudge = _intent_nudge("上网查一下绝区零当前配队强度排名", msgs, tools)
+        assert nudge and "web_search" in nudge[0]
+
+    def test_search_no_nudge_when_called(self):
+        tools = ALL_TOOLS | {"web_search"}
+        msgs = [_ai_with_tools("web_search")]
+        assert _intent_nudge("帮我查一下明天天气", msgs, tools) is None
+        assert _intent_nudge("搜一下今天有什么科技新闻", msgs, tools) is None
+
+    def test_no_search_intent_no_nudge(self):
+        tools = ALL_TOOLS | {"web_search"}
+        msgs = [_ai_with_tools()]
+        assert _intent_nudge("今天天气真好", msgs, tools) is None
+
+
+class TestGroupEvidence:
+    """证据语义：组内行动工具任一被调即算办过；list_* 只读不算。"""
+
+    def test_background_task_counts_for_research(self):
+        """「调研」派了 run_background_task 就是办成了，不再死磕 deep_research。"""
+        tools = ALL_TOOLS | {"deep_research", "run_background_task"}
+        msgs = [_ai_with_tools("run_background_task")]
+        assert _intent_nudge("帮我调研一下绝区零丹的攻略", msgs, tools) is None
+
+    def test_list_tool_not_evidence(self):
+        """只调 list_reminders 查看不算办了「提醒我」这件事。"""
+        msgs = [_ai_with_tools("list_reminders")]
+        nudge = _intent_nudge("明天早上八点提醒我开会", msgs, ALL_TOOLS)
+        assert nudge and "set_reminder" in nudge[0]
+
+
 class TestAgentRebuild:
     @pytest.mark.asyncio
     async def test_agent_rebuilds_tools_each_round(self, monkeypatch):

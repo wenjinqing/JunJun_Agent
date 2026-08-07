@@ -152,3 +152,42 @@ class TestRetryPathToolLedger:
         assert scripted.calls == 2  # 意图追问了一轮
         ok, _, issues = verify(session, out)
         assert ok, f"补救轮真调了 ai_draw 却被误拦: {issues}"
+
+
+class TestNovelSentClaims:
+    """「发你了《X》/抓取完成/txt 已发」是 pixiv 小说命令回执的专有措辞
+    （2026-08-07 实锤：私聊裸链接根本没抓，LLM 模仿上文命令回执
+    5 秒报出上一篇标题「发你了，《奴隶神明的最后一天》」）。"""
+
+    @pytest.mark.parametrize("claim", [
+        "发你了，《奴隶神明的最后一天》",
+        "发你了,《某本小说》",
+        "《某某》抓取完成，txt 已发你～",
+        "《某某》已发你，查收",
+        "txt 已发你邮箱……啊不，私聊",
+    ])
+    def test_novel_claims_blocked(self, session, claim):
+        start_decision(session)
+        ok, text, issues = verify(session, claim)
+        assert not ok, f"空口小说发送声称漏拦: {claim}"
+        assert any("pixiv_download_novel" in i for i in issues)
+        assert "不能骗你" in text
+
+    def test_real_download_passes(self, session):
+        """真调了 pixiv_download_novel（工具回执本身就是这句模板）不拦。"""
+        start_decision(session)
+        record_tool_call(session, "pixiv_download_novel",
+                         result="《某某》抓取完成，txt 已发你～")
+        ok, text, _ = verify(session, "《某某》抓取完成，txt 已发你～")
+        assert ok
+
+    @pytest.mark.parametrize("innocent", [
+        "我记得《三体》你说过好看",
+        "这本《活着》推荐给你，链接在这",
+        "《三体》吗？我查查再跟你说",
+        "上次那本你看完了吗",
+    ])
+    def test_innocent_book_mentions_pass(self, session, innocent):
+        start_decision(session)
+        ok, _, issues = verify(session, innocent)
+        assert ok, f"书名讨论被误拦: {innocent} -> {issues}"
