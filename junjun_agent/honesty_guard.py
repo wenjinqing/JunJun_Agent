@@ -87,10 +87,15 @@ _CLAIM_RULES: List[Dict] = [
 
 def start_decision(session) -> None:
     """标记新一轮决策开始，工具记录从此时间点起算。"""
-    session._hg_decision_ts = time.time()
+    now = time.time()
+    log = getattr(session, "_tool_log", [])
+    # 决策边界必须严格大于已有记录的时间戳：Windows 上 time.time() 精度只有
+    # ~15ms，同一节拍内「记录工具 -> start_decision」会得到相等时间戳，
+    # 上一轮的工具就被 _recent_tool_names 的 >= 误判进本轮（Linux ns 精度无此问题）
+    last = max((c.get("ts", 0) for c in log), default=0.0)
+    session._hg_decision_ts = max(now, last + 1e-6)
     # 清理过旧的工具记录（保留本轮及上一轮，防止内存无限增长）
     cutoff = session._hg_decision_ts - 3600
-    log = getattr(session, "_tool_log", [])
     session._tool_log = [c for c in log if c.get("ts", 0) > cutoff]
 
 

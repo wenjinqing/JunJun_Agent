@@ -284,7 +284,8 @@ def _apply_context_budget(
             system_parts.append(b.content)
     system_text = "\n\n".join(system_parts)
     if dynamic_parts:
-        system_text += f"\n\n<state>\n{'\n\n'.join(dynamic_parts)}\n</state>"
+        state_body = "\n\n".join(dynamic_parts)  # Py<3.12：f-string 表达式不能含反斜杠
+        system_text += f"\n\n<state>\n{state_body}\n</state>"
 
     messages.append(SystemMessage(content=system_text))
     if bg_block:
