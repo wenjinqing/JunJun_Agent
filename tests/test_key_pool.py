@@ -326,3 +326,17 @@ api_key_env = "SF_POOL"
         models.get_chat_model("agent")
         assert models._slots is cached  # 同一代数：缓存对象不变
         models.reset_slots()
+
+
+class TestTransientFileFailure:
+    """stat 瞬时失败必须保留 last-known-good keys（2026-08-06 审查实锤：
+    文件替换毫秒窗口撞上巡检 -> 池清空 -> 全部池系 LLM 硬失败）。"""
+
+    def test_file_disappears_keeps_keys(self, pool):
+        assert len(pool.healthy_keys()) == 3
+        pool._path.unlink()          # 模拟原子替换的删除窗口
+        keys = pool.healthy_keys()
+        assert len(keys) == 3, "文件暂时不可读时清空了号池"
+        gen = pool.generation
+        pool.healthy_keys()
+        assert pool.generation == gen, "瞬时故障不应触发链重建"

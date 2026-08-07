@@ -136,7 +136,9 @@ def _plain_reply_text(msg) -> str:
     return text
 
 
-_NUDGE_NSFW_WORDS = ("涩图", "色图", "r18", "nsfw")
+# 群聊 NSFW 意图追问豁免词表：必须与 ai_draw 插件的 _R18_MARKERS 保持一致
+# （曾缺「涩涩」：群规说「群里不行」，追问却在喊「必须调用 ai_draw」——对冲）
+_NUDGE_NSFW_WORDS = ("涩图", "色图", "涩涩", "r18", "nsfw")
 
 
 def _intent_nudge(latest_text: str, result_messages: list, available: set,

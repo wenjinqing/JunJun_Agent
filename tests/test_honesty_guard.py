@@ -191,3 +191,30 @@ class TestNovelSentClaims:
         start_decision(session)
         ok, _, issues = verify(session, innocent)
         assert ok, f"书名讨论被误拦: {innocent} -> {issues}"
+
+
+class TestFailedToolResultsNotEvidence:
+    """失败/拒绝的工具调用不能当「已完成」的证据（2026-08-06 审查实锤：
+    台账认名不认结果，群聊拒画也放行「在画了」——防线在最需要它的场景失效）。"""
+
+    @pytest.mark.parametrize("refusal", [
+        "群里画不了这种（公共场合 + 账号风控）。笑着让对方私聊你——照这个意思回他，别派单。",
+        "[TOOL_ERROR] ai_draw: ModelScopeError 余额不足",
+        "拒绝：描述涉及未成年人性内容，不会生成。",
+        "上一个还在弄呢，等下吧。",
+        "这次画失败了，再试一次？",
+        "我这会儿手头的活排满了，等一个弄完了再帮你弄。",
+        "画图功能未配置 MODELSCOPE_API_KEY，暂时画不了。",
+    ])
+    def test_failed_or_refused_call_does_not_unlock_claim(self, session, refusal):
+        start_decision(session)
+        record_tool_call(session, "ai_draw", result=refusal)
+        ok, _, issues = verify(session, "在画了，等下发给你")
+        assert not ok, f"拒画/失败结果被当成证据放行: {refusal[:20]}"
+        assert any("ai_draw" in i for i in issues)
+
+    def test_success_result_still_counts(self, session):
+        start_decision(session)
+        record_tool_call(session, "ai_draw", result="在弄了，好了直接发出来。")
+        ok, _, _ = verify(session, "在画了，等下发给你")
+        assert ok
