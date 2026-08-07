@@ -79,6 +79,20 @@ class TestIntentNudge:
         assert _intent_nudge("今天天气真好", msgs, ALL_TOOLS) is None
         assert _intent_nudge("", msgs, ALL_TOOLS) is None
 
+    def test_group_nsfw_draw_intent_not_nudged(self):
+        """群聊涩图意图不追问（2026-08-06 实锤）：模型不调 ai_draw 是政策正确，
+        追问等于把它往违规上推。私聊照常追问。"""
+        tools = ALL_TOOLS | {"ai_draw"}
+        msgs = [_ai_with_tools()]  # 模型没调任何工具
+        assert _intent_nudge("君君来张涩图", msgs, tools, is_group=True) is None
+        assert _intent_nudge("给我画个色图", msgs, tools, is_group=True) is None
+        # 私聊：意图机制照常工作（NSFW 直通道漏网的措辞靠它兜底）
+        nudge = _intent_nudge("帮我画张涩图", msgs, tools, is_group=False)
+        assert nudge and "ai_draw" in nudge[0]
+        # 群里普通画图意图不受影响
+        nudge = _intent_nudge("帮我画一只猫", msgs, tools, is_group=True)
+        assert nudge and "ai_draw" in nudge[0]
+
     def test_called_tool_names(self):
         msgs = [_ai_with_tools("a", "b"), AIMessage(content="你好")]
         assert _called_tool_names(msgs) == {"a", "b"}

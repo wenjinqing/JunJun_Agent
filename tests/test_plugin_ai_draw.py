@@ -446,3 +446,88 @@ class TestNsfwDrawInterceptor:
         out = await _plugin.nsfw_draw_hit(self._ctx(_plugin, "画一个萝莉涩图"))
         assert out is True                       # 消费掉 + 文本拒绝
         assert "不行" in _env[0].segments[0].data
+
+
+class TestGroupR18HardGate:
+    """群聊 R18 硬门（2026-08-06 实锤「分不清群聊私聊」：群场景此前只靠模型
+    自觉，命令/工具层无兜底）。私聊放开、未成年红线不受此门影响。"""
+
+    def _ctx(self, _plugin, text, is_group=False):
+        from junjun_agent.commands import CommandContext
+        session = SimpleNamespace(
+            platform="qq", is_group=is_group,
+            group_id="999" if is_group else None,
+            chat_id="qq:999:group" if is_group else "qq:12345:private")
+        meta = SimpleNamespace(text=text, user_id="12345", nickname="甲",
+                               at_bot=False, message_id="m1")
+        return CommandContext(session=session, meta=meta, args=text)
+
+    @pytest.fixture
+    def _env(self, _plugin, monkeypatch):
+        monkeypatch.setenv("MODELSCOPE_API_KEY", "sk-test")
+        submitted = []
+
+        async def _fake_submit(**kw):
+            submitted.append(kw)
+            return "在弄了，好了直接发出来。"
+        monkeypatch.setattr(_plugin.task_manager, "submit", _fake_submit)
+        yield submitted
+        _plugin._PENDING.clear()
+        _plugin._last_use.clear()
+
+    @pytest.mark.asyncio
+    async def test_draw_cmd_group_r18_blocked(self, _plugin, _env):
+        """/draw 涩图 xxx 在群里：拒绝文案，绝不派单。"""
+        ctx = self._ctx(_plugin, "涩图 猫娘", is_group=True)
+        ctx.args = "涩图 猫娘"
+        out = await _plugin.draw_cmd(ctx)
+        assert "私聊" in out and "群里不画" in out
+        assert not _env                              # 没派单
+
+    @pytest.mark.asyncio
+    async def test_draw_cmd_private_r18_allowed(self, _plugin, _env):
+        """私聊放开成年向：正常派单。"""
+        ctx = self._ctx(_plugin, "涩图 猫娘")
+        ctx.args = "涩图 猫娘"
+        out = await _plugin.draw_cmd(ctx)
+        assert "在弄了" in out
+        assert len(_env) == 1
+
+    @pytest.mark.asyncio
+    async def test_draw_cmd_group_sfw_anime_allowed(self, _plugin, _env):
+        """群里普通二次元（无 R18 标记）不受硬门影响。"""
+        ctx = self._ctx(_plugin, "动漫 猫娘少女", is_group=True)
+        ctx.args = "动漫 猫娘少女"
+        out = await _plugin.draw_cmd(ctx)
+        assert "在弄了" in out
+        assert len(_env) == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_group_r18_blocked(self, _plugin, _env, monkeypatch):
+        """LLM 在群里违规调 ai_draw：工具层拦死，返回引导婉拒文案。"""
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        token = current_chat_id.set("qq:999:group")
+        try:
+            out = await _plugin.ai_draw.ainvoke({"prompt": "涩图 猫娘"})
+        finally:
+            current_chat_id.reset(token)
+        assert "群里画不了" in out and "私聊" in out
+        assert not _env                              # 没派单
+
+    @pytest.mark.asyncio
+    async def test_tool_private_r18_allowed(self, _plugin, _env, monkeypatch):
+        """私聊工具路径：正常派单。"""
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        token = current_chat_id.set("qq:12345:private")
+        try:
+            out = await _plugin.ai_draw.ainvoke({"prompt": "涩图 猫娘"})
+        finally:
+            current_chat_id.reset(token)
+        assert "在弄了" in out
+        assert len(_env) == 1
+
+    def test_has_r18_marker(self, _plugin):
+        assert _plugin.has_r18_marker("来张涩图")
+        assert _plugin.has_r18_marker("nsfw catgirl")
+        assert not _plugin.has_r18_marker("动漫 猫娘少女")
+        assert not _plugin.has_r18_marker("蓝色的天空")
