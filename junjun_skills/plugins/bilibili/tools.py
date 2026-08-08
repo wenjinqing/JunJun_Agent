@@ -498,19 +498,50 @@ async def _process_to_segments(url: str, keep: "list[Path] | None" = None) -> li
                 logger.warning(f"临时文件清理失败 {p}: {e}")
 
 
+# 成品视频保留 30 分钟再删：给 NapCat 异步读文件/内部重试留足窗口；
+# 超龄清扫阈值 1 小时：延迟删除任务被进程重启吞掉时的兜底
+_FINAL_KEEP_SECONDS = 30 * 60
+_STALE_SECONDS = 60 * 60
+
+
+async def _delayed_unlink(path: Path, delay: float) -> None:
+    """延迟删除成品文件（替代「发送返回即删」的竞态写法）。"""
+    await asyncio.sleep(delay)
+    try:
+        path.unlink(missing_ok=True)
+    except Exception as e:
+        logger.warning(f"成品视频延迟清理失败 {path}: {e}")
+
+
+def _sweep_stale_tmp() -> None:
+    """清扫 TMP_DIR 里超龄文件（延迟删除被重启吞掉时的残留兜底）。"""
+    try:
+        now = time.time()
+        for p in TMP_DIR.glob("*"):
+            try:
+                if p.is_file() and now - p.stat().st_mtime > _STALE_SECONDS:
+                    p.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 async def _submit_process(chat_id: str, url: str) -> str:
     """登记后台解析任务，返回 ack 话术（接受/占线）。下载+转码最坏给 10 分钟。
 
-    成品视频文件：发送成功后由 cleanup 钩子删除（提前删 NapCat 会拿不到文件）。
+    成品视频文件：发送成功后由 cleanup 钩子【延迟】删除——不是立即删！
+    网关把消息交给适配器即返回，NapCat 在那之后才异步按路径读文件，
+    立即删必输竞态（2026-08-08 实锤：迁移新机后 5/5 次发送 NapCat 侧
+    ENOENT，标题+视频整条消息丢干净，任务台账却记「done」）。
     """
+    _sweep_stale_tmp()  # 提交前扫一次超龄残留（延迟删除 + 进程重启的双保险）
     produced: list[Path] = []
 
     async def _cleanup() -> None:
         for p in produced:
-            try:
-                p.unlink(missing_ok=True)
-            except Exception as e:
-                logger.warning(f"成品视频清理失败 {p}: {e}")
+            asyncio.create_task(_delayed_unlink(p, _FINAL_KEEP_SECONDS),
+                                name=f"bili-clean-{p.name}")
 
     return await task_manager.submit(
         kind="bilibili",

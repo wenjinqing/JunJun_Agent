@@ -169,8 +169,8 @@ class TestCommand:
         assert segs[0].type == "text" and "猫猫弹琴" in segs[0].data
         assert segs[1].type == "video"
         assert segs[1].data.endswith(".mp4")
-        # 临时文件已清理
-        assert created and not created[0].exists()
+        # 成品保留（延迟删除：NapCat 在网关返回后才异步读文件，2026-08-08 竞态实锤）
+        assert created and created[0].exists()
 
     @pytest.mark.asyncio
     async def test_dash_merge_path(self, _fake_gateway, monkeypatch, tmp_path):
@@ -194,7 +194,9 @@ class TestCommand:
         assert len(merges) == 1 and merges[0][1] is not None  # 音轨下载成功则参与合并
         segs = _fake_gateway[0].segments
         assert any(s.type == "video" for s in segs)
-        assert not list(tmp_path.iterdir())  # 临时目录已清空
+        # 中间流即删，成品 mp4 保留待延迟删除
+        assert not list(tmp_path.glob("*.m4s"))
+        assert len(list(tmp_path.glob("*.mp4"))) == 1
 
     @pytest.mark.asyncio
     async def test_no_ffmpeg_info_card(self, _fake_gateway, monkeypatch, tmp_path):
@@ -239,7 +241,9 @@ class TestCommand:
         assert len(calls) == 1  # 超时长触发了压缩
         segs = _fake_gateway[0].segments
         assert any(s.type == "video" for s in segs)
-        assert not list(tmp_path.iterdir())
+        # 原片即删，压缩成品保留待延迟删除
+        left = list(tmp_path.glob("*.mp4"))
+        assert len(left) == 1 and left[0].name.endswith("_c.mp4")
 
     @pytest.mark.asyncio
     async def test_over_duration_compress_fail_info_card(self, _fake_gateway, monkeypatch, tmp_path):
@@ -410,3 +414,48 @@ class TestManifest:
         it_plugins = {i["name"]: i["plugin"] for i in interceptors.list_interceptors()}
         assert cmd_plugins.get("bilibili") == "bilibili"
         assert it_plugins.get("bilibili_link") == "bilibili"
+
+
+class TestFinalFileLifecycle:
+    """成品视频文件生命周期（2026-08-08 实锤竞态）：网关把消息交给适配器即
+    返回，NapCat 之后才异步按 file:/// 路径读文件——cleanup 立即删必输竞态
+    （迁移新机后 5/5 次 NapCat ENOENT，标题+视频整条消息丢，台账却记 done）。"""
+
+    @pytest.mark.asyncio
+    async def test_file_survives_send_then_delayed_delete(
+            self, _fake_gateway, monkeypatch, tmp_path):
+        from pathlib import Path
+        bili = _load()
+        monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
+        monkeypatch.setattr(bili, "_FINAL_KEEP_SECONDS", 0.1)  # 缩短延迟便于断言
+        _patch_common(monkeypatch, bili)
+        _fake_download(monkeypatch, bili)
+
+        meta = _meta("https://www.bilibili.com/video/BV1xx411c7mD")
+        consumed = await interceptors.dispatch(_session(), meta)
+        assert consumed is True
+        await _drain()
+        # 发送完成后成品必须还在：NapCat 此刻可能还没读（旧逻辑此处已删=竞态源）
+        videos = [s for rs in _fake_gateway for s in rs.segments if s.type == "video"]
+        assert videos
+        path = Path(videos[0].data)
+        assert path.exists()
+        # 延迟删除到期后清掉
+        await asyncio.sleep(0.5)
+        assert not path.exists()
+
+    def test_sweep_stale_tmp(self, monkeypatch, tmp_path):
+        """超龄残留清扫：进程重启吞掉延迟删除任务时的兜底。"""
+        import os
+        import time
+        bili = _load()
+        monkeypatch.setattr(bili, "TMP_DIR", tmp_path)
+        old = tmp_path / "old.mp4"
+        old.write_bytes(b"x")
+        old_ts = time.time() - 7200
+        os.utime(old, (old_ts, old_ts))
+        fresh = tmp_path / "fresh.mp4"
+        fresh.write_bytes(b"x")
+        bili._sweep_stale_tmp()
+        assert not old.exists()
+        assert fresh.exists()

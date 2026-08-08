@@ -464,9 +464,16 @@ class TestCooldown:
     @pytest.mark.asyncio
     async def test_cooldown(self, monkeypatch):
         async def _fetch(url, referer=""):
+            if "/ajax/illust/" in url:      # attach_bookmarks 详情（client 层）
+                return {"bookmarkCount": 100, "xRestrict": 0}
             return {"illustManga": {"data": [_illust_item(1)]}}
 
         monkeypatch.setattr(illust, "_fetch_json", _fetch)
+        # attach_bookmarks 用 client 模块自己的 _fetch_json——不桩掉就走真实
+        # 网络：本机网络一抖首次调用就超过 5s 冷却窗，断言变气候敏感
+        # （2026-08-08 实锤：pixiv 直连超时把单测拖到 73s，冷却过期翻车）
+        import junjun_skills.plugins.pixiv.client as pixiv_client
+        monkeypatch.setattr(pixiv_client, "_fetch_json", _fetch)
         await illust.pixiv_cmd(_ctx("/pixiv search x"))
         out = await illust.pixiv_cmd(_ctx("/pixiv search x"))
         assert "冷却" in out
