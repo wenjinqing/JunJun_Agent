@@ -758,6 +758,15 @@ def _build_relation_block(session: ChatSession, meta: InboundMeta) -> str:
     return "\n".join(parts)
 
 
+def _queue_addressed(session: ChatSession, meta: InboundMeta) -> bool:
+    """会话队列决策目标判定（Q1）：私聊一律 addressed（取最新即最新 addressed，
+    行为不变）；群聊复用决策门同一套规则（@/昵称/别名直呼），不在队列层重写。"""
+    if not session.is_group:
+        return True
+    from junjun_agent.funnel.rule_gate import is_addressed
+    return is_addressed(meta.text, _l1_config(session), meta.at_bot)
+
+
 async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[ReplySet]:
     """网关 processor 入口：记忆/入库即时完成，决策投递会话队列串行处理。
 
@@ -797,5 +806,6 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
         pass
 
     from junjun_agent.funnel.session_queue import session_queues
-    session_queues.dispatch(session, meta, _handle, pre_handler=_pre_decision)
+    session_queues.dispatch(session, meta, _handle, pre_handler=_pre_decision,
+                            addressed_fn=_queue_addressed)
     return None
