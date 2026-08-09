@@ -47,6 +47,9 @@ ENGINE_MAP: Dict[str, Any] = {
 
 ENGINE_PRIORITY: List[str] = ["google", "bing", "sogou", "duckduckgo", "tavily", "you"]
 
+# 缺可选依赖的引擎（ImportError）：本轮会话永久跳过，不每查询空转刷告警
+_PERMANENTLY_BROKEN: set = set()
+
 
 def _build_engine(name: str) -> Any:
     """Instantiate a search engine by name with optional API keys."""
@@ -65,6 +68,9 @@ async def _search_with_fallback(query: str, num_results: int = 10) -> List[Dict[
     order = [preferred] + [e for e in ENGINE_PRIORITY if e != preferred]
 
     for engine_name in order:
+        if engine_name in _PERMANENTLY_BROKEN:
+            continue  # 缺依赖的引擎不再每次查询空转一轮（2026-08-09：google 缺
+            # googlesearch-python，5 个查询刷 5 条 warning 噪音）
         engine_cls = ENGINE_MAP.get(engine_name)
         if engine_cls is None:
             continue
@@ -86,9 +92,35 @@ async def _search_with_fallback(query: str, num_results: int = 10) -> List[Dict[
                     }
                     for r in results
                 ]
+        except ImportError as exc:
+            _PERMANENTLY_BROKEN.add(engine_name)
+            logger.warning(f"Engine '{engine_name}' 依赖缺失，本轮会话永久跳过: {exc}")
+            continue
         except Exception as exc:
             logger.warning(f"Engine '{engine_name}' failed for query '{query}': {exc}")
             continue
+
+    # 所有引擎的过滤结果都空 -> 最后手段：bing 无过滤裸结果
+    # （相关性过滤是防噪音的不是门禁；宁收噪音不交白卷——但只在链尾，
+    # 不让裸结果截胡后面引擎的过滤结果）
+    try:
+        engine = _build_engine("bing")
+        results = await engine.search_unfiltered(query, num_results)
+        if results:
+            logger.info(f"全链过滤为空，使用 bing 未过滤兜底（{len(results)} 条）: '{query}'")
+            return [
+                {
+                    "title": r.title,
+                    "url": r.url,
+                    "snippet": r.snippet,
+                    "abstract": r.abstract,
+                    "rank": r.rank,
+                    "content": r.content,
+                }
+                for r in results
+            ]
+    except Exception as exc:
+        logger.warning(f"未过滤兜底失败 '{query}': {exc}")
 
     logger.error(f"All search engines failed for query: {query}")
     return []
@@ -101,6 +133,12 @@ async def _search_with_fallback(query: str, num_results: int = 10) -> List[Dict[
 async def web_search(query: str, num_results: int = 10) -> str:
     """上网搜索实时信息。当用户问「帮我搜一下」「查一下」「XXX 是什么」「XXX 什么时候」、
     需要最新新闻/资料/时间敏感信息时使用（区别于 search_knowledge 查本地知识库）。
+
+    【query 怎么写】用搜索关键词风格，不要把用户的原话拆块填进去：
+    - 短、具体、名词/专名为主（3-6 个词），去掉「谁/怎么/为什么/告诉我」等口语壳
+    - 坏例：「斐波那契数列通项公式 推导历史 谁推导出来的」（原话拆块，引擎匹配差）
+    - 好例：「斐波那契 通项公式 Binet 推导」
+    - 一次没搜到就换同义词/换角度再搜，不要原样重试
 
     Args:
         query: 搜索关键词

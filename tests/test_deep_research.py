@@ -181,6 +181,112 @@ class TestHandler:
                 synth_model=_FakeModel(""), search=None, fetch=None)
 
 
+class TestReflectRound:
+    """反思轮（2026-08-09 宁德事故）：材料薄 -> 改写查询再搜，不再一轮定终身。"""
+
+    def _job(self, title="研究主题"):
+        return type("J", (), {"job_id": "abc123", "chat_id": CHAT,
+                              "title": title, "kind": "deep_research"})()
+
+    class _TwoPhaseModel:
+        """第一次调用返回旧查询，第二次（反思）返回新查询。"""
+
+        def __init__(self):
+            self.calls = 0
+
+        async def ainvoke(self, messages, config=None):
+            self.calls += 1
+            content = '["旧查询1", "旧查询2"]' if self.calls == 1 else '["新查询A", "新查询B"]'
+            return type("R", (), {"content": content})()
+
+    @pytest.mark.asyncio
+    async def test_thin_materials_trigger_second_round(self, env):
+        """首轮材料薄 -> 反思改写 -> 第二轮结果合并进综述。"""
+        async def fake_search(q, num):
+            if q.startswith("旧"):
+                return [{"title": "t", "url": "http://old", "snippet": "s"}]
+            return [{"title": f"t-{q}", "url": f"http://{q}", "snippet": f"s-{q}"}]
+
+        async def fake_fetch(url, max_chars):
+            return f"全文:{url}"
+
+        model = self._TwoPhaseModel()
+        out = await research.deep_research_handler(
+            self._job(), {"topic": "宁德到深圳怎么去"},
+            plan_model=model, synth_model=_FakeModel("反思后报告"),
+            search=fake_search, fetch=fake_fetch)
+        assert out == "反思后报告"
+        assert model.calls == 2  # 规划 + 反思各一次
+
+    @pytest.mark.asyncio
+    async def test_duplicate_replan_breaks(self, env):
+        """反思给出的查询全是重复的 -> 不再烧一轮检索。"""
+        searches = []
+
+        async def fake_search(q, num):
+            searches.append(q)
+            return [{"title": "t", "url": "http://only", "snippet": "s"}]
+
+        async def fake_fetch(url, max_chars):
+            return ""
+
+        out = await research.deep_research_handler(
+            self._job(), {"topic": "某主题"},
+            plan_model=_FakeModel('["一样的查询"]'),  # 规划和反思返回同一查询
+            synth_model=_FakeModel("报告"),
+            search=fake_search, fetch=fake_fetch)
+        assert out == "报告"
+        assert searches == ["一样的查询"]  # 只搜了一轮
+
+    @pytest.mark.asyncio
+    async def test_empty_first_round_reflects_before_giving_up(self, env):
+        """首轮全空不再直接认输：反思改写后第二轮有货 -> 正常出报告。"""
+        async def fake_search(q, num):
+            if q == "死路查询":
+                return []
+            return [{"title": "t", "url": "http://new", "snippet": "s"}]
+
+        async def fake_fetch(url, max_chars):
+            return "全文"
+
+        class _Model:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages, config=None):
+                self.calls += 1
+                return type("R", (), {"content": '["死路查询"]' if self.calls == 1
+                                      else '["活路查询"]'})()
+
+        out = await research.deep_research_handler(
+            self._job(), {"topic": "冷门主题"},
+            plan_model=_Model(), synth_model=_FakeModel("绝处逢生报告"),
+            search=fake_search, fetch=fake_fetch)
+        assert out == "绝处逢生报告"
+
+    @pytest.mark.asyncio
+    async def test_rich_materials_no_waste(self, env):
+        """误判回归：首轮材料充足 -> 不触发反思（不白烧规划+检索）。"""
+        searches = []
+
+        async def fake_search(q, num):
+            searches.append(q)
+            return [{"title": f"t-{q}-{i}", "url": f"http://{q}{i}", "snippet": "s"}
+                    for i in range(2)]
+
+        async def fake_fetch(url, max_chars):
+            return "全文"
+
+        model = _FakeModel('["q1", "q2", "q3"]')
+        out = await research.deep_research_handler(
+            self._job(), {"topic": "材料充足的主题"},
+            plan_model=model, synth_model=_FakeModel("报告"),
+            search=fake_search, fetch=fake_fetch)
+        assert out == "报告"
+        assert len(searches) == 3  # 只有首轮的 3 个查询
+        assert len(model.prompts) == 1  # 规划器只被调一次
+
+
 class TestTool:
     def test_deep_research_tool_submits(self, env):
         """LLM 工具入口：contextvar 路由 -> 落表 pending。"""

@@ -87,7 +87,19 @@ class BingEngine(BaseSearchEngine):
                 pieces.extend(words)
             else:
                 pieces.append(token)
-        return [p for p in pieces if len(p) >= 2]
+        # \u957f\u4e2d\u6587\u4e32\uff08\u22655 \u5b57\uff09\u53e0\u52a0 bigram\uff082026-08-09 \u5b9e\u9524\uff1a\u300c\u5b81\u5fb7\u5230\u6df1\u5733\u300d\u6574\u4e32
+        # \u5f53\u4e00\u4e2a\u5173\u952e\u8bcd\uff0c\u7ed3\u679c\u5199\u300c\u5b81\u5fb7\u81f3\u6df1\u5733\u300d\u300c\u5b81\u5fb7\u5230\u6df1\u5733\u5317\u300d\u5c31\u96f6\u547d\u4e2d\uff0c5 \u4e2a
+        # \u67e5\u8be2 3 \u4e2a\u88ab\u8fc7\u6ee4\u6e05\u96f6\uff09\u2014\u2014bigram \u8ba9\u57ce\u5e02/\u4e8b\u7269\u540d\u72ec\u7acb\u547d\u4e2d\u3002\u4f1a\u4ea7\u751f\u5c11\u91cf
+        # \u566a\u97f3\u7247\u6bb5\uff08\u300c\u5fb7\u5230\u300d\uff09\uff0c\u4f46\u8fc7\u6ee4\u8bed\u4e49\u662f\u300c\u81f3\u5c11\u547d\u4e2d\u4e00\u4e2a\u300d\uff0c\u566a\u97f3\u65b9\u5411\u662f
+        # \u653e\u8fc7\u4e0d\u662f\u9519\u6740\uff0c\u53ef\u63a5\u53d7\u3002
+        out: List[str] = []
+        for p in pieces:
+            if len(p) < 2:
+                continue
+            out.append(p)
+            if re.fullmatch(r"[\u4e00-\u9fff]{5,}", p):
+                out.extend(p[i:i + 2] for i in range(len(p) - 1))
+        return out
 
     def _is_relevant(self, title: str, snippet: str, url: str, keywords: List[str]) -> bool:
         """粗粒度过滤：标题/摘要/URL 命中至少一个关键词即通过。"""
@@ -205,6 +217,21 @@ class BingEngine(BaseSearchEngine):
                 results.append(SearchResult(title=title, url=url, snippet=snippet, abstract=snippet, rank=idx))
         return results
 
+    def _parse_page_unfiltered(self, soup: BeautifulSoup) -> List[SearchResult]:
+        """不过滤的解析（过滤清零时的保守回退——宁可收噪音，不可错杀）。"""
+        links = self._get_link_elements(soup)
+        results: List[SearchResult] = []
+        for idx, link in enumerate(links):
+            title_elem = self._select_with_fallback(link, "title")
+            url_elem = self._select_with_fallback(link, "url")
+            text_elem = self._select_with_fallback(link, "text")
+            title = self.tidy_text(title_elem.text) if title_elem else ""
+            url = self._normalize_url(url_elem.get("href") if url_elem else "")
+            snippet = self.tidy_text(text_elem.text) if text_elem else ""
+            if title and url and not self._is_blocked(url):
+                results.append(SearchResult(title=title, url=url, snippet=snippet, abstract=snippet, rank=idx))
+        return results
+
     async def search(self, query: str, num_results: int) -> List[SearchResult]:
         """执行搜索，使用多区域尝试与选择器回退。"""
         try:
@@ -216,13 +243,16 @@ class BingEngine(BaseSearchEngine):
                     "setlang": self.setlang,
                     "market": self.region,
                 },
-                {
+            ]
+            # 纯中文查询不试 en-US 变体（中文词在英文市场返回的多是无关结果，
+            # 白烧一次请求——2026-08-09 日志实锤三个中文查询空转 en 变体）
+            if re.search(r"[a-zA-Z]", query):
+                fetch_variants.append({
                     "base_url": self.base_urls[1] if len(self.base_urls) > 1 else self.base_urls[0],
                     "region": "en-US",
                     "setlang": "en",
                     "market": "en-US",
-                },
-            ]
+                })
 
             results: List[SearchResult] = []
             for variant in fetch_variants:
@@ -240,6 +270,22 @@ class BingEngine(BaseSearchEngine):
             return results[:num_results]
         except Exception as e:
             logger.error(f"Error in Bing search for query {query}: {e}", exc_info=True)
+            return []
+
+    async def search_unfiltered(self, query: str, num_results: int) -> List[SearchResult]:
+        """无过滤裸搜索：fallback 链全空后的最后手段（由调用方决定是否使用）——
+        相关性过滤是防噪音的不是门禁，但无过滤结果不该在链内截胡后面引擎的
+        过滤结果（2026-08-09 实测：裸结果截胡导致 DNS 问答顶掉交通查询）。"""
+        try:
+            resp = await self._get_next_page(
+                query, base_url=self.base_urls[0],
+                region=self.region, setlang=self.setlang, market=self.region)
+            soup = BeautifulSoup(resp, "html.parser")
+            results = self._parse_page_unfiltered(soup)
+            logger.info(f"未过滤兜底返回 {len(results[:num_results])} 条: '{query}'")
+            return results[:num_results]
+        except Exception as e:
+            logger.warning(f"未过滤兜底搜索失败 '{query}': {type(e).__name__}: {e}")
             return []
 
     async def search_images(self, query: str, num_results: int) -> List[Dict[str, str]]:

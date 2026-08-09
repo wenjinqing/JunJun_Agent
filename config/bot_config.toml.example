@@ -314,6 +314,9 @@ max_replans = 1          # 失败后最多局部重规划几次
 [deep_research]
 queries = 5           # 规划拆出的搜索查询数
 pages_per_query = 2   # 每个查询取前几篇读原文（URL 全局去重）
+max_rounds = 2        # 材料薄时反思改写查询再搜的最大轮数（1=不反思）
+min_items = 4         # 触发反思的材料条数阈值
+min_fulltext = 2      # 触发反思的「读到全文」条数阈值
 fetch_max_chars = 3000  # 单篇原文截断（防综述输入爆炸）
 report_max_chars = 1000 # 报告正文目标长度（加上来源列表后仍需 < async_task.report_max_chars）
 

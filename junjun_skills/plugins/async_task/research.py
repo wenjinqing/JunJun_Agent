@@ -21,8 +21,21 @@ from junjun_core.observability import get_logger
 logger = get_logger("plugin.deep_research")
 
 _PLAN_PROMPT = """你是研究规划师。把研究主题拆成 {n} 个互补的搜索查询。
-覆盖角度：基础概念/现状数据/对比或争议/最新进展（按主题性质取舍）。
+要求：
+- 查询用搜索关键词风格（短、具体），不要写成长句
+- 角度按主题性质取舍：事实数据/方案对比/经验推荐/最新进展
+- 交通票价时刻类带上平台词更容易命中（如 12306、携程）
+- 攻略推荐类带「攻略/推荐/最新」类词
 主题：{topic}
+只输出 JSON 数组：["查询1", "查询2", ...]，不要输出别的。"""
+
+_REFLECT_PROMPT = """你是研究规划师。围绕主题「{topic}」的第一轮搜索用了这些查询：
+{queries}
+但收获太薄（仅 {got} 条材料，多数没读到正文）。改写出 {n} 个新查询：
+- 换说法/换同义词（至↔到、简称↔全称、加/去站点后缀如「北站」）
+- 换成更口语、更短的关键词组合
+- 交通票价时刻类带平台词（12306/携程），攻略类带「攻略/推荐」
+- 不要重复上面已用过的查询
 只输出 JSON 数组：["查询1", "查询2", ...]，不要输出别的。"""
 
 _SYNTH_PROMPT = """你是研究报告撰写者。基于检索材料写一份中文研究报告。
@@ -111,6 +124,34 @@ async def _plan(topic: str, model=None) -> list:
         return [topic]
 
 
+def _materials_thin(items: list) -> bool:
+    """材料是否薄到需要反思重搜（2026-08-09 宁德事故：一轮定终身，
+    检索措辞与网页措辞错位就只能写「没查到」）。阈值可配。"""
+    min_items = int(_cfg().get("min_items", 4))
+    min_fulltext = int(_cfg().get("min_fulltext", 2))
+    got = sum(1 for it in items if it["content"])
+    return len(items) < min_items or got < min_fulltext
+
+
+async def _replan(topic: str, old_queries: list, got: int, model=None) -> list:
+    """反思轮：把第一轮的薄收获告诉规划器，换措辞改写查询。"""
+    n = int(_cfg().get("queries", 5))
+    try:
+        if model is None:
+            from junjun_llm import get_chat_model
+            model = get_chat_model("utils")
+        from langchain_core.messages import HumanMessage
+        resp = await model.ainvoke([HumanMessage(content=_REFLECT_PROMPT.format(
+            topic=topic, queries="\n".join(f"- {q}" for q in old_queries),
+            got=got, n=n))])
+        fresh = _parse_queries(str(resp.content), topic, n)
+        new = [q for q in fresh if q not in old_queries and q != topic]
+        return new or []   # 全重复 = 规划器想不出新角度，别再烧一轮检索
+    except Exception as e:
+        logger.warning(f"反思改规划失败（沿用首轮结果）: {type(e).__name__}: {e}")
+        return []
+
+
 async def _collect(queries: list, *, search=None, fetch=None) -> list:
     """检索 + 读全文。返回 [{title,url,snippet,content}]，URL 全局去重。"""
     search = search or _default_search
@@ -177,6 +218,21 @@ async def deep_research_handler(job, payload: dict, *, plan_model=None,
     queries = await _plan(topic, plan_model)
     logger.info(f"深度研究 [{job.job_id}] 主题「{topic[:30]}」拆出 {len(queries)} 个查询")
     items = await _collect(queries, search=search, fetch=fetch)
+    # 反思轮（2026-08-09 宁德事故）：材料薄/全空不再一轮定终身——
+    # 把薄收获告诉规划器改写措辞再搜，最多 max_rounds 轮（成本兜底）
+    max_rounds = int(_cfg().get("max_rounds", 2))
+    round_no = 1
+    while round_no < max_rounds and _materials_thin(items):
+        round_no += 1
+        new_queries = await _replan(topic, queries, len(items), plan_model)
+        if not new_queries:
+            break
+        logger.info(f"深度研究 [{job.job_id}] 材料薄（{len(items)} 条），"
+                    f"反思改写再搜 {len(new_queries)} 个查询")
+        queries.extend(new_queries)
+        seen = {it["url"] for it in items}
+        more = await _collect(new_queries, search=search, fetch=fetch)
+        items.extend(it for it in more if it["url"] not in seen)
     if not items:
         raise RuntimeError("所有搜索引擎都没查到东西，换个说法试试")
     return await _synthesize(topic, items, synth_model)
