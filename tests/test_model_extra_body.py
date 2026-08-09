@@ -1,7 +1,8 @@
 """extra_body 透传测试（2026-08-09 ***REMOVED*** 换模）：
-硅基推理模型默认开 thinking（实测一句 hi 烧 214 reasoning tokens），
-agent 槽 max_tokens=2048 会被思考 token 挤爆 -> 条目级 extra_body
-（enable_thinking=false）必须能从 toml 一路透传到 ChatOpenAI。
+硅基推理模型默认开思考（实测一句 hi 白烧 ~180 计费 reasoning tokens，
+延迟 1.0s->3.8s），高频闲聊槽纯浪费 -> 条目级 extra_body
+（GLM 认 thinking={"type":"disabled"}，不认 enable_thinking=false）
+必须能从 toml 一路透传到 ChatOpenAI。
 """
 
 import junjun_llm.models as models
@@ -21,7 +22,7 @@ max_tokens = 2048
 base_url_env = "SF_LLM_BASE_URL"
 model_env = "SF_GLM_MODEL"
 api_key_env = "SILICONFLOW_API_KEY"
-extra_body = { enable_thinking = false }
+extra_body = { thinking = { type = "disabled" } }
 [[task.agent.models]]
 base_url_env = "DS_BASE_URL"
 model_env = "DS_MODEL"
@@ -40,15 +41,15 @@ class TestExtraBody:
         monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
         models.reset_slots()
         specs = models._load_slots()["agent"].specs
-        assert specs[0].extra_body == {"enable_thinking": False}
+        assert specs[0].extra_body == {"thinking": {"type": "disabled"}}
         assert specs[1].extra_body == {}  # 无 extra_body 的条目不受污染
         models.reset_slots()
 
     def test_build_chat_passes_extra_body(self):
         spec = models.ModelSpec(base_url="https://x/v1", model="m", api_key="k",
-                                extra_body={"enable_thinking": False})
+                                extra_body={"thinking": {"type": "disabled"}})
         chat = models._build_chat(spec)
-        assert chat.extra_body == {"enable_thinking": False}
+        assert chat.extra_body == {"thinking": {"type": "disabled"}}
 
     def test_build_chat_empty_extra_body_is_none(self):
         """空 extra_body 传 None（不往请求体塞空对象，行为与旧版完全一致）。"""
@@ -62,7 +63,7 @@ class TestExtraBody:
 base_url_env = "SF_LLM_BASE_URL"
 model_env = "SF_GLM_MODEL"
 api_key_env = "SF_POOL"
-extra_body = { enable_thinking = false }
+extra_body = { thinking = { type = "disabled" } }
 """)
         monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
         monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.siliconflow.cn/v1")
@@ -72,5 +73,5 @@ extra_body = { enable_thinking = false }
         models.reset_slots()
         specs = models._load_slots()["agent"].specs
         assert len(specs) == 2
-        assert all(s.extra_body == {"enable_thinking": False} for s in specs)
+        assert all(s.extra_body == {"thinking": {"type": "disabled"}} for s in specs)
         models.reset_slots()
