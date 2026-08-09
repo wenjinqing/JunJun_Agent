@@ -178,6 +178,42 @@ class TestErrorFeedbackWrap:
         assert "权限不足" in out
 
 
+class TestToolTimeout:
+    """工具统一超时 + 按工具放宽（[tools.timeout_overrides]）。
+
+    背景：send_feed(with_image=True) 内联跑画图全链（典型 60-90s），
+    60s 一刀切会在 wait_for 处砍成 TimeoutError（2026-08-09 实锤）。
+    """
+
+    def _set_tools_cfg(self, monkeypatch, cfg):
+        from junjun_core.config import get_global_config
+        monkeypatch.setitem(get_global_config().raw, "tools", cfg)
+
+    def test_default_60_when_missing(self, monkeypatch):
+        self._set_tools_cfg(monkeypatch, {})
+        assert registry._tool_timeout() == 60
+        assert registry._tool_timeout("send_feed") == 60
+
+    def test_global_timeout_honored(self, monkeypatch):
+        self._set_tools_cfg(monkeypatch, {"timeout_seconds": 90})
+        assert registry._tool_timeout("anything") == 90
+
+    def test_per_tool_override(self, monkeypatch):
+        self._set_tools_cfg(monkeypatch, {
+            "timeout_seconds": 60,
+            "timeout_overrides": {"send_feed": 240},
+        })
+        assert registry._tool_timeout("send_feed") == 240
+        # 未列名的工具不受放宽影响（放宽必须显式，防随口扩大）
+        assert registry._tool_timeout("ai_draw") == 60
+        assert registry._tool_timeout() == 60
+
+    def test_bad_override_falls_back_to_60(self, monkeypatch):
+        """覆盖值写错了宁可回 60 兜底，也不让坏配置穿透成无限等待。"""
+        self._set_tools_cfg(monkeypatch, {"timeout_overrides": {"send_feed": "abc"}})
+        assert registry._tool_timeout("send_feed") == 60
+
+
 class TestFallbackMapPrompt:
     """换乘地图进 system prompt（persona rules）。"""
 

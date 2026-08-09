@@ -155,17 +155,27 @@ def _tool_error_text(tool_name: str, e: BaseException) -> str:
     return f"[TOOL_ERROR kind={kind}] 工具 {tool_name} 执行失败：{type(e).__name__}: {detail}"
 
 
-def _tool_timeout() -> float:
+def _tool_timeout(name: str = "") -> float:
     """工具调用统一超时（[tools] timeout_seconds，默认 60s）。
 
     此前工具超时全靠各插件自觉（30s/15s 各有各的魔法数，漏写的就是
     无限挂起占住会话 worker——单事件循环上一个卡死的工具拖死全 bot，
     严厉审查 M5）。registry 层统一兜底；个别慢工具（看视频/调研派单
     本身是秒回的派单动作）不受影响。
+
+    个别确实慢的工具在 [tools.timeout_overrides] 单独放宽：
+    send_feed(with_image=True) 内联串行跑「等/画图→下载→上传→发布」全链，
+    典型 60-90s，60s 一刀切等于禁掉所有配图说说（2026-08-09 TimeoutError 实锤）。
     """
     try:
         from junjun_core.config import get_global_config
-        return float(get_global_config().raw.get("tools", {}).get("timeout_seconds", 60))
+        tools_cfg = get_global_config().raw.get("tools", {})
+        default = float(tools_cfg.get("timeout_seconds", 60))
+        if name:
+            override = (tools_cfg.get("timeout_overrides") or {}).get(name)
+            if override is not None:
+                return float(override)
+        return default
     except Exception:
         return 60.0
 
@@ -182,7 +192,7 @@ def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
             from junjun_skills import health, patches
             try:
                 result = await asyncio.wait_for(_orig(*args, **kwargs),
-                                                timeout=_tool_timeout())
+                                                timeout=_tool_timeout(name))
             except Exception as e:
                 health.record_fail(name, _classify_error(e), str(e))
                 patches.log_failure(name, _classify_error(e), str(e))
