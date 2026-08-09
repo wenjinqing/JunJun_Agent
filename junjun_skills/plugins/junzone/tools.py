@@ -961,11 +961,15 @@ def _incr_daily_reply() -> None:
 @tool("send_feed")
 async def send_feed_tool(content: str, with_image: bool = False) -> str:
     """在自己的 QQ 空间发一条说说（类似朋友圈）。想记录心情/分享见闻/用户要求发说说时用。
+
+    【重要】用户说「画好发到空间 / 画一张发说说」时，只调本工具
+    （with_image=True）就够了——说说发出后对方在空间就能看到图，
+    不需要再把图发到聊天里，不要再调 ai_draw（2026-08-09 eval 实锤：
+    模型出于「过度热情」补调 ai_draw 想把图也发聊天，结果画两张）。
+
     content 就是说说正文（口语自然、可适当颜文字，不要 @ 和引号包裹）。
     空间不支持语音和视频，不要承诺发语音说说；with_image=True 会根据正文自动生成
     一张 AI 配图一起发（较慢，适合风景/心情/二次元主题）。
-    要配图时直接 with_image=True 即可——本工具内部会自己画图，不要再单独调 ai_draw，
-    否则会画出两张图。
 
     Args:
         content: 说说正文（100 字内效果最好）
