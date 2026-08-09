@@ -148,11 +148,29 @@ def _classify_error(e: BaseException) -> str:
     return "未知"
 
 
+# 各错误类别的默认恢复指引（P1）：告诉模型「接下来怎么办」，不只是「出了什么事」。
+# 插件可在异常上挂 .tool_suggestion 覆写（如限流带具体等待秒数）。
+_DEFAULT_SUGGESTIONS = {
+    "网络": "可原样重试一次；再失败就放弃，向用户说明是网络/接口问题，稍后再试",
+    "限流": "不要立刻重试，至少等 60 秒；告知用户触发限流，稍后再来",
+    "权限": "重试无意义；放弃并向用户说明权限不足/需要管理员处理",
+    "参数": "不要原样重试；修正参数后再调一次，拿不准就放弃并向用户问清需求",
+    "未知": "可原样重试一次；再失败就放弃并向用户坦白失败了",
+}
+
+
 def _tool_error_text(tool_name: str, e: BaseException) -> str:
     kind = _classify_error(e)
     logger.warning(f"工具 {tool_name} 异常[{kind}]: {type(e).__name__}: {e}")
     detail = str(e).replace("\n", " ")[:150]
-    return f"[TOOL_ERROR kind={kind}] 工具 {tool_name} 执行失败：{type(e).__name__}: {detail}"
+    # P1（2026-08-09）：错误不止要分类，还要给「接下来怎么办」——只有 kind
+    # 时模型的重试/等待/放弃策略全靠猜（业界对齐：12-Factor Agents Factor 9
+    # 的 suggestion 字段、LangChain 可操作错误文案）。插件在异常上挂
+    # .tool_suggestion 可覆写默认指引（如限流带具体秒数）。
+    suggestion = getattr(e, "tool_suggestion", "") or _DEFAULT_SUGGESTIONS.get(kind, "")
+    sug_part = f' suggestion="{suggestion}"' if suggestion else ""
+    return (f"[TOOL_ERROR kind={kind}{sug_part}] 工具 {tool_name} "
+            f"执行失败：{type(e).__name__}: {detail}")
 
 
 def _tool_timeout(name: str = "") -> float:

@@ -120,7 +120,7 @@ class TestErrorFeedbackWrap:
 
         registry.register(flaky_async)
         out = asyncio.run(flaky_async.ainvoke({"x": "1"}))
-        assert out.startswith("[TOOL_ERROR kind=网络]")
+        assert out.startswith("[TOOL_ERROR kind=网络")
         assert "flaky_async" in out
 
     def test_sync_tool_error_structured(self):
@@ -135,7 +135,7 @@ class TestErrorFeedbackWrap:
 
         registry.register(flaky_sync)
         out = flaky_sync.invoke({"x": "1"})
-        assert out.startswith("[TOOL_ERROR kind=参数]")
+        assert out.startswith("[TOOL_ERROR kind=参数")
 
     def test_normal_return_passthrough(self):
         registry.register(dummy_skill)
@@ -153,8 +153,8 @@ class TestErrorFeedbackWrap:
 
         registry.register(noisy)
         out = noisy.invoke({"x": "1"})
-        assert out.startswith("[TOOL_ERROR kind=未知]")
-        assert len(out) < 250  # 前缀 + 类型名 + 截断 150，不灌爆上下文
+        assert out.startswith("[TOOL_ERROR kind=未知")
+        assert len(out) < 350  # 前缀 + suggestion + 类型名 + 截断 150，不灌爆上下文
 
     def test_admin_gate_inside_error_wrap(self, monkeypatch):
         """admin 门 + 错误层共存：非管理员仍拿到权限拒绝文本（不是 TOOL_ERROR）。"""
@@ -176,6 +176,37 @@ class TestErrorFeedbackWrap:
         set_caller("", at_bot=False, is_group=True)
         # 非管理员 -> 权限门先触发，错误层不影响
         assert "权限不足" in out
+
+
+class TestErrorSuggestion:
+    """P1（2026-08-09）：错误文本必须带 suggestion 恢复指引——
+    只给 kind 时模型的重试/等待/放弃策略全靠猜。"""
+
+    def test_default_suggestion_by_kind(self):
+        import httpx
+        out = registry._tool_error_text("some_tool", httpx.ReadTimeout("slow"))
+        assert 'suggestion="' in out
+        assert "重试" in out
+
+    def test_every_kind_has_suggestion(self):
+        for kind in ("网络", "限流", "权限", "参数", "未知"):
+            assert registry._DEFAULT_SUGGESTIONS.get(kind), f"缺 {kind} 的指引"
+
+    def test_plugin_override_via_exception_attr(self):
+        """插件在异常上挂 .tool_suggestion 可覆写默认指引（如限流带秒数）。"""
+        e = RuntimeError("rate limited")
+        e.tool_suggestion = "等 120 秒再试，别立刻重试"
+        out = registry._tool_error_text("some_tool", e)
+        assert "等 120 秒再试" in out
+        assert registry._DEFAULT_SUGGESTIONS["未知"] not in out
+
+    def test_limit_suggestion_mentions_wait(self):
+        import httpx
+        req = httpx.Request("GET", "http://x.test/")
+        resp = httpx.Response(429, request=req)
+        out = registry._tool_error_text("some_tool",
+                                        httpx.HTTPStatusError("err", request=req, response=resp))
+        assert "kind=限流" in out and "60" in out
 
 
 class TestToolTimeout:
