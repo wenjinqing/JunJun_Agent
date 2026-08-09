@@ -194,6 +194,71 @@ class TaskManager:
         except Exception:
             return 4
 
+    @staticmethod
+    def _agent_report_enabled() -> bool:
+        """[tasks] agent_report（默认开）：结局让 Agent 亲口播报而不是静态模板。"""
+        try:
+            from junjun_core.config import get_global_config
+            return bool(get_global_config().raw.get("tasks", {}).get("agent_report", True))
+        except Exception:
+            return True
+
+    async def _voice_outcome(self, chat_id: str, kind: str, ok: bool,
+                             detail: str, elapsed: float,
+                             context: str = "") -> Optional[str]:
+        """P0（2026-08-09 反馈闭环）：任务结局交给 Agent 亲口播报。
+
+        此前结局是静态模板直发，Agent 全程无机会开口——「画失败了，再试一次？」
+        不像人话，也不会给原因和建议。现在用一次轻量裸模型调用（不挂工具）
+        让君君用自己的口吻交代结果。
+
+        红线（业界实锤教训）：
+        - 事件**不进 STM、不当用户消息**（Hermes 幻影轮/Codex 错轮注入）——
+          只是本轮 LLM 的一次性输入；播报结果由 _record_outcome 以 bot 身份记 STM；
+        - **不挂工具**的裸模型调用——播报轮不许再触发动作
+          （防「画失败了 → 播报轮又画一张」的套娃）；
+        - 任何异常/超时/空输出/回声 -> None，调用方回退静态模板——结局绝不能丢；
+        - 会话已淘汰（拿不到 agent 模型引用）-> None，不新建模型客户端（防连接池泄漏）。
+        """
+        if not self._agent_report_enabled():
+            return None
+        try:
+            from junjun_core.gateway.session_manager import get_session_manager
+            session = get_session_manager().all_sessions().get(chat_id)
+            model = getattr(getattr(session, "agent", None), "_model", None)
+            if session is None or model is None:
+                return None
+            from langchain_core.messages import HumanMessage, SystemMessage
+            from junjun_agent.persona import build_system_prompt
+            what = _kind_cn(kind) + (f"「{context[:30]}」" if context else "")
+            if ok:
+                event = (f"[系统事件] 你刚才帮对方{what}的任务完成了（耗时 {elapsed:.0f} 秒）。"
+                         "用你自己的口吻告诉对方一声，一两句话，自然一点；"
+                         "不要提「系统事件」四个字，不要复述技术细节。")
+            else:
+                event = (f"[系统事件] 你刚才帮对方{what}的任务失败了"
+                         f"（{detail or '原因未知'}，耗时 {elapsed:.0f} 秒）。"
+                         "用你自己的口吻告诉对方没办成、大概什么原因、可以怎么办，两三句话；"
+                         "不要提「系统事件」四个字，不许假装成功了。")
+            resp = await asyncio.wait_for(
+                model.ainvoke([SystemMessage(content=build_system_prompt(
+                                   is_group=bool(session.is_group))),
+                               HumanMessage(content=event)]),
+                timeout=30.0)
+            text = resp.content or ""
+            if isinstance(text, list):
+                text = "".join(b.get("text", "") for b in text if isinstance(b, dict))
+            text = text.strip()
+            if "</think>" in text:
+                text = text.split("</think>")[-1].strip()
+            if not text or "[系统事件]" in text or len(text) > 200:
+                return None
+            return text
+        except Exception as e:
+            logger.info(f"[{chat_id}] 结局 Agent 播报失败，回退静态模板: "
+                        f"{type(e).__name__}: {e}")
+            return None
+
     def running_count(self) -> int:
         return sum(1 for t in self._running.values() if not t.done())
 
@@ -234,6 +299,7 @@ class TaskManager:
         busy_text: str = "",
         timeout: float = _DEFAULT_TIMEOUT,
         chat_id: str = "",
+        context: str = "",
         cleanup: "Callable[[], Awaitable[None]] | None" = None,
     ) -> str:
         """登记后台任务，返回应作为工具返回值的话术。
@@ -241,6 +307,7 @@ class TaskManager:
         work: 异步可调用，成功返回内容段列表，失败/超时返回 None 或抛异常。
         cleanup: 发送尝试之后调用的收尾钩子（无论成败）——成品文件（视频等）
                  必须等发送后才删，用这个钩子，不要在 work 的 finally 里删。
+        context: 任务主题（如画图 prompt）——Agent 播报结局时知道「哪件事」。
         返回值：接受时为 ack_text（由调用方原样 return）；占线时为占线话术。
         """
         chat_id = chat_id or self._current_chat_id()
@@ -283,6 +350,13 @@ class TaskManager:
                     else:
                         pool = _DONE_TEMPLATES.get(kind, _DONE_TEMPLATES["_default"])
                         text = random.choice(pool) if pool else ""
+                    if text:
+                        # P0：有话术位的结局让 Agent 亲口播报（空文本池的成品
+                        # 保持「内容即话术」，不画蛇添足）；失败回退模板
+                        voiced = await self._voice_outcome(
+                            chat_id, kind, True, "", elapsed, context)
+                        if voiced:
+                            text = voiced
                     out = ([ReplySegment(type="text", data=text)] if text else []) + segments
                     sent = await self._send(chat_id, out)
                     logger.info(f"[{chat_id}] {kind} 后台任务完成，已直发（{elapsed:.1f}s）")
@@ -291,12 +365,17 @@ class TaskManager:
                                          said=text)
                 else:
                     sent = False
+                    text = fail_text
                     if fail_text:
-                        sent = await self._send(chat_id, [ReplySegment(type="text", data=fail_text)])
+                        voiced = await self._voice_outcome(
+                            chat_id, kind, False, err_detail, elapsed, context)
+                        if voiced:
+                            text = voiced
+                        sent = await self._send(chat_id, [ReplySegment(type="text", data=text)])
                     logger.info(f"[{chat_id}] {kind} 后台任务失败，已发降级文案（{elapsed:.1f}s）")
                     self._record_outcome(chat_id, kind, "failed",
                                          (err_detail or "无产出") + ("" if sent else "，降级文案也没发出去"),
-                                         said=fail_text if sent else "")
+                                         said=text if sent else "")
             finally:
                 # 成品文件等「发送尝试之后」才清理——提前删会让 NapCat 拿到不存在的路径
                 if cleanup is not None:

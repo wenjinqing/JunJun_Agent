@@ -84,9 +84,12 @@ class TestHealthBlock:
 
 class TestRegistryHook:
     @pytest.mark.asyncio
-    async def test_fail_then_recover_via_tool_calls(self):
+    async def test_fail_then_recover_via_tool_calls(self, monkeypatch):
         """通过 registry 包装的工具调用驱动健康状态。"""
-        from junjun_skills import registry
+        from junjun_skills import breaker, registry
+        # 健康度记账需要 3 次连续失败——P2 熔断（阈值 2）会短路第 3 次，
+        # 这里测的是健康度不是熔断，关掉熔断干扰
+        monkeypatch.setattr(breaker, "is_open", lambda *a, **kw: False)
         registry.clear()
 
         @tool("exploding_tool")
@@ -99,13 +102,14 @@ class TestRegistryHook:
             await registry._registry["exploding_tool"].ainvoke({"x": "1"})
         assert health.degraded_tools() == []     # 2 次未降级
         out = await registry._registry["exploding_tool"].ainvoke({"x": "1"})
-        assert "[TOOL_ERROR kind=网络]" in out    # P0-13 行为不变
+        assert "[TOOL_ERROR kind=网络" in out     # P0-13 行为不变（P1 起带 suggestion）
         assert len(health.degraded_tools()) == 1  # 第 3 次降级
         registry.clear()
 
     @pytest.mark.asyncio
-    async def test_success_clears(self):
-        from junjun_skills import registry
+    async def test_success_clears(self, monkeypatch):
+        from junjun_skills import breaker, registry
+        monkeypatch.setattr(breaker, "is_open", lambda *a, **kw: False)  # 同上：隔熔断
         registry.clear()
         calls = {"n": 0}
 

@@ -383,6 +383,7 @@ async def draw_cmd(ctx):
         fail_text="画图失败了，稍后再试试吧。",
         timeout=_POLL_TIMEOUT + 60,
         chat_id=chat_id,
+        context=prompt,
     )
     return ack
 
@@ -492,6 +493,7 @@ async def ai_draw(prompt: str, model: str = "") -> str:
         work=lambda: _draw_work(prompt, chat_id, fut, model_alias),
         fail_text="这次画失败了，再试一次？",
         timeout=_POLL_TIMEOUT + 60,
+        context=prompt,
     )
 
 

@@ -294,6 +294,12 @@ max_consecutive_failures = 2  # 同工具同轮决策连错 N 次后熔断（防
 [tools.timeout_overrides]
 send_feed = 240
 
+# ---------- 后台任务（画图/语音/视频解析等慢工具的提交-直发基建） ----------
+[tasks]
+auto_retry = true      # 失败后自动重试一次再认输（接口抖动占失败大头）
+max_concurrent = 4     # 全局在途任务上限
+agent_report = true    # 结局让 Agent 亲口播报（失败回退静态模板，结局不丢）
+
 # ---------- 复杂任务内核（TaskKernel：规划-执行-验证-汇报状态机） ----------
 # Router 命中的复杂任务（调研报告/深读整理/复合成品/周期任务）走任务通道；
 # 关闭时路由命中也回退对话通道，等于回到现状——灰度开关。
