@@ -288,6 +288,7 @@ report_max_chars = 1500    # 汇报正文最长（超出截断）
 # ---------- 工具调用 ----------
 [tools]
 timeout_seconds = 60   # 工具统一超时兜底（防卡死拖住会话 worker）
+max_consecutive_failures = 2  # 同工具同轮决策连错 N 次后熔断（防无限换乘烧 token）
 # 个别慢工具单独放宽：send_feed 配图模式内联跑「画图→下载→上传→发布」全链，
 # 典型 60-90s，不放宽等于禁掉配图说说（2026-08-09 TimeoutError 实锤）
 [tools.timeout_overrides]

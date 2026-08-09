@@ -408,6 +408,10 @@ class JunJunAgent:
 
         # Phase 3：标记本轮决策开始，工具记录从此刻起算
         start_decision(self.session)
+        # P2 熔断计数按轮清零——熔断只管「同一轮决策里的死磕」，
+        # 不拿上一轮的历史失败惩罚新一轮（保守方向：宁可再试一次）
+        from junjun_skills import breaker
+        breaker.reset_chat(self.session.chat_id)
 
         # context_text 包含历史消息（可能含最新消息）。把最新消息剥离单独作为
         # HumanMessage 传入，context 只作为背景参考——模型明确知道「这是背景，这是你要回的」。

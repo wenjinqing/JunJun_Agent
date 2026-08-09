@@ -245,6 +245,89 @@ class TestToolTimeout:
         assert registry._tool_timeout("send_feed") == 60
 
 
+class TestCircuitBreaker:
+    """P2（2026-08-09）：同会话同工具连错到阈值 -> 熔断短路，不再真执行。"""
+
+    @pytest.fixture(autouse=True)
+    def _clean_breaker(self):
+        from junjun_skills import breaker
+        breaker._failures.clear()
+        yield
+        breaker._failures.clear()
+
+    @staticmethod
+    def _set_chat(cid):
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        current_chat_id.set(cid)
+
+    def test_breaker_opens_after_threshold(self):
+        """连错 2 次 -> 第 3 次拦截：返回熔断文本且底层不再执行。"""
+        import asyncio
+        calls = []
+
+        @tool
+        def always_fail(x: str) -> str:
+            """必挂工具。
+
+            Args:
+                x: 输入
+            """
+            calls.append(x)
+            raise ConnectionError("down")
+
+        registry.register(always_fail)
+        self._set_chat("qq:brk1:group")
+        out1 = always_fail.invoke({"x": "1"})
+        out2 = always_fail.invoke({"x": "1"})
+        out3 = always_fail.invoke({"x": "1"})
+        assert out1.startswith("[TOOL_ERROR kind=网络")
+        assert out2.startswith("[TOOL_ERROR kind=网络")
+        assert out3.startswith("[TOOL_ERROR kind=熔断")
+        assert len(calls) == 2  # 第 3 次没真执行
+
+    def test_success_resets_counter(self):
+        """中途成功一次 -> 连续计数清零，后续失败重新计。"""
+        from junjun_skills import breaker
+        breaker.note_failure("qq:brk2:group", "t")
+        breaker.note_failure("qq:brk2:group", "t")
+        assert breaker.is_open("qq:brk2:group", "t")
+        breaker.note_success("qq:brk2:group", "t")
+        assert not breaker.is_open("qq:brk2:group", "t")
+
+    def test_reset_chat_clears(self):
+        """每轮决策开始清零：上一轮连错不惩罚新一轮（保守方向）。"""
+        from junjun_skills import breaker
+        breaker.note_failure("qq:brk3:group", "t")
+        breaker.note_failure("qq:brk3:group", "t")
+        breaker.reset_chat("qq:brk3:group")
+        assert not breaker.is_open("qq:brk3:group", "t")
+
+    def test_chat_isolation(self):
+        """熔断按会话隔离：A 群的工具连错不影响 B 群。"""
+        from junjun_skills import breaker
+        breaker.note_failure("qq:a:group", "t")
+        breaker.note_failure("qq:a:group", "t")
+        assert breaker.is_open("qq:a:group", "t")
+        assert not breaker.is_open("qq:b:group", "t")
+
+    def test_normal_return_not_counted(self):
+        """误判回归：业务性拒绝文案是正常返回，不累计熔断计数。"""
+        @tool
+        def polite_refusal(x: str) -> str:
+            """业务拒绝工具。
+
+            Args:
+                x: 输入
+            """
+            return "权限不足，只有管理员能用"
+
+        registry.register(polite_refusal)
+        self._set_chat("qq:brk5:group")
+        for _ in range(3):
+            out = polite_refusal.invoke({"x": "1"})
+        assert out == "权限不足，只有管理员能用"  # 没被熔断拦截
+
+
 class TestFallbackMapPrompt:
     """换乘地图进 system prompt（persona rules）。"""
 

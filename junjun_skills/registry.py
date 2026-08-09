@@ -198,23 +198,43 @@ def _tool_timeout(name: str = "") -> float:
         return 60.0
 
 
+def _breaker_blocked_text(tool_name: str) -> str:
+    return (f'[TOOL_ERROR kind=熔断 suggestion="该工具本轮已连续失败多次，不要再调用；'
+            f'向用户如实说明办不了"] 工具 {tool_name} 被熔断拦截（未执行）')
+
+
+def _current_chat() -> str:
+    try:
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        return current_chat_id.get("")
+    except Exception:
+        return ""
+
+
 def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
     """统一错误包装（最外层）：工具逃逸的异常 -> 结构化错误文本，不再抛给框架。
-    同时上报工具健康度（P5-4）：异常记失败、正常返回记成功（自动恢复）。"""
+    同时上报工具健康度（P5-4）：异常记失败、正常返回记成功（自动恢复）。
+    连续失败熔断（P2）：同会话同工具连错到阈值，调用短路成熔断文本。"""
     name = skill.name
     if getattr(skill, "coroutine", None) is not None:
         original = skill.coroutine
 
         async def wrapped(*args, _orig=original, **kwargs):
             import asyncio
-            from junjun_skills import health, patches
+            from junjun_skills import breaker, health, patches
+            chat_id = _current_chat()
+            if breaker.is_open(chat_id, name):
+                logger.warning(f"工具 {name} 连续失败熔断，本次调用被拦截")
+                return _breaker_blocked_text(name)
             try:
                 result = await asyncio.wait_for(_orig(*args, **kwargs),
                                                 timeout=_tool_timeout(name))
             except Exception as e:
+                breaker.note_failure(chat_id, name)
                 health.record_fail(name, _classify_error(e), str(e))
                 patches.log_failure(name, _classify_error(e), str(e))
                 return _tool_error_text(name, e)
+            breaker.note_success(chat_id, name)
             health.record_ok(name)
             return result
         skill.coroutine = wrapped
@@ -222,13 +242,19 @@ def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
         original_sync = skill.func
 
         def wrapped_sync(*args, _orig=original_sync, **kwargs):
-            from junjun_skills import health, patches
+            from junjun_skills import breaker, health, patches
+            chat_id = _current_chat()
+            if breaker.is_open(chat_id, name):
+                logger.warning(f"工具 {name} 连续失败熔断，本次调用被拦截")
+                return _breaker_blocked_text(name)
             try:
                 result = _orig(*args, **kwargs)
             except Exception as e:
+                breaker.note_failure(chat_id, name)
                 health.record_fail(name, _classify_error(e), str(e))
                 patches.log_failure(name, _classify_error(e), str(e))
                 return _tool_error_text(name, e)
+            breaker.note_success(chat_id, name)
             health.record_ok(name)
             return result
         skill.func = wrapped_sync
