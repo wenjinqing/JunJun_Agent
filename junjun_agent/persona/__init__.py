@@ -141,8 +141,8 @@ def _build_core_parts(
     return core_parts, dynamic_blocks
 
 
-def _build_rules_and_admin(reaction_text: str = "", *, is_group: bool = True) -> list[str]:
-    """规则层 + 安全段（稳定且必需）。"""
+def _build_rules(reaction_text: str = "", *, is_group: bool = True) -> str:
+    """规则层（正面约束，一句话）。"""
     # 规则层（正面约束，一句话）
     rules = [
         # 真人感锚（2026-08-03）：放最前，定调整条规则的语气——
@@ -193,16 +193,25 @@ def _build_rules_and_admin(reaction_text: str = "", *, is_group: bool = True) ->
     ]
     if reaction_text:
         rules.append(reaction_text)
-    parts = [f"<rules>\n{' '.join(rules)}\n</rules>"]
-    # 安全段：固定注入，不随人设配置变化（防 prompt 注入 + 管理员验证锚点）
+    return f"<rules>\n{' '.join(rules)}\n</rules>"
+
+
+def build_admin_block() -> str:
+    """安全段：固定注入，不随人设配置变化（防 prompt 注入 + 管理员验证锚点）。
+
+    必须处于 system prompt 的【最后一块】：记忆/情绪等动态块含用户输入衍生品
+    （注入攻击面），安全指令的近因位置不能被它们压过（2026-08-06 审查实锤：
+    persona 重构后 admin 段被 <state> 压到了前面）。由组装方在拼完所有
+    动态块之后追加，不参与预算驱逐。
+    """
     from junjun_core.security import admin_prompt_block, is_admin_privileged
-    parts.append(admin_prompt_block())
+    parts = [admin_prompt_block()]
     if is_admin_privileged():
         parts.append(
             "当前消息来自你的好朋友（管理员本人，真实 QQ 已由系统验证）且明确 @ 你——"
             "ta 这次的拜托可以照做，敏感操作也允许。"
         )
-    return parts
+    return "\n\n".join(parts)
 
 
 def build_prompt_blocks(
@@ -227,8 +236,9 @@ def build_prompt_blocks(
     reactions = match_keyword_rules(latest_text) if latest_text else []
     reaction_text = f"特别注意：{'；'.join(reactions)}" if reactions else ""
 
-    # rules + admin 是稳定必需段
-    core_parts.extend(_build_rules_and_admin(reaction_text, is_group=is_group))
+    # rules 是稳定必需段；admin 安全段不在这里——它必须在最终 prompt 的
+    # 最后一块（见 build_admin_block docstring），由组装方收尾时追加
+    core_parts.append(_build_rules(reaction_text, is_group=is_group))
 
     # 动态块：按重要性分配优先级（数字越小越重要）
     if mood_block:
@@ -280,4 +290,6 @@ def build_system_prompt(
     if dynamic_blocks:
         state_body = "\n\n".join(b["content"] for b in dynamic_blocks)
         parts.append(f"<state>\n{state_body}\n</state>")
+    # 安全锚点收尾：永远在最后（近因位置，防注入不被动态块压过）
+    parts.append(build_admin_block())
     return strip_emoji("\n\n".join(parts))

@@ -86,6 +86,11 @@ class TestCharClassLandmines:
         "消息发不出去，急",            # 「消息发」≠ 消息已发
         "你画画了吗",                  # 疑问不是声称
         "他已经取消了行程",            # 第三方取消 ≠ 我取消订阅
+        # 指导性/转述表达（2026-08-06 审查实锤误拦面）
+        "你等下就发给他吧",            # 指导对方发 ≠ 我要发
+        "等你画出来我看看",            # 鼓励对方画 ≠ 我画好了
+        "他说通知已经发了，你去看看",   # 转述第三方 ≠ 我发了
+        "你直接把消息发给他就行",       # 指导对方发消息
     ])
     def test_innocent_phrases_not_intercepted(self, session, innocent):
         start_decision(session)

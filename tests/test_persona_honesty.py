@@ -67,3 +67,37 @@ class TestSceneSpecializedR18Rule:
         assert "私聊里可以画" in p
         assert "群里不行" not in p
         assert "绝对红线" in p
+
+
+class TestAdminAnchorLast:
+    """admin 安全段必须处于 system prompt 最后一块（2026-08-06 审查实锤：
+    persona 重构后 <state> 动态块压到了安全段后面——记忆/情绪含用户输入
+    衍生品，是注入攻击面，安全指令的近因位置不能被压过）。"""
+
+    _MARKER = "【安全规则·最高优先级"
+
+    def test_admin_after_state_legacy_path(self):
+        from junjun_agent.persona import build_system_prompt
+        p = build_system_prompt(is_group=True, nickname="君君",
+                                latest_text="在吗", memory_block="【长期记忆】测试内容")
+        assert self._MARKER in p
+        assert "<state>" in p
+        assert p.index(self._MARKER) > p.index("<state>"), \
+            "安全段被动态块压到前面了"
+
+    def test_admin_after_state_budget_path(self):
+        from junjun_agent.agent import _apply_context_budget
+        msgs, system_text, _ = _apply_context_budget(
+            is_group=True, latest_text="在吗",
+            mood_block="", memory_block="【长期记忆】测试",
+            relation_block="", background="", latest_msg="在吗",
+            addressed=True)
+        assert self._MARKER in system_text
+        assert "<state>" in system_text
+        assert system_text.index(self._MARKER) > system_text.index("<state>")
+
+    def test_core_blocks_no_admin(self):
+        # build_prompt_blocks 的 core 不再夹带安全段（由组装方收尾追加）
+        from junjun_agent.persona import build_prompt_blocks
+        core, _ = build_prompt_blocks(is_group=True, latest_text="在吗")
+        assert self._MARKER not in core

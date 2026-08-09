@@ -334,10 +334,10 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
         budget_enabled = bool(cfg.get("context_budget", {}).get("enable", False))
         _prompt_snapshot = ""
         if budget_enabled:
-            from junjun_agent.persona import build_prompt_blocks
+            from junjun_agent.persona import build_admin_block, build_prompt_blocks
             core, _ = build_prompt_blocks(
                 is_group=session.is_group, latest_text=meta.text)
-            _prompt_snapshot = core
+            _prompt_snapshot = core + "\n\n" + build_admin_block()
         else:
             from junjun_agent.persona import build_system_prompt
             _prompt_snapshot = build_system_prompt(

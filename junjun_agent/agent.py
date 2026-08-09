@@ -19,7 +19,9 @@ from junjun_skills.builtin.do_not_reply import SILENCE_TOOL_NAME
 from junjun_agent.loop.plan_tracker import (
     PlanMiddleware, detect_complexity, make_plan, set_plan, reset_plan,
 )
-from junjun_agent.persona import build_prompt_blocks, build_system_prompt
+from junjun_agent.persona import (
+    build_admin_block, build_prompt_blocks, build_system_prompt,
+)
 from junjun_agent.context_budget import BudgetBlock, ContextBudget
 from junjun_agent.honesty_guard import record_tool_call, start_decision
 
@@ -288,6 +290,8 @@ def _apply_context_budget(
     if dynamic_parts:
         state_body = "\n\n".join(dynamic_parts)  # Py<3.12：f-string 表达式不能含反斜杠
         system_text += f"\n\n<state>\n{state_body}\n</state>"
+    # 安全锚点收尾：永远在最后一块，不参与预算驱逐（近因位置防注入）
+    system_text += "\n\n" + build_admin_block()
 
     messages.append(SystemMessage(content=system_text))
     if bg_block:
