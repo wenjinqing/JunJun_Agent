@@ -298,7 +298,7 @@ class TaskKernel:
                          if s.id in step.depends_on and s.result)
         prompt = (f"任务目标：{plan.goal}\n\n前序步骤产出：\n{deps or '（无）'}\n\n"
                   f"当前步骤：{step.desc}\n\n直接产出这一步的成果内容。")
-        model = get_chat_model("utils")
+        model = get_chat_model("thinker")  # 步骤合成（报告/汇总）：开思考提质
         resp = await model.ainvoke([HumanMessage(content=prompt)])
         return str(resp.content)
 

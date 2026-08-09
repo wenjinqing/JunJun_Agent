@@ -57,7 +57,7 @@ async def make_plan(goal: str, *, chat_id: str, user_id: str,
     """生成步骤图。失败/非法返回 None（调用方回退对话通道）。"""
     if model is None:
         from junjun_llm import get_chat_model
-        model = get_chat_model("utils")
+        model = get_chat_model("thinker")  # 规划是低频高价值：开思考的 ***REMOVED***
     from langchain_core.messages import HumanMessage
     prompt = _PLANNER_PROMPT.format(goal=goal, tool_list=_tool_catalog(),
                                     max_steps=max_steps)
@@ -95,7 +95,7 @@ async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
     """局部重规划：只重写未执行的剩余步骤。返回新的 Step 列表或 None。"""
     if model is None:
         from junjun_llm import get_chat_model
-        model = get_chat_model("utils")
+        model = get_chat_model("thinker")  # 局部重规划同理：开思考
     from langchain_core.messages import HumanMessage
     done_digest = "\n".join(
         f"- [{s.id}] {s.desc}: {s.result[:100]}" for s in plan.steps if s.status == "done"

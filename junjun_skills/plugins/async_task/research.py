@@ -115,7 +115,7 @@ async def _plan(topic: str, model=None) -> list:
     try:
         if model is None:
             from junjun_llm import get_chat_model
-            model = get_chat_model("utils")
+            model = get_chat_model("thinker")  # 查询规划：低频高价值，开思考
         from langchain_core.messages import HumanMessage
         resp = await model.ainvoke([HumanMessage(content=_PLAN_PROMPT.format(n=n, topic=topic))])
         return _parse_queries(str(resp.content), topic, n)
@@ -139,7 +139,7 @@ async def _replan(topic: str, old_queries: list, got: int, model=None) -> list:
     try:
         if model is None:
             from junjun_llm import get_chat_model
-            model = get_chat_model("utils")
+            model = get_chat_model("thinker")  # 反思改写查询：开思考
         from langchain_core.messages import HumanMessage
         resp = await model.ainvoke([HumanMessage(content=_REFLECT_PROMPT.format(
             topic=topic, queries="\n".join(f"- {q}" for q in old_queries),
@@ -198,7 +198,7 @@ def _fmt_materials(items: list) -> str:
 async def _synthesize(topic: str, items: list, model=None) -> str:
     if model is None:
         from junjun_llm import get_chat_model
-        model = get_chat_model("agent")
+        model = get_chat_model("thinker")  # 终稿综述：开思考提质（agent 槽已关思考）
     from langchain_core.messages import HumanMessage
     resp = await model.ainvoke([HumanMessage(content=_SYNTH_PROMPT.format(
         topic=topic, materials=_fmt_materials(items)[:12000],
