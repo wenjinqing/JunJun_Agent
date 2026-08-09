@@ -9,7 +9,7 @@
 
 import os
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
@@ -38,6 +38,10 @@ class ModelSpec:
     api_key: str
     temperature: float = 0.7
     max_tokens: int = 1024
+    # 厂商特定请求参数（如硅基推理模型的 enable_thinking=false——
+    # 2026-08-09 实测 ***REMOVED*** 默认开 thinking，一句 hi 烧 214 reasoning tokens，
+    # agent 槽 max_tokens=2048 会被思考 token 挤爆）
+    extra_body: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -85,6 +89,7 @@ def _spec_from(cfg: dict, defaults: dict) -> Optional[ModelSpec]:
         api_key=api_key,
         temperature=float(merged.get("temperature", 0.7)),
         max_tokens=int(merged.get("max_tokens", 1024)),
+        extra_body=dict(merged.get("extra_body") or {}),
     )
 
 
@@ -116,6 +121,7 @@ def _pool_specs(cfg: dict, defaults: dict) -> List[ModelSpec]:
         base_url=base_url, model=model, api_key=k,
         temperature=float(merged.get("temperature", 0.7)),
         max_tokens=int(merged.get("max_tokens", 1024)),
+        extra_body=dict(merged.get("extra_body") or {}),
     ) for k in keys]
 
 
@@ -160,6 +166,7 @@ def _build_chat(spec: ModelSpec) -> ChatOpenAI:
         timeout=60,
         max_retries=3,  # 503 限流时自动重试（指数退避），避免 L2 gate 直接兜底 no_reply
         http_socket_options=_SOCKET_OPTIONS,
+        extra_body=spec.extra_body or None,
     )
 
 
