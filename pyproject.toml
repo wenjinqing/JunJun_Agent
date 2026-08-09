@@ -33,6 +33,7 @@ dependencies = [
     "junjun-mcp-server",
     "junjun-express",
     "junjun-webui",
+    "langgraph-checkpoint-sqlite>=3.0",
 ]
 
 [dependency-groups]

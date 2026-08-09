@@ -64,6 +64,13 @@ async def _run() -> int:
     except Exception as e:
         logger.warning(f"任务内核持久化挂接失败（忽略）: {e}")
 
+    # LangGraph 引擎（[task_kernel] engine=langgraph 时）：崩溃任务断点续跑
+    try:
+        from junjun_agent.task_kernel.graph import runner as tk_runner
+        asyncio.create_task(tk_runner.recover(), name="task-kernel-recover")
+    except Exception as e:
+        logger.warning(f"任务内核断点恢复挂接失败（忽略）: {e}")
+
     # 数据库建表 + 写队列
     try:
         from junjun_core.database import init_database, db_writer

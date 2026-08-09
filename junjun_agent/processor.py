@@ -785,6 +785,14 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
             user_id=meta.user_id or "", message_id=meta.message_id, at_bot=meta.at_bot,
         )
     _store_inbound(session, meta)
+    # 复杂任务人审（LangGraph 引擎）：管理员的「发/算了」最优先消费，
+    # 不进决策队列（在记忆入库之后——审批回复也是真实消息，如实记录）
+    try:
+        from junjun_agent.task_kernel.graph import approval_hook
+        if await approval_hook(session, meta):
+            return None
+    except Exception:
+        pass
     # 意向系统事件钩子（P7）：emo 规则预筛 -> 关心意向（0 token，
     # [intention] enable=false 时零开销直接返回）
     try:

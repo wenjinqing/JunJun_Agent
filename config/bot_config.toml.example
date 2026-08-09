@@ -308,6 +308,9 @@ enable = false           # 灰度：观察期先关，确认 golden case 绿后�
 max_steps = 6            # 单个计划最多几步
 deadline_minutes = 30    # 硬时限（防失控）
 max_replans = 1          # 失败后最多局部重规划几次
+engine = "legacy"        # legacy=手写循环 | langgraph=StateGraph（崩溃断点续跑 + 人审）
+approval_actions = ["send_feed"]   # langgraph 引擎：这些动作执行前挂起等管理员审批
+approval_timeout_seconds = 600     # 审批超时默认跳过（宁保守不放行）
 
 
 # ---------- 深度研究（deep_research job 的流水线参数） ----------

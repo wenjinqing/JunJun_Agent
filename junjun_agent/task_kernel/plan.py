@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 # 步骤动作白名单外的特殊动作：LLM 直接合成文本（不调用工具）
 SYNTH_ACTION = "llm_synthesize"
 
-_VERIFY_KINDS = ("tool_ok", "schema", "llm_judge", "none")
+_VERIFY_KINDS = ("tool_ok", "schema", "llm_judge", "human", "none")
 
 
 @dataclass
@@ -22,10 +22,14 @@ class Step:
     desc: str                        # 这一步要做什么（给执行器的自然语言指令）
     args_hint: dict = field(default_factory=dict)
     depends_on: List[str] = field(default_factory=list)
-    verify: str = "tool_ok"          # tool_ok / llm_judge / none
+    verify: str = "tool_ok"          # tool_ok / llm_judge / human / none
     status: str = "pending"          # pending/running/done/failed/skipped
     result: str = ""                 # 产出摘要（大产出的全文不落这里）
     error: str = ""
+    # human 门（LangGraph 引擎）：管理员批准后置 True 才执行。
+    # legacy 引擎不做人审（verify=human 在旧 _verify 里等同放行），门由
+    # executor.try_submit 按引擎类型施加，见 _apply_approval_gates。
+    approved: bool = False
 
 
 @dataclass

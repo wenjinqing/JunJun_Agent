@@ -53,11 +53,36 @@ def enabled() -> bool:
     return bool(_cfg().get("enable", False))
 
 
+def engine() -> str:
+    """执行引擎：legacy（手写 while 循环）| langgraph（StateGraph + 断点续跑 + 人审）。"""
+    return str(_cfg().get("engine", "legacy")).strip() or "legacy"
+
+
+def _approval_actions() -> list:
+    """强制人审的发布类动作（LangGraph 引擎）；planner 没标也拦。"""
+    acts = _cfg().get("approval_actions", ["send_feed"])
+    return [str(a) for a in acts] if isinstance(acts, list) else ["send_feed"]
+
+
+def _apply_approval_gates(plan: TaskPlan) -> None:
+    """LangGraph 引擎专属：发布类步骤强制 verify=human（执行前挂起等管理员）。"""
+    gated = set(_approval_actions())
+    for s in plan.steps:
+        if s.action in gated and s.verify != "human":
+            s.verify = "human"
+
+
 def enable_persistence(dir_path) -> None:
     """生产启动挂钩：计划落盘目录 + 恢复中断计划。测试勿调。"""
     global _PERSIST_DIR
     _PERSIST_DIR = Path(dir_path)
     _restore_interrupted()
+    # LangGraph 引擎的活动任务注册表也放这（崩溃续跑靠它 + kernel.db）
+    try:
+        from junjun_agent.task_kernel import graph as tk_graph
+        tk_graph.runner.configure(dir_path)
+    except Exception as e:
+        logger.warning(f"LangGraph 引擎注册表挂接失败（忽略）: {e}")
 
 
 def _persist(plan: TaskPlan) -> None:
@@ -96,7 +121,11 @@ def _restore_interrupted() -> None:
 
 
 class TaskKernel:
-    """复杂任务的规划-执行-验证-汇报状态机。"""
+    """复杂任务的规划-执行-验证-汇报状态机。
+
+    注意：_run_step/_call_tool/_synthesize/_verify/_report 等方法不依赖实例
+    状态（self 只是壳），LangGraph 引擎（graph.py）的节点直接复用它们——
+    改这些方法时两边同时生效，勿引入实例状态。"""
 
     def __init__(self) -> None:
         self._plans: Dict[str, TaskPlan] = {}
@@ -123,8 +152,14 @@ class TaskKernel:
         plan.deadline_ts = time.time() + float(_cfg().get("deadline_minutes", 30)) * 60
         self._plans[plan.plan_id] = plan
         _persist(plan)
-        asyncio.create_task(self._run(plan), name=f"task-kernel-{plan.plan_id}")
-        logger.info(f"[{chat_id}] 复杂任务接单（{len(plan.steps)} 步）: {text[:40]}")
+        if engine() == "langgraph":
+            _apply_approval_gates(plan)
+            from junjun_agent.task_kernel import graph as tk_graph
+            asyncio.create_task(tk_graph.runner.submit(plan),
+                                name=f"task-kernel-lg-{plan.plan_id}")
+        else:
+            asyncio.create_task(self._run(plan), name=f"task-kernel-{plan.plan_id}")
+        logger.info(f"[{chat_id}] 复杂任务接单（{len(plan.steps)} 步，{engine()} 引擎）: {text[:40]}")
         return random.choice(_ACK_TEMPLATES)
 
     # ---------- 执行循环 ----------
