@@ -22,7 +22,9 @@ import websockets as Server
 from junjun_adapter_napcat.logger import logger
 from junjun_adapter_napcat.config import get_config
 from junjun_adapter_napcat.recv_handler.message_handler import message_handler
-from junjun_adapter_napcat.recv_handler.meta_event_handler import meta_event_handler
+from junjun_adapter_napcat.recv_handler.meta_event_handler import (
+    heartbeat_watchdog, meta_event_handler, note_activity,
+)
 from junjun_adapter_napcat.recv_handler.notice_handler import notice_handler
 from junjun_adapter_napcat.send_handler.nc_sending import nc_message_sender
 from junjun_adapter_napcat.response_pool import put_response, check_timeout_response
@@ -62,6 +64,7 @@ async def message_recv(server_connection: Server.ServerConnection):
                 continue
             post_type = decoded.get("post_type")
             if post_type in ["meta_event", "message", "notice"]:
+                note_activity()  # 心跳看门狗的活性证据（区分「WS 假死」与「上游没消息」）
                 await message_queue.put(decoded)
             elif post_type is None:
                 await put_response(decoded)
@@ -142,6 +145,7 @@ async def main():
         mmc_start_com(),
         message_process(),
         check_timeout_response(),
+        heartbeat_watchdog(),
     )
 
 
