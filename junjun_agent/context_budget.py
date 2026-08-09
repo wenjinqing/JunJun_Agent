@@ -102,9 +102,10 @@ class ContextBudget:
             else:
                 evicted.append(b)
 
-        # 保持原始顺序：按传入 blocks 的顺序输出 kept
-        kept_names = {b.name for b in kept}
-        kept_in_order = [b for b in work if b.name in kept_names]
+        # 保持原始顺序：按传入 blocks 的顺序输出 kept。
+        # 按对象身份而非名字匹配——同名块其一被驱逐时，按名字会把两个都放回来
+        kept_ids = {id(b) for b in kept}
+        kept_in_order = [b for b in work if id(b) in kept_ids]
 
         metrics = {
             "max_total_tokens": self.max_total_tokens,

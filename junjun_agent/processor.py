@@ -301,23 +301,34 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     text: Optional[str] = None
     from junjun_agent.router import route_to_task
     if route_to_task(meta.text, chat_id=session.chat_id):
-        # 路由命中留 Langfuse span：accepted=false 的样本是阶段 4 误路由/规划失败抽检素材
+        # 路由命中留 Langfuse span：accepted=false 的样本是阶段 4 误路由/规划失败抽检素材。
+        # reject_reason 区分三种回退：disabled（灰度开关关）/ planner_none（规划失败）/
+        # exception——混在一起可疑清单会被开关噪声淹没（2026-08-06 审查实锤）
         from junjun_core.observability import lf
         with lf.start_span(
             name=f"router.{session.chat_id}",
             input={"latest_text": meta.text},
             metadata={"trace_id": trace_id, "route": "task"},
         ) as _rspan:
+            reject_reason = ""
             try:
-                from junjun_agent.task_kernel import kernel
-                text = await kernel.try_submit(
-                    meta.text, chat_id=session.chat_id,
-                    user_id=meta.user_id or "", callbacks=callbacks)
+                from junjun_agent.task_kernel import enabled as _tk_enabled
+                if not _tk_enabled():
+                    reject_reason = "disabled"
+                else:
+                    from junjun_agent.task_kernel import kernel
+                    text = await kernel.try_submit(
+                        meta.text, chat_id=session.chat_id,
+                        user_id=meta.user_id or "", callbacks=callbacks)
+                    if not text:
+                        reject_reason = "planner_none"
             except Exception as e:
                 logger.warning(f"[{session.chat_id}] 任务内核接单异常，回退对话通道: {e}")
                 text = None
+                reject_reason = f"exception:{type(e).__name__}"
             try:
-                _rspan.update(metadata={"accepted": bool(text)})
+                _rspan.update(metadata={"accepted": bool(text),
+                                        "reject_reason": reject_reason})
             except Exception:
                 pass
         if text:

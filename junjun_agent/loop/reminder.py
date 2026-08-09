@@ -119,7 +119,16 @@ async def _fire(task) -> None:
             task.remind_time += 7 * 86400
     else:
         task.is_completed = True
-    task.save()
+    try:
+        task.save()
+    except Exception as e:
+        # 发送成功但落库失败：不重试的话下轮轮询会重复发送（2026-08-06 审查）。
+        # 补一次重试；仍失败则接受 at-least-once 重发，记 ERROR 留证
+        logger.warning(f"提醒状态落库失败，重试一次 [{task.task_id}]: {e}")
+        try:
+            task.save()
+        except Exception as e2:
+            logger.error(f"提醒状态落库二次失败（下轮可能重发）[{task.task_id}]: {e2}")
     logger.info(f"提醒已发 [{task.task_id}] -> {task.chat_id}")
 
 

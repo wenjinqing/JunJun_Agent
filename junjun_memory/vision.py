@@ -75,14 +75,22 @@ def _vlm_sem() -> asyncio.Semaphore:
 def _downscale(data: bytes, max_side: int = 1024) -> bytes:
     """VLM 前压缩：QQ 原图常 2-4K 分辨率，base64 后数 MB，32B VLM 30s 超时
     三连（2026-08-06 生产实锤）。缩到长边 1024 + JPEG q80 后通常 <200KB，
-    识图从超时边缘降到秒级。失败原样返回（宁可慢，不可丢图）。"""
+    识图从超时边缘降到秒级。失败原样返回（宁可慢，不可丢图）。
+    透明 PNG（QQ 贴纸高频）：convert("RGB") 会把透明区变黑底，VLM 描述带
+    「黑底」偏差——先垫白底再转。"""
     try:
         from PIL import Image
         import io as _io
         img = Image.open(_io.BytesIO(data))
         if max(img.size) <= max_side and len(data) < 400_000:
             return data
-        img = img.convert("RGB")
+        if img.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            rgba = img.convert("RGBA")
+            bg.paste(rgba, mask=rgba.split()[-1])
+            img = bg
+        else:
+            img = img.convert("RGB")
         img.thumbnail((max_side, max_side))
         buf = _io.BytesIO()
         img.save(buf, "JPEG", quality=80)
@@ -95,7 +103,11 @@ async def _describe(data: bytes, *, model, prompt: str = _DESCRIBE_PROMPT) -> Op
     from langchain_core.messages import HumanMessage
     from junjun_core.retry import retry_async
     data = _downscale(data)
-    mime = "image/jpeg" if data[:2] == b"\xff\xd8" else "image/png"
+    # mime 按魔数嗅探：此前只认 JPEG/PNG，GIF/WebP 被错标 image/png
+    mime = ("image/jpeg" if data[:2] == b"\xff\xd8"
+            else "image/gif" if data[:6] in (b"GIF87a", b"GIF89a")
+            else "image/webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+            else "image/png")
     b64 = base64.b64encode(data).decode()
 
     async def _call():

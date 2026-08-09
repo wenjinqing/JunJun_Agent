@@ -469,7 +469,9 @@ async def ai_draw(prompt: str, model: str = "") -> str:
     chat_id = current_chat_id.get("")
     # 群聊 R18 硬门：模型在群里违规调工具也不能真出图（最后一道防线）。
     # 返回引导文案让模型照着婉拒——比空拒绝更像人，也不会占派单位。
-    if chat_id.endswith(":group") and has_r18_marker(prompt):
+    # 宁可误拒：路由缺失（chat_id 空）的边缘场景按群聊处理（2026-08-06 审查：
+    # 空路由会跳过群门落到同步出图分支）——只有显式私聊才放行。
+    if has_r18_marker(prompt) and not chat_id.endswith(":private"):
         return ("群里画不了这种（公共场合 + 账号风控）。"
                 "笑着让对方私聊你——照这个意思回他，别派单。")
     if not chat_id:

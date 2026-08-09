@@ -41,13 +41,20 @@ def _called_silence_tool(messages: list) -> bool:
 
 # 意图自检规则：强意图词 -> 必须真正调用的工具。元数据与注册表 INTENT 层
 # 挂载共用单一数据源（顺序敏感，先长后短，「取消订阅」含「订阅」必须先匹配）。
-# 证据集 = 组内行动工具（list_* 只读不算办事）：组内任一行动工具被调即算办过
-# ——只认 primary 会误追问：「调研」派了 run_background_task 明明办成了，
-# 旧逻辑还要求必须 deep_research（2026-08-07 加搜索组时一并修正）。
+# 严格证据集 = 组内行动工具（list_* 只读、cancel_* 反向动作都不算办事）：
+# 「记得提醒X顺便取消旧的」只调 cancel 不算设立证据（2026-08-06 审查实锤）。
+# 查询句（带疑问标记）放宽到全组：「查一下我订阅了啥」正确调 list_subscriptions
+# 不该被追问 subscribe_updates（同批审查实锤）。
 _INTENT_RULES = [
-    (kws, primary, frozenset(t for t in group if not t.startswith("list_")))
+    (kws, primary,
+     frozenset(t for t in group if not t.startswith(("list_", "cancel_"))),
+     frozenset(group))
     for kws, group, primary in intent_groups() if primary
 ]
+
+_QUERY_MARKERS = ("了啥", "了什么", "有哪些", "哪些", "有什么", "吗", "？", "?")
+# 查记忆不是查网络：「查一下我上次让你记的事」该走 recall_memory 而非 web_search
+_SEARCH_EXCLUDE_WORDS = ("让你记", "记的事")
 
 _NUDGE_PROMPT = (
     "（系统追问）对方的请求包含明确的「{intent}」意图，必须调用 {tool} 工具"
@@ -156,9 +163,14 @@ def _intent_nudge(latest_text: str, result_messages: list, available: set,
     if not text:
         return None
     called = _called_tool_names(result_messages)
-    for keywords, tool_name, evidence in _INTENT_RULES:
+    is_query = any(q in text for q in _QUERY_MARKERS)
+    for keywords, tool_name, evidence, full_group in _INTENT_RULES:
         if any(kw in text for kw in keywords):
-            if tool_name in called or (evidence & called):
+            if tool_name == "web_search" and \
+                    any(w in text for w in _SEARCH_EXCLUDE_WORDS):
+                continue             # 查记忆不是查网络
+            ev = full_group if is_query else evidence
+            if tool_name in called or (ev & called):
                 continue             # 该意图组已调用——继续检查其余意图组
                                        # （曾 return None 短路：「提醒我开会，顺便画只猫」
                                        #  只查了第一个意图，ai_draw 没调也永不追问）
@@ -304,9 +316,10 @@ def _apply_context_budget(
             messages.extend(bg_msgs)
     if latest_block:
         messages.append(HumanMessage(content=latest_block))
-    elif not bg_block:
-        # 没有背景也没有最新消息时，把整个 context 塞进去兜底
-        messages.append(HumanMessage(content=latest_text or ""))
+    elif latest_text:
+        # latest_msg 为空也要有「你要回复的消息」锚点（旧路径行为对齐）——
+        # 内容与背景末行重复可接受，锚点缺位会让弱模型失去回复目标
+        messages.append(HumanMessage(content=f"[你要回复的消息]\n{latest_text}"))
 
     return messages, system_text, metrics
 

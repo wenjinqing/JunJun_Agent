@@ -45,9 +45,15 @@ def _auth_header() -> str:
     return "Basic " + base64.b64encode(f"{pk}:{sk}".encode()).decode()
 
 
-def _fetch_observations(host: str, auth: str, since: datetime) -> list:
-    """拉取时间窗内全部 observation（分页），客户端再按名字过滤。"""
+def _fetch_observations(host: str, auth: str, since: datetime) -> tuple:
+    """拉取时间窗内全部 observation（分页），客户端再按名字过滤。
+
+    返回 (items, truncated)。打满分页上限时 truncated=True——活跃 bot 每条
+    消息多个 observation，3 天窗口轻松破千；静默截断会让健康度面板只反映
+    窗口的一部分（最老样本被丢）还宣称全覆盖（2026-08-06 审查实锤）。
+    """
     out = []
+    truncated = False
     for page in range(1, _MAX_PAGES + 1):
         qs = (f"page={page}&limit={_PAGE_LIMIT}"
               f"&fromStartTime={since.strftime('%Y-%m-%dT%H:%M:%S.000Z')}")
@@ -59,7 +65,9 @@ def _fetch_observations(host: str, auth: str, since: datetime) -> list:
         out.extend(items)
         if len(items) < _PAGE_LIMIT:
             break
-    return out
+    else:
+        truncated = True
+    return out, truncated
 
 
 def _main() -> int:
@@ -69,7 +77,7 @@ def _main() -> int:
 
     host = os.environ.get("LANGFUSE_HOST", "http://localhost:3000").rstrip("/")
     since = datetime.now(timezone.utc) - timedelta(days=args.days)
-    obs = _fetch_observations(host, _auth_header(), since)
+    obs, truncated = _fetch_observations(host, _auth_header(), since)
 
     routers = [o for o in obs if (o.get("name") or "").startswith("router.")]
     kernels = [o for o in obs
@@ -92,7 +100,16 @@ def _main() -> int:
 
     n = len(kernels)
     print(f"== TaskKernel 抽检（{since.date()} 起 {args.days} 天，span 共 {len(obs)} 个）==")
+    if truncated:
+        print(f"!! 警告：样本达到 {_MAX_PAGES * _PAGE_LIMIT} 条分页上限，最老样本被截断——"
+              "以下面板只反映窗口的一部分，缩短 --days 再跑")
     print(f"路由命中: {len(routers)}  接单: {len(accepted)}  规划失败回退: {len(fallback)}")
+    # 回退原因分布（disabled=灰度开关关着，不是缺陷；planner_none/exception 才是）
+    if fallback:
+        from collections import Counter
+        reasons = Counter(str(md(o).get("reject_reason") or "未知(旧数据)")
+                          for o in fallback)
+        print("回退原因: " + "  ".join(f"{k}={v}" for k, v in reasons.most_common()))
     if n:
         print(f"计划: {n}  完成: {len(done)}  失败: {len(failed)}"
               f"  完成率: {len(done)/n:.0%}  replan 率: {len(replanned)/n:.0%}")
@@ -104,8 +121,12 @@ def _main() -> int:
     # ---------- 可疑清单（人工判读素材） ----------
     suspects = []
     for o in fallback:
+        # 开关关闭期的样本不是可疑项——灰度来回切的日子里它们全是噪声
+        if str(md(o).get("reject_reason") or "") == "disabled":
+            continue
         text = str((o.get("input") or {}).get("latest_text", ""))[:50]
         suspects.append({"kind": "规划失败回退", "text": text,
+                         "reason": str(md(o).get("reject_reason") or ""),
                          "time": o.get("startTime")})
     for o in failed:
         m = md(o)
@@ -127,7 +148,7 @@ def _main() -> int:
     ts = time.strftime("%Y%m%d_%H%M%S")
     path = REPORT_DIR / f"audit_taskkernel_{ts}.json"
     path.write_text(json.dumps({
-        "ts": ts, "days": args.days,
+        "ts": ts, "days": args.days, "truncated": truncated,
         "router_hits": len(routers), "accepted": len(accepted), "fallback": len(fallback),
         "plans": n, "done": len(done), "failed": len(failed),
         "replanned": len(replanned), "verify_failures": verify_fails,

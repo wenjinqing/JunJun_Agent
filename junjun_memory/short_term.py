@@ -5,6 +5,7 @@
 """
 
 import json
+import threading
 import time
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
@@ -46,6 +47,9 @@ class ShortTermMemory:
     persist: bool = False       # 是否写入 SQLite
 
     def __post_init__(self):
+        self._last_save = 0.0
+        self._flush_scheduled = False
+        self._save_lock = threading.Lock()
         if self.persist and self.chat_id:
             self._load()
 
@@ -61,9 +65,38 @@ class ShortTermMemory:
             pass
 
     def _save(self) -> None:
-        """异步写入 SQLite（失败静默）。"""
+        """异步写入 SQLite（失败静默）。
+
+        节流（2026-08-09 审查）：每条消息全量序列化 upsert 会放大 db_writer
+        队列压力（容量 2000，与其他业务写共享，满了丢最新）。3s 内多次变更
+        只落一次，尾部由 Timer 补落——丢的最多是最后 3s 的上下文，可接受。
+        """
         if not self.persist or not self.chat_id:
             return
+        timer = None
+        with self._save_lock:
+            recent = time.time() - self._last_save < 3.0
+            if recent and not self._flush_scheduled:
+                self._flush_scheduled = True
+                timer = threading.Timer(3.0, self._flush)
+                timer.daemon = True
+            elif not recent:
+                self._last_save = time.time()
+        if timer is not None:
+            timer.start()   # 锁外启动：同步式 Timer 实现会回调 _flush（要拿锁）
+            return
+        if recent:
+            return          # 已有待发的尾部 flush
+        self._submit()
+
+    def _flush(self) -> None:
+        """节流尾部补落。"""
+        with self._save_lock:
+            self._flush_scheduled = False
+            self._last_save = time.time()
+        self._submit()
+
+    def _submit(self) -> None:
         try:
             from junjun_core.database import ShortTermMemory as STMModel, db_writer
             data = [asdict(e) for e in self.entries]
@@ -95,10 +128,6 @@ class ShortTermMemory:
         self.entries.append(MemoryEntry(role="bot", text=text))
         self._trim()
         self._save()
-
-    def _trim(self) -> None:
-        if len(self.entries) > self.max_size:
-            self.entries = self.entries[-self.max_size:]
 
     def _trim(self) -> None:
         if len(self.entries) > self.max_size:

@@ -50,7 +50,9 @@ _STUB_RETURNS = {
     "get_time": "2026-08-04 15:30 星期二",
     "get_weather": "北京 明天 晴，25~33℃，微风。",
     "set_reminder": "提醒已设置成功，到点会叫你。",
-    "list_reminders": "（桩）当前提醒：1. [id=3] 每天 08:00 推送科技新闻；2. [id=5] 明天 20:00 抢票。",
+    # 桩格式必须与生产 list_reminders 输出一致（[hex编号]（每天）MM月DD日 HH:MM），
+    # 桩教模型一种生产里不存在的格式 = 评测在练错误动作（2026-08-09 审查实锤）
+    "list_reminders": "（桩）待办提醒：\n- [a1b2c3] （每天）08月09日 08:00 推送科技新闻\n- [d4e5f6] 08月10日 20:00 抢票",
     "cancel_reminder_task": "提醒已取消。",
     "list_background_tasks": "（桩）后台任务：1 个进行中 [id=j7]（视频观看，已 12 分钟）；0 个已完成。",
     "cancel_background_task": "后台任务已取消。",
@@ -153,6 +155,24 @@ async def _run_case(agent_mod, stubs, called, case: dict) -> dict:
     for name in exp.get("must_not_call", []):
         if name in tools_called:
             fails.append(f"不应调用 {name}")
+    # 参数断言（2026-08-09 审查）：工具名对了参数不对一样是错——
+    # send_feed 不带 with_image=空头说说；set_reminder 的 time_spec 没「每天」
+    # =周期承诺落成了一锤子买卖。字符串按子串匹配，布尔/数字按相等。
+    for spec in exp.get("must_call_args", []):
+        t_name, want = spec["tool"], spec.get("args", {})
+
+        def _match(actual, w):
+            if actual is None:
+                return False
+            if isinstance(w, str):
+                return w in str(actual)
+            return actual == w
+
+        hit = any(n == t_name and all(_match(a.get(k), w) for k, w in want.items())
+                  for n, a in called)
+        if not hit:
+            got = [a for n, a in called if n == t_name]
+            fails.append(f"{t_name} 参数不符（期望含 {want}，实际: {got or '未调用'}）")
     if exp.get("silence"):
         if reply is not None and "do_not_reply" not in tools_called:
             fails.append(f"应沉默却回复: {str(reply)[:40]}")

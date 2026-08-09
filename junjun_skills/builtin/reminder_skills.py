@@ -150,7 +150,11 @@ def list_reminders() -> str:
     lines = ["待办提醒："]
     for it in items:
         when = time.strftime("%m月%d日 %H:%M", time.localtime(it["remind_time"]))
-        lines.append(f"- [{it['task_id']}] {when} {it['content']}")
+        # 周期标注（2026-08-09 审查：周期提醒与一次性在列表里无区别，
+        # 「取消那个每天的推送」时模型无从确认目标）
+        rep = {"daily": "每天", "weekly": "每周"}.get(it.get("repeat") or "", "")
+        tag = f"（{rep}）" if rep else ""
+        lines.append(f"- [{it['task_id']}] {tag}{when} {it['content']}")
     return "\n".join(lines)
 
 

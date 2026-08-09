@@ -35,6 +35,10 @@ def main() -> int:
 
     src = sqlite3.connect(f"file:{BACKUP.as_posix()}?mode=ro", uri=True)
     uri = f"file:{DB.as_posix()}" if apply else f"file:{DB.as_posix()}?mode=ro"
+    # 不带 mode=ro 时路径不存在会静默创建空库文件——先查存在性，防路径笔误
+    if apply and not DB.exists():
+        print(f"错误：DB 不存在（--apply 拒绝创建新库）: {DB}")
+        return 1
     dst = sqlite3.connect(uri, uri=True)
 
     subs = src.execute(

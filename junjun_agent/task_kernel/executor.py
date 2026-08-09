@@ -151,7 +151,7 @@ class TaskKernel:
                         "replans": plan.replans,
                         "steps_done": sum(1 for s in plan.steps if s.status == "done"),
                         "steps_failed": sum(1 for s in plan.steps if s.status == "failed"),
-                        "verify_failures": getattr(plan, "_verify_failures", 0),
+                        "verify_failures": plan.verify_failures,
                         "duration_s": round(time.time() - plan.created_ts, 1),
                     })
                 except Exception:
@@ -180,7 +180,7 @@ class TaskKernel:
                 _persist(plan)
                 failed = [s for s in plan.steps if s.status == "failed"]
                 # 验证失败计数（指标进根 span）：区别于工具/网络类失败
-                plan._verify_failures = getattr(plan, "_verify_failures", 0) + sum(
+                plan.verify_failures += sum(
                     1 for s in failed if s.error.startswith(("验证未通过", "验收不通过")))
                 for s in failed:
                     if plan.attempts.get(s.id, 0) < 2:

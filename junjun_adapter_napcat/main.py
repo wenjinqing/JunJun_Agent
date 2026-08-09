@@ -44,8 +44,14 @@ async def message_recv(server_connection: Server.ServerConnection):
     并清空发送器连接（外发消息在断线窗口期等待重连而不是写死连接）。
     """
     _active_conns.add(server_connection)
-    await message_handler.set_server_connection(server_connection)
-    await nc_message_sender.set_server_connection(server_connection)
+    # 连接侧防抢绑定（2026-08-06 审查残留窗口）：误连探针【连上】时不许顶掉
+    # 仍存活的真实 NapCat 绑定——只在「无绑定或绑定对象已不在存活集」时绑新连接。
+    # 真实 NapCat 重连场景由断开侧的 fallback 回绑兜底。
+    others = _active_conns - {server_connection}
+    if nc_message_sender.server_connection not in others:
+        await nc_message_sender.set_server_connection(server_connection)
+    if message_handler.server_connection not in others:
+        await message_handler.set_server_connection(server_connection)
     logger.info("NapCat 已连入 Adapter")
     try:
         async for raw_message in server_connection:

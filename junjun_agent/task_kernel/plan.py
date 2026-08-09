@@ -38,6 +38,8 @@ class TaskPlan:
     state: str = "planning"          # planning/running/reporting/done/failed
     attempts: Dict[str, int] = field(default_factory=dict)   # step_id -> 已试次数
     replans: int = 0                 # 已重规划次数（上限见 [task_kernel] max_replans）
+    verify_failures: int = 0         # 步骤验证失败计数（audit 指标；曾是运行时补丁
+                                     # 属性不落盘，2026-08-09 收编为正式字段）
     created_ts: float = field(default_factory=time.time)
     deadline_ts: float = 0.0
     note: str = ""                   # 失败原因等备注
@@ -47,7 +49,8 @@ class TaskPlan:
         return {
             "plan_id": self.plan_id, "goal": self.goal, "chat_id": self.chat_id,
             "user_id": self.user_id, "state": self.state, "attempts": self.attempts,
-            "replans": self.replans, "created_ts": self.created_ts,
+            "replans": self.replans, "verify_failures": self.verify_failures,
+            "created_ts": self.created_ts,
             "deadline_ts": self.deadline_ts, "note": self.note,
             "steps": [vars(s) for s in self.steps],
         }
@@ -59,6 +62,7 @@ class TaskPlan:
         p.state = d.get("state", "planning")
         p.attempts = d.get("attempts", {})
         p.replans = int(d.get("replans", 0))
+        p.verify_failures = int(d.get("verify_failures", 0))
         p.created_ts = float(d.get("created_ts", time.time()))
         p.deadline_ts = float(d.get("deadline_ts", 0.0))
         p.note = d.get("note", "")

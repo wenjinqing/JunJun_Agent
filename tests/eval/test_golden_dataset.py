@@ -7,7 +7,7 @@ CASES = Path(__file__).parent / "golden_cases.jsonl"
 
 _REQUIRED = {"id", "scene", "input", "expect"}
 _EXPECT_KEYS = {"must_call", "must_not_call", "silence", "reply_required",
-                "must_contain", "must_not_contain"}
+                "must_contain", "must_not_contain", "must_call_args"}
 
 
 def _load():
@@ -48,6 +48,11 @@ def test_expectations_reference_real_tools():
                 f"{c['id']}: 备选组 {spec} 全部不存在"
         for name in c["expect"].get("must_not_call", []):
             assert name in real, f"{c['id']}: 工具 {name} 不存在"
+        for spec in c["expect"].get("must_call_args", []):
+            assert spec.get("tool") in real, \
+                f"{c['id']}: must_call_args 工具 {spec.get('tool')} 不存在"
+            assert isinstance(spec.get("args"), dict), \
+                f"{c['id']}: must_call_args.args 必须是对象"
 
 
 def test_covers_core_incidents():
