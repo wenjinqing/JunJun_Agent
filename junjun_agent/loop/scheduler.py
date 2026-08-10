@@ -138,6 +138,14 @@ def register_default_tasks() -> None:
         from junjun_memory.long_term import get_long_term_memory
         get_long_term_memory().flush()
 
+    async def memory_dedupe():
+        """夜间整理：全局近重合并（写入期去重只吃 top-1/近窗，跨窗漏网的
+        同一事实在这里归并）。阈值比写入期更严，宁漏勿错杀。"""
+        from junjun_memory.long_term import get_long_term_memory
+        merged = get_long_term_memory().dedupe()
+        if merged:
+            logger.info(f"记忆夜间整理: 合并 {merged} 条近重记忆")
+
     async def flush_pending_summaries():
         """兜底：超时未满批的摘要批次也定期消费。"""
         from junjun_memory.summarizer import get_summarizer, BATCH_MAX_AGE
@@ -209,6 +217,7 @@ def register_default_tasks() -> None:
 
     scheduler.add(ScheduledTask("memory_forget", memory_forget, interval=6 * 3600))
     scheduler.add(ScheduledTask("memory_flush", memory_flush, interval=60))
+    scheduler.add(ScheduledTask("memory_dedupe", memory_dedupe, interval=24 * 3600))
     scheduler.add(ScheduledTask("flush_summaries", flush_pending_summaries, interval=600))
     scheduler.add(ScheduledTask("reminders", reminders, interval=interval))
     scheduler.add(ScheduledTask("proactive_chat", proactive_scan, interval=proactive_min * 60))

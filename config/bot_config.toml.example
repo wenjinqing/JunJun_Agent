@@ -111,6 +111,7 @@ word_replace_rate = 0.006  # 整词替换概率
 max_agent_iterations = 5       # 单轮决策最大工具调用轮数（防死循环，对应 recursion_limit）
 enable_jargon_detection = true # 黑话检测：上下文渲染时给黑话标注解释
 ltm_max_items = 5000           # 长期记忆容量上限：超过按（低权重+最旧）淘汰，防无界增长
+dedupe_threshold = 0.95        # 夜间整理近重合并阈值（比写入期 0.92 严，宁漏勿错杀）
 recall_max_per_hour = 5        # 语义召回「你忽然想起」注入限流（每会话每小时，0=不限）
 pinned_max_per_chat = 20       # /记住、pin_memory 钉住记忆每会话上限（每轮全量注入，防稀释）
 persist_short_term = false     # 短期记忆落 SQLite，重启后可恢复最近上下文（Phase 2；灰度默认关，观察期先关）

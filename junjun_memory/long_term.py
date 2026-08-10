@@ -382,6 +382,68 @@ class LongTermMemory:
         logger.info(f"按条件删除 {removed} 条记忆（{len(keep_ids)} 条保留）")
         return removed
 
+    def dedupe(self, *, threshold: Optional[float] = None) -> int:
+        """全局近重合并（夜间整理）。返回合并掉的条目数。
+
+        写入期去重（add 内）只吃全库 top-1 + 近 200 条窗口，跨窗口/分批写入
+        的同一事实会漏网（典型：摘要系统隔几天用不同措辞沉淀同一件事）。
+        这里全库逐条找近邻合并。安全纪律（记忆是不可再生资产，宁漏勿错杀）：
+        - 阈值默认 0.95，比写入期（0.92）更严
+        - 只并同会话、非 pinned 条目（用户钉的每一条都算数）
+        - 保留方取权重 max+0.1（封顶 2.0）、时间戳取新，文本留先见的一条
+        """
+        self.load()
+        if threshold is None:
+            try:
+                from junjun_core.config import get_global_config
+                threshold = float(get_global_config().raw.get("memory", {})
+                                  .get("dedupe_threshold", 0.95))
+            except Exception:
+                threshold = 0.95
+        drop: set = set()
+        # 向量条目：全库近邻合并
+        for pos, item_idx in enumerate(self._vec_map):
+            if item_idx in drop:
+                continue
+            cur = self._items[item_idx]
+            if cur.kind == "pinned":
+                continue
+            v = self._index.reconstruct(pos).reshape(1, -1)
+            scores, ids = self._index.search(v, 6)
+            for score, npos in zip(scores[0], ids[0], strict=False):
+                npos = int(npos)
+                if npos < 0 or npos == pos or float(score) < threshold:
+                    continue
+                nidx = self._vec_map[npos]
+                if nidx in drop:
+                    continue
+                nit = self._items[nidx]
+                if nit.chat_id != cur.chat_id or nit.kind == "pinned":
+                    continue
+                cur.weight = min(2.0, max(cur.weight, nit.weight) + 0.1)
+                cur.timestamp = max(cur.timestamp, nit.timestamp)
+                drop.add(nidx)
+        # 纯文本条目（embedding 不可用期写入的）：归一化全文精确合并
+        seen: dict = {}
+        for i, it in enumerate(self._items):
+            if i in drop or it.has_vec or it.kind == "pinned":
+                continue
+            key = (it.chat_id, " ".join(it.text.split()))
+            if key in seen:
+                cur = self._items[seen[key]]
+                cur.weight = min(2.0, max(cur.weight, it.weight) + 0.1)
+                cur.timestamp = max(cur.timestamp, it.timestamp)
+                drop.add(i)
+            else:
+                seen[key] = i
+        if not drop:
+            return 0
+        self._rebuild([i for i in range(len(self._items)) if i not in drop])
+        logger.info(f"夜间整理合并 {len(drop)} 条近重记忆（阈值 {threshold}，"
+                    f"{len(self._items)} 条保留）")
+        return len(drop)
+
+
     def pinned(self, chat_id: str, *, limit: int = 50) -> List[MemoryItem]:
         """用户钉住的记忆（/记住、pin_memory，kind="pinned"）：每轮优先注入，
         不占语义召回额度（P6-2 用户可控记忆）。"""
