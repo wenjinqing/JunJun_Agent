@@ -211,10 +211,18 @@ async def _synthesize(topic: str, items: list, model=None) -> str:
 
 async def deep_research_handler(job, payload: dict, *, plan_model=None,
                                 synth_model=None, search=None, fetch=None) -> str:
-    """深度研究主流程（引擎 handler）。抛异常 = job 失败，由队列引擎兜底。"""
+    """深度研究主流程（引擎 handler）。抛异常 = job 失败，由队列引擎兜底。
+
+    engine=langgraph 且未注入测试桩时走 research_graph（崩溃断点续跑）；
+    注入依赖（测试桩）时一律走 legacy 内联路径。"""
     topic = str(payload.get("topic") or job.title).strip()[:200]
     if not topic:
         raise RuntimeError("研究主题为空")
+    if (_cfg().get("engine") == "langgraph"
+            and plan_model is None and synth_model is None
+            and search is None and fetch is None):
+        from junjun_skills.plugins.async_task import research_graph
+        return await research_graph.run(job, topic)
     queries = await _plan(topic, plan_model)
     logger.info(f"深度研究 [{job.job_id}] 主题「{topic[:30]}」拆出 {len(queries)} 个查询")
     items = await _collect(queries, search=search, fetch=fetch)

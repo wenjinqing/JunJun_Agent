@@ -71,6 +71,15 @@ async def _run() -> int:
     except Exception as e:
         logger.warning(f"任务内核断点恢复挂接失败（忽略）: {e}")
 
+    # 深度研究 LangGraph 引擎（[deep_research] engine=langgraph 时）：
+    # AsyncJob 是内存任务，进程重启整单丢——研究图把中间态落 sqlite 断点续跑
+    try:
+        from junjun_skills.plugins.async_task import research_graph
+        research_graph.configure(ROOT / "data" / "task_kernel")
+        asyncio.create_task(research_graph.recover(), name="research-recover")
+    except Exception as e:
+        logger.warning(f"深度研究断点恢复挂接失败（忽略）: {e}")
+
     # 数据库建表 + 写队列
     try:
         from junjun_core.database import init_database, db_writer
