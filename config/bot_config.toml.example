@@ -23,6 +23,10 @@ host = "127.0.0.1"   # 监听地址（重启生效；非本机地址且未配 GA
 port = 8092          # WS 端口，Adapter 的 junjun_server 要指向这里（重启生效）
 # rate_limit_capacity = 8        # 可选：每会话消息令牌桶容量（防刷屏，默认 8）
 # rate_limit_refill_per_sec = 0.5  # 可选：每秒补充令牌数（默认 0.5）
+# outbox = true                  # WS outbox：adapter 断连期回复暂存，重连回放（默认开）
+# outbox_ttl_seconds = 1800      # 暂存回复超此时长丢弃（陈旧回复不像真人，默认 30 分钟）
+# outbox_flush_seconds = 30      # 周期回放间隔（默认 30s；入站消息也会触发即时回放）
+# outbox_max_attempts = 10       # 单条回放异常次数上限（默认 10，超过丢弃）
 
 # ---------- 人设（进 system prompt，热改立即生效） ----------
 # 写法要点（2026-08-03 辣味恢复版）：辣味照保留，但怪癖限频率——「傲娇/毒舌/贴贴」

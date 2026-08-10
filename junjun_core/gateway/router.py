@@ -63,6 +63,7 @@ class Gateway:
         self.bot_user_id = bot_user_id
         self.server: Optional[MessageServer] = None
         self._server_task: Optional[asyncio.Task] = None
+        self._outbox_task: Optional[asyncio.Task] = None
         self._chat_list: Optional[ChatListConfig] = None
         self._processor: Processor = _echo_processor
 
@@ -99,12 +100,22 @@ class Gateway:
         logger.info(f"网关启动中 ws://{self.host}:{self.port}/ws （等待 Adapter 连接）")
         # start_server() 内部 await Event().wait() 永不返回，必须放后台任务
         self._server_task = asyncio.create_task(self.server.start_server(), name="gateway-server")
+        # WS outbox：断连暂存的周期回放守护（候选 C）
+        from junjun_core.gateway import outbox
+        self._outbox_task = asyncio.create_task(
+            outbox.flush_loop(lambda: self.server), name="gateway-outbox")
         await asyncio.sleep(0.5)  # 等底层 aiohttp site 起监听
         if self._server_task.done() and (exc := self._server_task.exception()):
             raise RuntimeError(f"网关启动失败: {exc}") from exc
         logger.info(f"网关 WS 已就绪 ws://{self.host}:{self.port}/ws")
 
     async def stop(self) -> None:
+        if self._outbox_task is not None:
+            self._outbox_task.cancel()
+            try:
+                await self._outbox_task
+            except (asyncio.CancelledError, Exception):
+                pass
         if self.server is not None:
             await self.server.stop()
         if self._server_task is not None:
@@ -142,6 +153,9 @@ class Gateway:
             return
 
         chat_id = f"{info.platform}:{group_id if group_info else user_id}:{'group' if group_info else 'private'}"
+        # 入站 = 该平台连接活着：outbox 有积压立刻回放（不等周期 loop）
+        from junjun_core.gateway import outbox
+        asyncio.create_task(outbox.maybe_flush(self.server, info.platform))
         from junjun_core.gateway.rate_limit import allow_message
         if not allow_message(chat_id):
             logger.debug(f"[{chat_id}] 触发速率限制，消息丢弃")
@@ -180,6 +194,7 @@ class Gateway:
     async def send_reply(self, reply: ReplySet) -> None:
         if not reply.should_reply:
             return
+        from junjun_core.gateway import outbox
         msg_base = reply.to_message_base(self.bot_user_id)
         if self.server is not None:
             # 按平台定向发送（原 broadcast 发给所有已连接 adapter——
@@ -191,10 +206,13 @@ class Gateway:
                                                              msg_base.to_dict())
             except Exception as e:
                 logger.error(f"回复广播异常，消息未送达: {type(e).__name__}: {e}")
+                outbox.enqueue(reply, msg_base.to_dict())   # 断连暂存，重连回放（候选 C）
                 return
             if ok is False:
                 logger.error(f"回复未送达：平台 {reply.platform} 没有已连接的 adapter "
-                             f"（adapter 掉线？）目标={reply.target_group_id or reply.target_user_id}")
+                             f"（adapter 掉线？）目标={reply.target_group_id or reply.target_user_id}"
+                             f"——已暂存 outbox 待回放")
+                outbox.enqueue(reply, msg_base.to_dict())
                 return
             logger.info(f"已发送回复 -> {reply.target_group_id or reply.target_user_id}")
 

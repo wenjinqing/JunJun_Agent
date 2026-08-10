@@ -286,9 +286,23 @@ class Subscription(BaseModel):
     last_checked = FloatField(default=0.0)
 
 
+class OutboxMessage(BaseModel):
+    """出站暂存（WS outbox）：adapter 断连期的回复不落空，重连后回放。
+    2026-08 观察：gateway→adapter 断连时回复仅记日志丢弃——用户侧表现为
+    「君君突然不理人」。TTL + 次数上限防陈旧消息轰炸。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    platform = CharField(index=True)
+    target_group_id = CharField(default="")
+    target_user_id = CharField(default="")
+    payload_json = TextField()            # MessageBase dict
+    created_ts = FloatField(index=True)
+    attempts = IntegerField(default=0)    # 回放尝试次数（上限后丢弃）
+
+
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
               OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity,
-              UserSceneProfile, Intention, SkillPatch, ShortTermMemory]
+              UserSceneProfile, Intention, SkillPatch, ShortTermMemory, OutboxMessage]
 
 
 def init_database() -> None:
