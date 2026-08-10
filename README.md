@@ -31,8 +31,8 @@ flowchart TD
 | `junjun_agent` | 决策漏斗（L1/L2/L3）、persona、Router、异步任务反馈闭环（结局主动汇报/工具熔断） |
 | `junjun_agent/task_kernel` | 复杂任务状态机：LangGraph 引擎（SqliteSaver 断点续跑 + 发布类人审 interrupt）+ legacy 双引擎灰度 |
 | `junjun_llm` | 任务槽模型工厂：每槽多模型 fallback 链 + 硅基号池（多 key 轮用、死 key 自动剔除重建） |
-| `junjun_memory` | 三层记忆（窗口→话题摘要→faiss 长期库）、用户画像、echo 防复读 |
-| `junjun_skills` | 工具注册表（60+ 工具）+ 25 个插件（画图/搜索/B站/订阅/网盘/TTS…）+ MCP 工具注入 |
+| `junjun_memory` | 三层记忆（窗口→话题摘要→faiss 长期库）、用户画像、echo 防复读、夜间近重合并整理 |
+| `junjun_skills` | 工具注册表（60+ 工具）+ 26 个插件（画图/搜索/B站/订阅/网盘/TTS/热点日报…）+ MCP 工具注入 |
 | `junjun_express` | 情绪、表情包（偷图/注册/发送）、黑话、表达学习 |
 | `junjun_mcp_client` / `junjun_mcp_server` | MCP 双向：调外部 server + 自建 server |
 | `junjun_webui` | FastAPI：配置热改/日志实时流/统计/数据管理 |
@@ -54,7 +54,7 @@ flowchart TD
 
 ## 质量保障
 
-- **单元回归**：`uv run python -m pytest tests/ -q`（1400+ 条，含大量「误判回归」——凡是加宽命中面的改动必须带不该命中的日常句子断言）
+- **单元回归**：`uv run python -m pytest tests/ -q`（1500+ 条，含大量「误判回归」——凡是加宽命中面的改动必须带不该命中的日常句子断言）
 - **golden 决策评测**（真实 LLM）：`uv run python scripts/eval_golden.py`——34 条端到端 case，改 prompt/工具掩码/模型前后各跑一次对比
 - **功能体检**：`uv run python scripts/functional_check.py --pytest`
 - **全链路 E2E**：`.venv\Scripts\python.exe scripts\test_e2e_fake_napcat.py`（fake NapCat）
@@ -89,7 +89,7 @@ copy .env.example .env
 - `config/mcp_servers.toml` — MCP server 声明（stdio，`${REPO_ROOT}` 插值）
 - `.env` — API key 与账号（不入库）
 
-复杂任务内核（`[task_kernel]`）：`engine = "langgraph"` 启用断点续跑与人审；`approval_actions` 里的动作（默认 `send_feed`）执行前会私聊管理员等批准，超时默认跳过。
+复杂任务内核（`[task_kernel]`）：`engine = "langgraph"` 启用断点续跑与人审；`approval_actions` 里的动作（默认 `send_feed`）执行前会私聊管理员等批准，超时默认跳过。深度研究（`[deep_research]`）与热点日报（`[daily_report]`，每天选题→深研→写稿→人审→发 QQ 空间）同样走 LangGraph 管线，崩溃后从断点续跑，审批词同为「发/算了」。
 
 ## 故障排查
 
