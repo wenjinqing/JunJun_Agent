@@ -1,0 +1,7 @@
+{
+  "name": "daily_report",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.daily_report.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

@@ -317,6 +317,17 @@ approval_actions = ["send_feed"]   # langgraph 引擎：这些动作执行前挂
 approval_timeout_seconds = 600     # 审批超时默认跳过（宁保守不放行）
 
 
+# ---------- 热点日报（每天一条深研热点说说，LangGraph 管线 + 人审） ----------
+# 选题（news 60s + RSS）→ deep_research 同款深研 → 人设写稿 → 私聊管理员审批
+# （回「发」放行 /「算了」丢弃）→ 发 QQ 空间。崩溃断点续跑；发布依赖 [junzone]。
+[daily_report]
+enable = false             # 总开关（发布会真实发到空间，确认效果后再开）
+time = "21:30"             # 每天触发时刻（HH:MM，本地时间）
+approval_timeout_seconds = 600   # 审批超时默认不发（对外发布，保守方向）
+max_titles = 15            # 喂给选题模型的热点标题上限
+history_days = 7           # 选题去重回看几天内已发日报
+
+
 # ---------- 深度研究（deep_research job 的流水线参数） ----------
 [deep_research]
 engine = "legacy"   # legacy | langgraph：langgraph 走状态图+sqlite 断点续跑（崩溃后从断点继续）

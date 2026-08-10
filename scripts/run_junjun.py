@@ -80,6 +80,15 @@ async def _run() -> int:
     except Exception as e:
         logger.warning(f"深度研究断点恢复挂接失败（忽略）: {e}")
 
+    # 热点日报 LangGraph 管线（[daily_report] enable=true 时）：崩溃续跑 +
+    # 重启后停在人审的重新通知管理员
+    try:
+        from junjun_skills.plugins.daily_report import graph as dr_graph
+        dr_graph.configure(ROOT / "data" / "task_kernel")
+        asyncio.create_task(dr_graph.recover(), name="daily-report-recover")
+    except Exception as e:
+        logger.warning(f"热点日报断点恢复挂接失败（忽略）: {e}")
+
     # 数据库建表 + 写队列
     try:
         from junjun_core.database import init_database, db_writer

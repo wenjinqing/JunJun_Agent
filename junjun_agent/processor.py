@@ -793,6 +793,13 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
             return None
     except Exception:
         pass
+    # 热点日报人审：同一套「发/算了」，只在自己的待审批非空时接单
+    try:
+        from junjun_skills.plugins.daily_report.graph import approval_hook as dr_hook
+        if await dr_hook(session, meta):
+            return None
+    except Exception:
+        pass
     # 意向系统事件钩子（P7）：emo 规则预筛 -> 关心意向（0 token，
     # [intention] enable=false 时零开销直接返回）
     try:
