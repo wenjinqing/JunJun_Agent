@@ -10,6 +10,10 @@ import time
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
+from junjun_core.observability import get_logger
+
+logger = get_logger("memory.stm")
+
 # 管理员锚点防伪：昵称/消息内容里不得出现系统标记样式或换行，
 # 否则群名片「xx(管理员)」或消息内伪造行能冒充系统打的标记（代码层
 # is_admin_privileged 闸门不受影响，但 LLM 认知锚点会被污染）
@@ -50,6 +54,39 @@ class MemoryEntry:
     user_id: str = ""
     message_id: str = ""
     at_bot: bool = False
+    ts: float = field(default_factory=time.time)  # 背景裁剪按龄期判断用
+
+
+# 背景低价值行裁剪（2026-08-11 上下文压缩）：超龄的纯语气/反应行不进背景——
+# 真人也不记得 5 分钟前谁回了个「嗯」。白名单制，宁漏勿错杀：
+# 「好/行/ok/可以」这类承诺词不在列（「今晚开黑吗」「好」砍了语义就断），
+# 占位行（[图片]/[表情]）不在列（感知链路要靠它知道有人发过图）。
+_FILLER_EXACT = {"嗯", "嗯嗯", "哦", "哦哦", "啊", "啊这", "哈", "哈哈", "笑死",
+                 "草", "艹", "6", "？", "?", "！", "!", "。", "emm", "emmm"}
+_FILLER_BASE = {"嗯", "哦", "啊", "哈", "草", "艹", "6", "2"}  # 叠字坍缩后比对（哈哈哈→哈）
+
+
+def _is_filler(text: str) -> bool:
+    """是否纯语气/反应行（无信息增量）。"""
+    import re
+    t = (text or "").strip()
+    if not t or len(t) > 6:
+        return False
+    if t in _FILLER_EXACT:
+        return True
+    collapsed = re.sub(r"(.)\1+", r"\1", t)  # 叠字坍缩：哈哈哈→哈、666→6、2333→23
+    return collapsed in _FILLER_BASE or collapsed in {"23"}
+
+
+def _prune_cfg() -> tuple:
+    """([memory] background_prune_filler, filler_ttl_seconds)，默认开/300s。"""
+    try:
+        from junjun_core.config import get_global_config
+        mem = get_global_config().raw.get("memory", {}) or {}
+        return (bool(mem.get("background_prune_filler", True)),
+                float(mem.get("filler_ttl_seconds", 300)))
+    except Exception:
+        return True, 300.0
 
 
 @dataclass
@@ -147,7 +184,8 @@ class ShortTermMemory:
             self.entries = self.entries[-self.max_size:]
 
     def render(self, limit: Optional[int] = None, *, mark_latest: bool = False,
-               include_bot: bool = True, for_security: bool = False) -> str:
+               include_bot: bool = True, for_security: bool = False,
+               prune: Optional[bool] = None) -> str:
         """渲染为对话文本（供 prompt）。群聊格式 `「昵称」: 内容`。
 
         昵称用「」与内容硬分隔（2026-08-11 昵称注入事故）：「」内是群名片——
@@ -162,6 +200,9 @@ class ShortTermMemory:
         明确标记为「已发生的历史输出」而非「待接续的话」（防复读关键）。
         for_security: True 时保留（管理员）标记（安全验证用）；
         False（默认）时管理员显示为普通群友（不影响回复意愿）。
+        prune: 超龄语气词行裁剪（[memory] background_prune_filler 默认开）——
+        只砍白名单内的纯反应行；@你 的行/最新一条/bot 历史/占位行/承诺词
+        （好/行/可以）一律保留。
 
         边界感知（LangChain trim_messages 语义）：永远以 user 消息开头，
         不从 bot 回复中间截断——模型不会把被截断的历史当成待续写文本。
@@ -179,13 +220,19 @@ class ShortTermMemory:
                 if n:
                     bot_last[n] = i
         lines = []
-        # 找最后一条 user 消息的下标（mark_latest 用）
+        # 找最后一条 user 消息的下标（mark_latest / 裁剪豁免用）
         last_user_idx = -1
-        if mark_latest:
-            for i in range(len(entries) - 1, -1, -1):
-                if entries[i].role == "user":
-                    last_user_idx = i
-                    break
+        for i in range(len(entries) - 1, -1, -1):
+            if entries[i].role == "user":
+                last_user_idx = i
+                break
+        # 超龄语气词裁剪（上下文压缩）
+        if prune is None:
+            prune, filler_ttl = _prune_cfg()
+        else:
+            filler_ttl = _prune_cfg()[1] if prune else 0.0
+        now = time.time()
+        pruned = 0
         # 边界感知：跳过开头的 bot 消息（不从 bot 回复中间截断）
         start = 0
         while start < len(entries) and entries[start].role == "bot":
@@ -200,6 +247,12 @@ class ShortTermMemory:
                     lines.append(f"你(历史): {e.text}")
                 # 默认不进 context（include_bot=False 时）
             else:
+                # 超龄语气词裁剪：最新一条/@你 的行豁免（节奏与直指你的反应
+                # 都有信息量）；bot 历史与占位行走别的分支天然保留
+                if (prune and i != last_user_idx and not e.at_bot
+                        and now - e.ts > filler_ttl and _is_filler(e.text)):
+                    pruned += 1
+                    continue
                 # 「」硬分隔昵称与内容；昵称里的「」已被 sanitize 剥掉，
                 # 分隔符无法从内部突破
                 prefix = f"「{_sanitize_nickname(e.nickname) or e.user_id}」"
@@ -211,6 +264,8 @@ class ShortTermMemory:
                 if mark_latest and i == last_user_idx:
                     prefix = f"【最新】{prefix}"
                 lines.append(f"{prefix}{mark}: {_sanitize_text(e.text)}")
+        if pruned:
+            logger.debug(f"[{self.chat_id or '?'}] 背景裁剪 {pruned} 行超龄语气词")
         return "\n".join(lines)
 
     def last_user_entry(self) -> Optional[MemoryEntry]:
