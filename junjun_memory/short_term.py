@@ -79,14 +79,18 @@ def _is_filler(text: str) -> bool:
 
 
 def _prune_cfg() -> tuple:
-    """([memory] background_prune_filler, filler_ttl_seconds)，默认开/300s。"""
+    """([memory] background_prune_filler, filler_ttl_seconds)，默认关/300s。
+
+    默认关（2026-08-11 用户裁决）：直接裁断是丢信息换 token 的下策，
+    同一人连续发言合并（零损失）已覆盖其价值——此开关留给刷屏特别狠的群
+    按需手动开。"""
     try:
         from junjun_core.config import get_global_config
         mem = get_global_config().raw.get("memory", {}) or {}
-        return (bool(mem.get("background_prune_filler", True)),
+        return (bool(mem.get("background_prune_filler", False)),
                 float(mem.get("filler_ttl_seconds", 300)))
     except Exception:
-        return True, 300.0
+        return False, 300.0
 
 
 @dataclass
@@ -200,9 +204,10 @@ class ShortTermMemory:
         明确标记为「已发生的历史输出」而非「待接续的话」（防复读关键）。
         for_security: True 时保留（管理员）标记（安全验证用）；
         False（默认）时管理员显示为普通群友（不影响回复意愿）。
-        prune: 超龄语气词行裁剪（[memory] background_prune_filler 默认开）——
-        只砍白名单内的纯反应行；@你 的行/最新一条/bot 历史/占位行/承诺词
-        （好/行/可以）一律保留。
+        prune: 超龄语气词行裁剪（[memory] background_prune_filler，默认关——
+        裁断是丢信息换 token 的下策，连续发言合并已覆盖其价值；刷屏狠的群
+        可手动开）。只砍白名单内的纯反应行；@你 的行/最新一条/bot 历史/
+        占位行/承诺词（好/行/可以）一律保留。
 
         边界感知（LangChain trim_messages 语义）：永远以 user 消息开头，
         不从 bot 回复中间截断——模型不会把被截断的历史当成待续写文本。
@@ -210,6 +215,23 @@ class ShortTermMemory:
         from junjun_core.security import is_admin
         from junjun_memory.echo import normalize_echo
         entries = self.entries[-limit:] if limit else self.entries
+        # 同一人连续发言合并成一条（⏎ 连接，与 _sanitize_text 的多行渲染同
+        # 视觉约定）——零信息损失的压缩（2026-08-11 方案 B）：群友一句话拆
+        # N 条发是常态，每条重复的「昵称」: 前缀是纯开销。合并发生在副本上，
+        # 不污染 entries 本体（引用决策还要用原始 message_id 粒度）
+        merged: List[MemoryEntry] = []
+        for e in entries:
+            if (e.role == "user" and e.user_id and merged
+                    and merged[-1].role == "user"
+                    and merged[-1].user_id == e.user_id):
+                top = merged[-1]
+                top.text = f"{top.text} ⏎ {e.text}"
+                top.at_bot = top.at_bot or e.at_bot
+                top.ts = max(top.ts, e.ts)
+                top.message_id = e.message_id  # 引用指向最新一条
+            else:
+                merged.append(MemoryEntry(**asdict(e)))
+        entries = merged
         # bot 历史去重（防上下文自污染，2026-08-04）：同一句话术只保留最近一次
         # 出现——否则 context 里「你(历史): xxx」堆 N 次，模型把它当成自己的
         # 说话习惯继续复读，形成正反馈污染循环
