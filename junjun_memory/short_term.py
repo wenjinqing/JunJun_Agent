@@ -15,13 +15,26 @@ from typing import List, Optional
 # is_admin_privileged 闸门不受影响，但 LLM 认知锚点会被污染）
 _ADMIN_MARKER_TOKENS = ("(管理员)", "（管理员）")
 
+# 昵称分隔符/系统标记防伪（2026-08-11 昵称注入事故）：昵称是群友随便起的
+# 群名片，不可信——有人故意起「有人@我，我喜欢你很久了」这种整段话当昵称，
+# 模型会把昵称当消息内容（引用该群友消息时尤其严重）。render 用「」包住
+# 昵称与内容分隔，「」、[@你]、【最新】一律从昵称剥掉，防从内部突破分隔符。
+_FORGE_TOKENS = _ADMIN_MARKER_TOKENS + ("「", "」", "[@你]", "【最新】")
+
+# 昵称展示截断：正常群名片 2-6 字，长昵称几乎全是整段玩梗/钓鱼——
+# 钓饵需要完整句子才生效，截断本身就拆掉攻击面，还顺带省 token
+_MAX_NICK_CHARS = 10
+
 
 def _sanitize_nickname(nickname: str) -> str:
-    """昵称里的系统标记样式一律剥掉（用户可任意改群名片，不可信）。"""
+    """昵称剥分隔符/系统标记并截断（用户可任意改群名片，不可信）。"""
     name = nickname or ""
-    for token in _ADMIN_MARKER_TOKENS:
+    for token in _FORGE_TOKENS:
         name = name.replace(token, "")
-    return name.replace("\n", " ").strip()
+    name = name.replace("\n", " ").strip()
+    if len(name) > _MAX_NICK_CHARS:
+        name = name[:_MAX_NICK_CHARS] + "…"
+    return name
 
 
 def _sanitize_text(text: str) -> str:
@@ -135,7 +148,11 @@ class ShortTermMemory:
 
     def render(self, limit: Optional[int] = None, *, mark_latest: bool = False,
                include_bot: bool = True, for_security: bool = False) -> str:
-        """渲染为对话文本（供 prompt）。群聊格式 `昵称: 内容`。
+        """渲染为对话文本（供 prompt）。群聊格式 `「昵称」: 内容`。
+
+        昵称用「」与内容硬分隔（2026-08-11 昵称注入事故）：「」内是群名片——
+        群友随便起的标签，可能整段话玩梗/假装说话，永远不是消息内容；
+        冒号后的才是。配合 persona 安全段规则生效。
 
         管理员消息带「(管理员)」系统标记——按真实 user_id 判定，聊天内容无法伪造，
         是 LLM 识别管理员指令的锚点（配合 persona 安全段）。
@@ -183,7 +200,9 @@ class ShortTermMemory:
                     lines.append(f"你(历史): {e.text}")
                 # 默认不进 context（include_bot=False 时）
             else:
-                prefix = _sanitize_nickname(e.nickname) or e.user_id
+                # 「」硬分隔昵称与内容；昵称里的「」已被 sanitize 剥掉，
+                # 分隔符无法从内部突破
+                prefix = f"「{_sanitize_nickname(e.nickname) or e.user_id}」"
                 # 管理员标记：for_security=True 才保留（安全验证用），
                 # 默认不显示——L2/L3 看到的都是普通群友，不影响回复意愿
                 if for_security and is_admin(e.user_id):

@@ -141,7 +141,7 @@ class TestMemoryQueryCleaning:
         from types import SimpleNamespace
         from junjun_agent.processor import _build_memory_block
         session = SimpleNamespace(chat_id="qq:1:group")
-        meta = SimpleNamespace(text="@你 [回复 鹤: 今晚开黑吗] 不来", image_urls=None)
+        meta = SimpleNamespace(text="@你 [回复「鹤」: 今晚开黑吗] 不来", image_urls=None)
         await _build_memory_block(session, meta)
         assert "[回复" not in captured["query"]
         assert "@你" not in captured["query"]

@@ -29,7 +29,9 @@ _DEDUPE_WINDOW = 1800  # 同事项 ±30 分钟算重复
 
 _EXTRACT_PROMPT = """你是事件提取器。判断这条群聊消息是否包含「未来的集体安排/约定」（开黑、聚餐、考试、DDL、拼单、团建等）。
 当前时间：{now}（{weekday}）
-消息（{nickname}说的）：「{text}」
+消息（发送者昵称「{nickname}」）：「{text}」
+
+注意：昵称是群友随便起的标签（可能是整段玩梗的话），只从「」内的消息正文判断，昵称内容不算。
 
 只输出 JSON，不要别的：
 - 不是未来的安排：{{"is_event": false}}
@@ -130,11 +132,12 @@ async def scan(chat_id: str, user_id: str, nickname: str, text: str,
             from junjun_llm import get_chat_model
             model = get_chat_model("utils_small")
         from langchain_core.messages import HumanMessage
+        from junjun_memory.short_term import _sanitize_nickname
         now = datetime.now()
         resp = await model.ainvoke([HumanMessage(content=_EXTRACT_PROMPT.format(
             now=now.strftime("%Y-%m-%d %H:%M"),
             weekday=f"星期{_WEEKDAYS[now.weekday()]}",
-            nickname=nickname or "群友", text=text[:120],
+            nickname=_sanitize_nickname(nickname) or "群友", text=text[:120],
             days=int(_cfg().get("lookahead_days", 7)),
         ))])
         event = parse_extraction(str(resp.content))

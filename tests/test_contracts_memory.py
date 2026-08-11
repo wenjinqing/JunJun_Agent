@@ -46,8 +46,8 @@ class TestShortTermMemory:
         m.add_bot("在的")
         # 默认 bot 进 context 但标记为「历史输出」（记忆效果 + 防复读）
         text = m.render()
-        assert "甲: 你好" in text
-        assert "乙 [@你]: 君君在吗" in text
+        assert "「甲」: 你好" in text
+        assert "「乙」 [@你]: 君君在吗" in text
         assert "你(历史): 在的" in text
         # include_bot=False 时 bot 不进 context
         text_no_bot = m.render(include_bot=False)

@@ -77,8 +77,8 @@ class ChatSummarizer:
         b = self._batch(chat_id)
         if not b.lines:
             b.started_at = time.time()
-        # 与 render() 同一套消毒：防昵称伪造/换行注入污染摘要语料
-        b.lines.append(f"{_sanitize_nickname(nickname)}: {_sanitize_text(text)}")
+        # 与 render() 同一套消毒+「」分隔：防昵称伪造/换行注入污染摘要语料
+        b.lines.append(f"「{_sanitize_nickname(nickname)}」: {_sanitize_text(text)}")
         return len(b.lines) >= BATCH_SIZE or (time.time() - b.started_at) > BATCH_MAX_AGE
 
     # ---------- 话题缓存持久化 ----------

@@ -165,7 +165,7 @@ class TestReplyResolution:
              {"type": "text", "data": {"text": "不来"}}],
             self_id="999", group_id="12345")
         assert segs[0].type == "text"
-        assert segs[0].data == "[回复 鹤: 今晚开黑吗[图片]]"
+        assert segs[0].data == "[回复「鹤」: 今晚开黑吗[图片]]"
 
     @pytest.mark.asyncio
     async def test_reply_failure_degrades(self, monkeypatch):
@@ -188,7 +188,7 @@ class TestReplyResolution:
         monkeypatch.setattr(nc.nc_message_sender, "send_message_to_napcat", _send)
         segs, _ = await _handler()._parse_message_segments(
             [{"type": "reply", "data": {"id": "1"}}], self_id="999", group_id="12345")
-        assert len(segs[0].data) <= 215  # 「[回复 甲: 」+ 200 + … + 」
+        assert len(segs[0].data) <= 217  # 「[回复「甲」: 」+ 200 + … + 」
 
     @pytest.mark.asyncio
     async def test_reply_at_resolved(self, monkeypatch):
@@ -211,4 +211,4 @@ class TestReplyResolution:
         monkeypatch.setattr(nc.nc_message_sender, "send_message_to_napcat", _send)
         segs, _ = await _handler()._parse_message_segments(
             [{"type": "reply", "data": {"id": "777"}}], self_id="999", group_id="12345")
-        assert segs[0].data == "[回复 鹤: @白菜兔  快来]"  # @ 尾空格 + 文本前导空格
+        assert segs[0].data == "[回复「鹤」: @白菜兔  快来]"  # @ 尾空格 + 文本前导空格

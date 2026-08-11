@@ -46,8 +46,9 @@ class ExpressionLearner:
         """积累群友消息（bot 自己的不学）。返回 True 表示应触发学习。"""
         if not self._enabled(chat_id) or len(text) < 4:
             return False
+        from junjun_memory.short_term import _sanitize_nickname
         buf = self._buffers.setdefault(chat_id, [])
-        buf.append(f"{nickname}: {text}")
+        buf.append(f"「{_sanitize_nickname(nickname)}」: {text}")
         return len(buf) >= _MIN_LEARN_BATCH
 
     async def learn(self, chat_id: str, *, model=None, callbacks=None) -> int:

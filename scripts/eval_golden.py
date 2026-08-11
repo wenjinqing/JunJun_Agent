@@ -116,9 +116,9 @@ async def _run_case(agent_mod, stubs, called, case: dict) -> dict:
     agent = JunJunAgent(session)
 
     nickname = "小明"
-    latest_line = f"{nickname}: {case['input']}"
+    latest_line = f"「{nickname}」: {case['input']}"
     if case.get("addressed") and scene == "group":
-        latest_line = f"{nickname} [@你]: {case['input']}"
+        latest_line = f"「{nickname}」 [@你]: {case['input']}"
     bg = (case.get("background") or "").strip()
     context_text = (bg + "\n" if bg else "") + latest_line
 

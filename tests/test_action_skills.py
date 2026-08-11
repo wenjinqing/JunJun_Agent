@@ -205,7 +205,7 @@ class TestPeekGroupChat:
             out = self._invoke("")
             assert "群 100" in out and "群 200" in out
             assert "A群在聊新番" in out and "B群约饭" in out
-            assert "我: 我也在看" in out  # bot 群回复可见（公开内容）
+            assert "「我」: 我也在看" in out  # bot 群回复可见（公开内容）
             assert "私聊秘密暗号" not in out  # 隐私铁律：私聊永远拿不到
 
     def test_specific_group(self, tmp_path):

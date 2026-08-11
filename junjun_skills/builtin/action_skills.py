@@ -188,10 +188,11 @@ def query_chat_history(keyword: str, user: str = "", days: int = 30, limit: int 
     if not rows:
         return f"{scope}的聊天记录里没有找到{who}含「{keyword}」的消息。"
     lines = [f"{scope}含「{keyword}」的{who}最近消息："]
+    from junjun_memory.short_term import _sanitize_nickname
     for r in rows:
-        name = r.user_nickname or r.user_id or "我"
+        name = _sanitize_nickname(r.user_nickname) or r.user_id or "我"
         when = time.strftime("%m-%d %H:%M", time.localtime(r.time))
-        lines.append(f"- [{when}] {name}: {r.processed_plain_text[:80]}")
+        lines.append(f"- [{when}] 「{name}」: {r.processed_plain_text[:80]}")
     return "\n".join(lines)
 
 
@@ -237,9 +238,11 @@ def peek_group_chat(group: str = "") -> str:
         return "最近群里都没什么动静。"
 
     def _fmt(r):
-        name = "我" if r.is_bot else (r.user_nickname or r.user_id or "?")
+        from junjun_memory.short_term import _sanitize_nickname
+        name = "我" if r.is_bot else (_sanitize_nickname(r.user_nickname)
+                                      or r.user_id or "?")
         when = time.strftime("%m-%d %H:%M", time.localtime(r.time))
-        return f"- [{when}] {name}: {r.processed_plain_text[:60]}"
+        return f"- [{when}] 「{name}」: {r.processed_plain_text[:60]}"
 
     group = (group or "").strip()
     if group:

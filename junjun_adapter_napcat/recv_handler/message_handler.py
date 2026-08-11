@@ -63,7 +63,11 @@ async def _resolve_nickname(qq: str, group_id: str) -> str:
 
 
 async def _resolve_reply(reply_id: str) -> str:
-    """引用消息 id -> 「[回复 昵称: 内容]」文本；失败降级占位。内容截断 200 字。"""
+    """引用消息 id -> 「[回复「昵称」: 内容]」文本；失败降级占位。内容截断 200 字。
+
+    昵称用「」与内容硬分隔（2026-08-11 昵称注入事故）：群名片可以起成整段
+    表白/玩梗的话，不分隔模型会把昵称当成消息内容。昵称里的「」剥掉防突破。
+    """
     try:
         from ..send_handler.nc_sending import nc_message_sender
         resp = await nc_message_sender.send_message_to_napcat(
@@ -73,13 +77,18 @@ async def _resolve_reply(reply_id: str) -> str:
             return "[回复某条消息]"
         nickname = ((data.get("sender") or {}).get("card")
                     or (data.get("sender") or {}).get("nickname") or "某人")
+        # 剥分隔符 + 截断（与 bot 侧 _sanitize_nickname 同纪律：
+        # 长昵称几乎全是整段玩梗/钓鱼，截断拆掉攻击面还省 token）
+        nickname = str(nickname).replace("「", "").replace("」", "").replace("\n", " ").strip()
+        if len(nickname) > 10:
+            nickname = nickname[:10] + "…"
         text = await _plain_text_of(data.get("message") or data.get("raw_message") or "",
                                     group_id=str(data.get("group_id") or ""))
         if not text:
-            return f"[回复 {nickname} 的消息]"
+            return f"[回复「{nickname}」的消息]"
         if len(text) > 200:
             text = text[:200] + "…"
-        return f"[回复 {nickname}: {text}]"
+        return f"[回复「{nickname}」: {text}]"
     except Exception:
         return "[回复某条消息]"
 
@@ -269,6 +278,9 @@ class MessageHandler:
             total = 0
             for node in nodes:
                 nickname = (node.get("sender") or {}).get("nickname", "??")
+                nickname = str(nickname).replace("「", "").replace("」", "").replace("\n", " ").strip()
+                if len(nickname) > 10:
+                    nickname = nickname[:10] + "…"
                 texts = []
                 for seg in node.get("message", []) or []:
                     st, sd = seg.get("type"), seg.get("data", {})
@@ -281,7 +293,7 @@ class MessageHandler:
                         texts.append(f"@{name} ")
                     elif st == "forward":
                         texts.append(await self._expand_forward(sd, depth + 1))
-                line = f"{nickname}: {''.join(texts).strip()}"
+                line = f"「{nickname}」: {''.join(texts).strip()}"
                 budget = 500 - total  # 防炸上下文（对齐踩坑清单：展开文本截断 500 字）
                 if len(line) > budget:
                     if budget > 0:
