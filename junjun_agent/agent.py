@@ -290,6 +290,9 @@ def _apply_context_budget(
     for b in kept:
         if b.name == "system":
             system_parts.append(b.content)
+        elif b.name == "examples":
+            # 示例集紧跟核心段（预算吃紧时它已被驱逐，走不到这里）
+            system_parts.append(b.content)
         elif b.name in ("mood", "memory", "relation", "health"):
             dynamic_parts.append(b.content)
         elif b.name == "background":
@@ -334,8 +337,20 @@ class JunJunAgent:
             from junjun_llm import get_chat_model
             model = get_chat_model("agent")
         self._model = model  # 留引用：会话淘汰时关闭 httpx 连接池（防泄漏）
+        self._light_model = None  # agent_light 槽懒加载（P2 双腿路由；未配置/加载失败回落强链）
 
-    def _build_agent(self, full: bool = False, allow_silence: bool = True):
+    def _get_light_model(self):
+        """闲聊轻腿（agent_light 槽，***REMOVED***）。首次用时构建；槽未配置返回 None。"""
+        if self._light_model is None:
+            try:
+                from junjun_llm import get_chat_model
+                self._light_model = get_chat_model("agent_light")
+            except Exception as e:
+                logger.info(f"[{self.session.chat_id}] agent_light 槽不可用，轻腿回落强链: {e}")
+                return None
+        return self._light_model
+
+    def _build_agent(self, full: bool = False, allow_silence: bool = True, model=None):
         """每轮重建 agent 图：工具集按「当前」会话话题实时掩码。
 
         曾经只在 __init__ 绑一次——那时 memory 是空的，关键词钉不住任何工具，
@@ -363,7 +378,7 @@ class JunJunAgent:
                 asyncio.create_task(warm_tool_embeddings(self.session))
             except Exception:
                 pass
-        return create_agent(model=self._model, tools=tools,
+        return create_agent(model=model or self._model, tools=tools,
                             middleware=[PlanMiddleware()])
 
     async def aclose(self) -> None:
@@ -371,6 +386,10 @@ class JunJunAgent:
         import asyncio as _aio
         models = [self._model]
         models.extend(getattr(self._model, "fallbacks", None) or [])
+        light = getattr(self, "_light_model", None)  # __new__ 直建的测试实例可能没初始化
+        if light is not None:
+            models.append(light)
+            models.extend(getattr(light, "fallbacks", None) or [])
         for m in models:
             ac = getattr(m, "async_client", None)
             try:
@@ -392,6 +411,7 @@ class JunJunAgent:
         relation_block: str = "",
         trace_id: str = "",
         system_prompt: str = "",
+        has_media: bool = False,
     ) -> Optional[str]:
         """跑一轮决策。返回回复文本；None 表示沉默。
 
@@ -400,11 +420,32 @@ class JunJunAgent:
                   供 WebUI 日志页与 Langfuse trace 互查。
         system_prompt: processor 已构建好的 prompt（它要为 Langfuse 快照构建一次）——
                   传入则复用，避免每轮构建两次且快照与实发不一致（严厉审查 P2-9）。
+        has_media: 本轮带图/语音/视频（processor 从 meta 判定）——双腿路由用，
+                  媒体轮一律走强腿。
         """
         cfg = get_global_config()
         max_iter = int(cfg.raw.get("memory", {}).get("max_agent_iterations", 5))
         budget_cfg = cfg.raw.get("context_budget", {})
         budget_enabled = bool(budget_cfg.get("enable", False))
+
+        # ---- 双腿路由（P2）：纯闲聊轮走 agent_light 轻腿（***REMOVED***）省输入溢价。
+        # 判 light 的全部条件在 router.agent_tier，开关关闭/拿不准一律 full（现状）。
+        tier = "full"
+        try:
+            from junjun_agent.router import agent_tier
+            tier = agent_tier(latest_text, has_media=has_media)
+        except Exception:
+            tier = "full"
+        round_model = self._model
+        if tier == "light":
+            light = self._get_light_model()
+            if light is not None:
+                round_model = light
+            else:
+                tier = "full"
+        if tier != "full":
+            logger.info(f"[{self.session.chat_id}] 双腿路由：本轮走 {tier} 腿 "
+                        f"[trace={trace_id}]")
 
         # Phase 3：标记本轮决策开始，工具记录从此刻起算
         start_decision(self.session)
@@ -497,7 +538,7 @@ class JunJunAgent:
         # 多步任务加迭代预算：每步可能 1-2 次工具调用
         eff_iter = max_iter + len(plan_steps or [])
 
-        agent = self._build_agent(allow_silence=not addressed)  # 每轮重建：工具掩码按当前话题实时生效；必回场景摘除沉默工具
+        agent = self._build_agent(allow_silence=not addressed, model=round_model)  # 每轮重建：工具掩码按当前话题实时生效；必回场景摘除沉默工具
         try:
             result = await agent.ainvoke(
                 {"messages": messages},
@@ -507,9 +548,10 @@ class JunJunAgent:
                     "metadata": {
                         "chat_id": self.session.chat_id,
                         "trace_id": trace_id,
+                        "agent_tier": tier,
                         # Langfuse v3 CallbackHandler 识别的元数据：trace 按会话归组
                         "langfuse_session_id": self.session.chat_id,
-                        "langfuse_tags": ["junjun", "agent"],
+                        "langfuse_tags": ["junjun", "agent", f"tier-{tier}"],
                         # propagated attribute 限 200 字符：预算只留紧凑摘要；
                         # system_prompt 不在这里放（会被丢），完整 prompt 由
                         # callback 的 generation 级 input 自然留存
@@ -551,8 +593,13 @@ class JunJunAgent:
                 logger.info(f"[{self.session.chat_id}] 意图自检：追问补调工具"
                             f"{'（全绑补救）' if full_bind else ''} [trace={trace_id}]")
                 try:
-                    retry_agent = (self._build_agent(full=True, allow_silence=not addressed)
-                                   if full_bind else agent)
+                    # 轻腿判错的工具轮：补救轮升级回强链（弱模型+追问=继续不调的风险），
+                    # 升级成本只发生在已判错的少数轮
+                    escalate = full_bind or tier == "light"
+                    retry_agent = (self._build_agent(full=full_bind,
+                                                     allow_silence=not addressed,
+                                                     model=self._model)
+                                   if escalate else agent)
                     retry = await retry_agent.ainvoke(
                         {"messages": messages + [HumanMessage(content=nudge)]},
                         config={

@@ -86,3 +86,70 @@ def route_to_task(text: str, *, chat_id: str = "") -> bool:
                 logger.debug(f"路由->任务通道（显式多步「{join}」）: {t[:30]}")
                 return True
     return False
+
+
+# ---- 主 Agent 双腿路由（2026-08-11 token 优化 P2）----
+# agent 槽独占约 99% token 消耗（生产实测：单次平均输入 14.5K，固定前缀
+# system+工具占一半以上）。纯闲聊轮不需要 ***REMOVED*** 的工具调用稳定性，
+# 走 ***REMOVED*** 轻腿（agent_light 槽）省输入溢价。
+# 判 light 是「加宽命中面」，纪律照旧：条件【全部】命中才放行，拿不准一律
+# full（现状腿）——误判方向只亏钱（该轻的走了贵的），绝不亏人格与工具可靠性。
+# 配套误判回归测试在 tests/test_agent_tier.py。
+
+# 轻腿长上限：纯闲聊轮实测绝大多数 < 50 字；长消息往往带信息密度/多诉求
+_TIER_LIGHT_MAX_CHARS = 50
+
+# 事实/时效信号：persona 规则强约束这些必须先调 web_search——工具调用
+# 可靠性正是轻腿的短板，直接走强腿
+_TIER_FACT_WORDS = ("什么时候", "最新", "天气", "新闻", "几点", "多少钱")
+
+# 意图组词表之外的工具诉求补充（误判回归实锤：「定个闹钟」不含「提醒我」，
+# 意图自检同款盲区——路由层不能再漏）
+_TIER_TOOL_WORDS = ("闹钟", "定时", "翻译一下", "帮我翻译")
+
+
+def agent_tier(text: str, *, has_media: bool = False) -> str:
+    """本轮主 Agent 用哪条腿："light"（闲聊轻腿）/ "full"（默认强链）。
+
+    灰度开关：[agent] complexity_routing（默认 false = 永远 full，回到现状）。
+    """
+    try:
+        from junjun_core.config import get_global_config
+        if not bool(get_global_config().raw.get("agent", {})
+                    .get("complexity_routing", False)):
+            return "full"
+    except Exception:
+        return "full"
+    t = (text or "").strip()
+    if not t or len(t) > _TIER_LIGHT_MAX_CHARS:
+        return "full"
+    if has_media:
+        return "full"           # 图/语音/视频轮：感知块+工具链，走强腿
+    if "http" in t or "www." in t:
+        return "full"           # 链接：拦截器没吃完的往往要工具理解
+    try:
+        from junjun_core.security import is_admin_privileged
+        if is_admin_privileged():
+            return "full"       # 管理员的拜托走强腿（敏感操作可靠性）
+    except Exception:
+        pass
+    try:
+        from junjun_skills.registry import intent_groups
+        for kws, _group, _primary in intent_groups():
+            if any(kw in t for kw in kws):
+                return "full"   # 强意图（订阅/提醒/搜/画/语音/调研）：工具轮
+    except Exception:
+        return "full"           # 元数据拿不到时保守走强腿
+    if any(w in t for w in _TIER_FACT_WORDS):
+        return "full"
+    if any(w in t for w in _TIER_TOOL_WORDS):
+        return "full"
+    try:
+        from junjun_agent.loop.plan_tracker import detect_complexity
+        if detect_complexity(t):
+            return "full"       # 疑似复合任务
+    except Exception:
+        pass
+    if route_to_task(t):
+        return "full"           # 任务通道回退到对话的轮次，走强腿
+    return "light"

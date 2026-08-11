@@ -28,6 +28,57 @@ class TestRolePersona:
         assert persona._role_persona(p, "君君") == "你是君君。"
 
 
+class TestExamplesEvictableBlock:
+    """2026-08-11 token 优化 P0：示例集从必需 role 块拆成独立动态块
+    （priority 2），预算吃紧时先于情绪/记忆块被驱逐；legacy 路径拼回
+    核心段之后，「设定卡 + 示例集」相邻语义不变。"""
+
+    def _with_examples(self, monkeypatch):
+        from junjun_core.config import get_global_config
+        p = get_global_config().raw.setdefault("personality", {})
+        monkeypatch.setitem(p, "behavior_examples", "被夸→「才没有」")
+
+    def test_examples_not_in_core_role(self, monkeypatch):
+        self._with_examples(monkeypatch)
+        core, dynamic = persona.build_prompt_blocks(is_group=True, latest_text="在吗")
+        role_part = core.split("<scene>")[0]
+        assert "被夸→「才没有」" not in role_part  # 示例集不在必需块里
+        ex = [b for b in dynamic if b["name"] == "examples"]
+        assert ex and "被夸→「才没有」" in ex[0]["content"]
+        assert ex[0]["priority"] == 2 and ex[0]["required"] is False
+
+    def test_legacy_prompt_keeps_examples_adjacent(self, monkeypatch):
+        """非预算路径：示例集拼回核心段之后、<state> 之前。"""
+        self._with_examples(monkeypatch)
+        prompt = persona.build_system_prompt(
+            is_group=True, latest_text="在吗", mood_block="心情：不错")
+        assert "被夸→「才没有」" in prompt
+        assert prompt.index("被夸→「才没有」") < prompt.index("<state>")
+
+    def test_budget_path_evicts_examples_first(self, monkeypatch):
+        """预算吃紧：examples 先于 mood/memory 被驱逐；预算宽松则回 system。"""
+        self._with_examples(monkeypatch)
+        from junjun_agent.agent import _apply_context_budget
+        # 宽松：示例集保留且进 system 段（不在 <state>）
+        msgs, sys_text, metrics = _apply_context_budget(
+            is_group=True, latest_text="在吗", mood_block="心情：不错",
+            memory_block="", relation_block="", background="「甲」: 在吗",
+            latest_msg="「甲」: 在吗", addressed=True)
+        assert "被夸→「才没有」" in sys_text
+        # 吃紧：预算压到必需块都放不下，所有可选块（含 examples）必被驱逐
+        import junjun_agent.agent as agent_mod
+        from junjun_core.config import get_global_config
+        monkeypatch.setitem(get_global_config().raw, "context_budget",
+                            {"enable": True, "max_total_tokens": 800,
+                             "reserve_tokens": 100})
+        msgs2, sys_text2, metrics2 = _apply_context_budget(
+            is_group=True, latest_text="在吗", mood_block="心情：不错",
+            memory_block="", relation_block="", background="「甲」: 在吗",
+            latest_msg="「甲」: 在吗", addressed=True)
+        assert "examples" in metrics2["evicted_names"]
+        assert "被夸→「才没有」" not in sys_text2
+
+
 class TestInterruptPhrasesClean:
     """打断复读固定文案不得含已知污染源口头禅（2026-08-04 实锤：
     「略略略~」「杂鱼们就会这一句？」由 repeat.py 固定文案学进人设）。"""

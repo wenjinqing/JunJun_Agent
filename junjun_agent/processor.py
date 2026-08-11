@@ -373,6 +373,11 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
                 memory_block=memory_block, relation_block=relation_block,
                 mood_block=mood_block, trace_id=trace_id,
                 system_prompt=None if budget_enabled else _prompt_snapshot,
+                # 双腿路由用：媒体轮一律走强腿（感知块+工具链）
+                has_media=bool(
+                    meta.image_urls or getattr(meta, "sticker_urls", None)
+                    or getattr(meta, "voice_records", None)
+                    or getattr(meta, "video_urls", None)),
             )
             # ---- Phase 3：发送前 HonestyGuard 代码层诚实校验（span 内做）----
             # 曾经 span 先记录原文、校验在 span 外替换——trace 里是原文，用户
