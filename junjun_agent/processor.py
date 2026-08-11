@@ -800,6 +800,13 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
             return None
     except Exception:
         pass
+    # 群周报社发人审：同上，pending 独立
+    try:
+        from junjun_skills.plugins.weekly_report.tools import approval_hook as wr_hook
+        if await wr_hook(session, meta):
+            return None
+    except Exception:
+        pass
     # 意向系统事件钩子（P7）：emo 规则预筛 -> 关心意向（0 token，
     # [intention] enable=false 时零开销直接返回）
     try:

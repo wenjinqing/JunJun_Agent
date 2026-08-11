@@ -1,0 +1,7 @@
+{
+  "name": "weekly_report",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.weekly_report.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}

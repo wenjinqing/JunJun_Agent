@@ -190,6 +190,24 @@ self_mood_hours = 12   # 全局自我心境的有效时长（小时），过期�
 enable = true
 time = "23:30"           # 每天写日记的时间（当天没写才会补写）
 
+# ---------- 梦境（清晨把昨天的记忆碎片揉成梦发空间，纯氛围） ----------
+[dream]
+enable = false           # 先关：看一条效果再开
+time = "07:30"           # 每天「睡醒说梦」的时间
+target = "qzone"         # qzone=发空间 | memory=只写记忆不外发
+
+# ---------- 每周群报（吃瓜周报 + 颁奖，人审后发群） ----------
+# 素材：Messages 统计（话痨王/夜猫子/表情帝/大文豪）+ hippo 话题沉淀，
+# thinker 一次成稿 -> 私聊管理员审批（回「发」/「算了」）-> 发群。
+[weekly_report]
+enable = false           # 先关：/weekly_report 手动验收后再开自动
+day = "sun"              # 每周哪天发（mon..sun）
+time = "20:00"
+groups = []              # 目标群号列表；空 = [chat] group_list 全部白名单群
+min_messages = 100       # 一周少于此条数的冷场群不出报
+approval_timeout_seconds = 600   # 审批超时默认不发
+
+
 # ---------- Identity Core（每周从日记蒸馏自我认知，人设 drift 对冲） ----------
 [identity]
 enable = true

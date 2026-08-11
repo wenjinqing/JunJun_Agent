@@ -187,6 +187,10 @@ def register_default_tasks() -> None:
         from junjun_express.diary import diary_tick
         await diary_tick()
 
+    async def dream():
+        from junjun_express.dream import dream_tick
+        await dream_tick()
+
     async def identity():
         from junjun_express.identity import identity_tick
         await identity_tick()
@@ -227,6 +231,7 @@ def register_default_tasks() -> None:
     scheduler.add(ScheduledTask("db_cleanup", db_cleanup, interval=cleanup_h * 3600))
     scheduler.add(ScheduledTask("expression_reflect", expression_reflect, interval=5 * 60))
     scheduler.add(ScheduledTask("diary", diary, interval=30 * 60))
+    scheduler.add(ScheduledTask("dream", dream, interval=30 * 60))
     scheduler.add(ScheduledTask("identity_distill", identity, interval=3600))
     scheduler.add(ScheduledTask("scene_profile", scene_profile, interval=2 * 3600))
     scheduler.add(ScheduledTask("intention", intention, interval=600))
