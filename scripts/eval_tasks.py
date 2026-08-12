@@ -127,13 +127,18 @@ def _patch_models(usage: _Usage):
     junjun_llm.get_chat_model = patched
 
 
-def _make_stub_tools(called: list, stub_overrides: dict, fail_counters: dict):
-    """真实工具 schema + 记录桩执行体。fail_counters: tool -> 剩余失败次数。"""
+def _make_stub_tools(real_tools: list, called: list, stub_overrides: dict,
+                     fail_counters: dict):
+    """真实工具 schema + 记录桩执行体。fail_counters: tool -> 剩余失败次数。
+
+    real_tools 必须在补丁 reg.get_tools 之前抓取——补丁后再 from registry
+    import get_tools 拿到的是桩列表自身（首轮为空 -> 造出 0 个桩 -> 规划器
+    面对空工具目录，所有行动步骤被 parse_plan 丢弃只剩 llm_synthesize，
+    2026-08-12 基线头两条 case 实锤白烧 20K thinker token）。"""
     from langchain_core.tools import StructuredTool
-    from junjun_skills.registry import get_tools as real_get_tools
 
     stubs = []
-    for t in real_get_tools():
+    for t in real_tools:
         name = t.name
 
         async def _stub(_name=name, **kwargs):
@@ -152,6 +157,8 @@ def _make_stub_tools(called: list, stub_overrides: dict, fail_counters: dict):
             args_schema=getattr(t, "args_schema", None),
             coroutine=_stub,
         ))
+    if not stubs:
+        raise RuntimeError("桩工具列表为空——real_tools 必须在补丁 get_tools 前抓取")
     return stubs
 
 
@@ -354,6 +361,8 @@ async def _main(args) -> int:
     import junjun_skills.registry as reg
     called = []
     stubs_holder = {"tools": []}
+    # 补丁前抓真注册表——顺序是命门（见 _make_stub_tools docstring 的事故记录）
+    real_tools = list(reg.get_tools())
 
     def _get_tools_patched(*a, **kw):
         return list(stubs_holder["tools"])
@@ -390,7 +399,8 @@ async def _main(args) -> int:
     for i, case in enumerate(cases, 1):
         overrides, fail_counters = _split_case_stub(case)
         called.clear()
-        stubs_holder["tools"] = _make_stub_tools(called, overrides, fail_counters)
+        stubs_holder["tools"] = _make_stub_tools(
+            real_tools, called, overrides, fail_counters)
 
         if case.get("expect", {}).get("submit_rejected"):
             r = await _run_negative(executor.kernel, case)
