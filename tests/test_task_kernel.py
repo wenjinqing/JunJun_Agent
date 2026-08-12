@@ -496,3 +496,55 @@ class TestPlannerBits:
         assert '"steps"' in planner._REVISER_PROMPT
         assert '"action"' in planner._REVISER_PROMPT
         assert 'depends_on' in planner._REVISER_PROMPT
+
+    def test_merge_revisal_keeps_unlisted_pending(self):
+        """重规划未列出的原 pending 步骤必须保留——不声明就丢 = 目标静默放弃
+        （2026-08-12 实锤：send_feed 人审步骤被吞，任务「完成」但说说没发）。"""
+        from junjun_agent.task_kernel.plan import merge_revisal
+        plan = TaskPlan(goal="g", chat_id="c", steps=[
+            Step(id="s1", action="a", desc="d1", status="done", result="r"),
+            Step(id="s2", action="b", desc="d2", status="failed"),
+            Step(id="s3", action="send_feed", desc="发布", status="pending",
+                 depends_on=["s2"], verify="human"),
+        ])
+        merge_revisal(plan, [Step(id="r1", action=SYNTH_ACTION, desc="收尾")])
+        ids = [s.id for s in plan.steps]
+        assert ids == ["s1", "r1", "s3"], "原 pending 不许悄悄丢"
+        assert plan.steps[-1].verify == "human", "人审门必须保留"
+        assert plan.steps[-1].depends_on == [], "断掉的依赖应剔除"
+
+    def test_merge_revisal_honors_explicit_drop(self):
+        """显式 drop 声明的步骤才允许放弃。"""
+        from junjun_agent.task_kernel.planner import Revisal
+        from junjun_agent.task_kernel.plan import merge_revisal
+        plan = TaskPlan(goal="g", chat_id="c", steps=[
+            Step(id="s1", action="a", desc="d1", status="done", result="r"),
+            Step(id="s2", action="b", desc="d2", status="failed"),
+            Step(id="s3", action="c", desc="d3", status="pending"),
+        ])
+        merge_revisal(plan, Revisal(
+            [Step(id="r1", action=SYNTH_ACTION, desc="收尾")], drop=["s3"]))
+        assert [s.id for s in plan.steps] == ["s1", "r1"]
+
+    @pytest.mark.asyncio
+    async def test_revise_parses_drop_list(self, monkeypatch):
+        from junjun_agent.task_kernel import planner
+
+        class _M:
+            async def ainvoke(self, msgs, config=None):
+                return AIMessage(content=(
+                    '{"steps": [{"id": "r1", "action": "web_search", "desc": "重搜"}],'
+                    ' "drop": ["s3"]}'))
+
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "")])
+        plan = TaskPlan(goal="g", chat_id="c", steps=[
+            Step(id="s1", action="web_search", desc="d", status="done", result="r")])
+        rev = await planner.revise_remaining(plan, "败了", "err", model=_M())
+        assert rev is not None and rev.drop == ["s3"]
+        assert [s.id for s in rev.steps] == ["r1"]
+
+    def test_planner_prompt_scopes_llm_judge(self):
+        """规划提示必须把 llm_judge 限在文本产出步骤——工具步骤配 llm_judge
+        是逼工具返回它生产不了的东西（2026-08-12 watch_video 观后感判据必死实锤）。"""
+        from junjun_agent.task_kernel import planner
+        assert "给工具步骤配 llm_judge" in planner._PLANNER_PROMPT

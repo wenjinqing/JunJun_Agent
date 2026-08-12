@@ -239,8 +239,9 @@ class TaskKernel:
                                 min(60.0, backoff_base * 2 ** (plan.replans - 1)))
                         new_steps = await revise_remaining(plan, s.desc, s.error)
                         if new_steps:
-                            plan.steps = ([x for x in plan.steps if x.status == "done"]
-                                          + new_steps)
+                            from junjun_agent.task_kernel.plan import merge_revisal
+                            # 未显式放弃的原 pending 保留（防静默丢步骤/目标放弃）
+                            merge_revisal(plan, new_steps)
                             _persist(plan)
                         else:
                             s.status = "failed"  # 重规划也废了，认输

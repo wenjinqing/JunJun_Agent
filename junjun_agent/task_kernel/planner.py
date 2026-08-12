@@ -26,7 +26,8 @@ _PLANNER_PROMPT = """你是任务规划器。把用户的委托拆成可执行�
 1. 最多 {max_steps} 步，能少不多；每步一句话说清要做什么（desc）。
 2. 步骤间有先后依赖就写 depends_on（只允许依赖前面的步骤）；无依赖的步骤会并行。
 3. 画图/语音这类成品工具（ai_draw、unified_tts 等）只能放最后一步——它们是即交即走的。发说说/发空间类需求直接一步 send_feed（它内部自带配图能力），不要拆 ai_draw→send_feed 两步（会画两张图）。
-4. verify 填验证方式：tool_ok（工具不报错即可，默认）/ llm_judge（需要判断产出质量，如报告、笔记）/ none / human（发空间、订阅推送这类对外发布动作——必须等管理员批准才执行）。
+4. verify 填验证方式：tool_ok（工具不报错即可，默认）/ llm_judge（步骤产出本身就是可判质量的文本，如报告、笔记、感想）/ none / human（发空间、订阅推送这类对外发布动作——必须等管理员批准才执行）。
+   注意：工具返回的多是确认语或原始素材，不含个人创作——「写得好不好、有没有感受」这类判断对象应该是 llm_synthesize 步骤；给工具步骤配 llm_judge 等于逼它返回它生产不了的东西，必死。
 5. args_hint 必须严格按工具签名给参数：参数名照抄签名（必填的一个都不许漏），值给具体内容或「$步骤id」引用前序产出。拿不准可选参数就省略。
 6. 每步写 done_criteria：这一步凭什么算完成（一句话、可检查），验收时用它对准你的意图。
 
@@ -146,14 +147,31 @@ _REVISER_PROMPT = """你是任务规划器。一个执行中的计划有步骤�
 1. id 从 r1 开始重新编号；depends_on 只允许指向已完成步骤 id 或更新的新步骤 id。
 2. action 从可用工具里选，或用 "llm_synthesize"；args_hint 严格按工具签名给参数。
 3. 若能直接利用已完成产出收尾，可以只给一步 llm_synthesize。
+4. 【剩余步骤全都要列】：原计划里未执行但仍然要做的步骤，用原 id 原依赖照列上来——
+   你只列了修正步骤的话，没列的原步骤会被当「确认放弃」处理。确认不再需要的步骤，
+   显式写进 "drop": ["原步骤id"]。
+5. 验收失败（验收不通过）的修法是换验证方式或换成 llm_synthesize 重写，不是换参数重试。
 
 输出格式（照这个写，别自造字段名）：
-{{"steps": [{{"id": "r1", "action": "工具名", "desc": "做什么", "args_hint": {{}}, "depends_on": [], "verify": "tool_ok", "done_criteria": "凭什么算完成"}}]}}"""
+{{"steps": [{{"id": "r1", "action": "工具名", "desc": "做什么", "args_hint": {{}}, "depends_on": [], "verify": "tool_ok", "done_criteria": "凭什么算完成"}}], "drop": []}}"""
+
+
+class Revisal:
+    """局部重规划产出：新步骤 + 显式放弃的步骤 id。
+
+    drop 是模型【显式声明】的放弃清单；没在 drop 里也没被重列的原 pending
+    步骤由调用方保留——不声明就丢步骤 = 目标静默放弃（2026-08-12 实锤：
+    send_feed 人审步骤被重规划悄悄吞掉，任务「完成」了但说说没发）。
+    """
+
+    def __init__(self, steps: list, drop: list):
+        self.steps = list(steps)
+        self.drop = [str(d) for d in drop]
 
 
 async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
-                           *, model=None, callbacks=None) -> list | None:
-    """局部重规划：只重写未执行的剩余步骤。返回新的 Step 列表或 None。"""
+                           *, model=None, callbacks=None) -> Revisal | None:
+    """局部重规划：只重写未执行的剩余步骤。返回 Revisal 或 None。"""
     if model is None:
         from junjun_llm import get_chat_model
         model = get_chat_model("thinker")  # 局部重规划同理：开思考
@@ -172,6 +190,7 @@ async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
     payload = _extract_json(str(resp.content))
     if not payload:
         return None
+    drop = payload.get("drop") if isinstance(payload.get("drop"), list) else []
     from junjun_skills.registry import get_tools
     valid = {t.name for t in get_tools()}
     done_ids = {s.id for s in plan.steps if s.status == "done"}
@@ -183,4 +202,4 @@ async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
     new_ids = {s.id for s in revised.steps}
     for s in revised.steps:
         s.depends_on = [d for d in s.depends_on if d in done_ids or d in new_ids]
-    return revised.steps
+    return Revisal(revised.steps, drop)

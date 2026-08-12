@@ -93,6 +93,27 @@ class TaskPlan:
         return [f"{mark(s.status, '·')} {s.desc}" for s in self.steps]
 
 
+def merge_revisal(plan: TaskPlan, revisal) -> None:
+    """把局部重规划产出合并进计划：已完成保留 + 新步骤 + 未显式放弃的原 pending。
+
+    revisal 可以是 planner.Revisal 或裸步骤列表（测试桩习惯）；裸列表 drop
+    按 []——不声明就丢步骤 = 目标静默放弃（2026-08-12 实锤：send_feed 人审
+    步骤被重规划悄悄吞掉，任务「完成」但说说没发），宁保留误执行不静默丢。
+    保留步骤断掉的依赖（指向被替换步骤）剔除——发布类有 human 门兜底。
+    """
+    steps = list(getattr(revisal, "steps", revisal) or [])
+    drop = set(getattr(revisal, "drop", []) or [])
+    new_ids = {s.id for s in steps}
+    kept = [x for x in plan.steps
+            if x.status in ("pending", "running")
+            and x.id not in drop and x.id not in new_ids]
+    exist = {x.id for x in plan.steps if x.status == "done"} | new_ids | \
+        {x.id for x in kept}
+    for x in kept:
+        x.depends_on = [d for d in x.depends_on if d in exist]
+    plan.steps = [x for x in plan.steps if x.status == "done"] + steps + kept
+
+
 def parse_plan(payload: dict, *, goal: str, chat_id: str, user_id: str,
                valid_actions: set, max_steps: int = 6) -> Optional[TaskPlan]:
     """规划器 JSON 产出 -> TaskPlan；非法步骤丢弃，全废则 None（回退对话通道）。

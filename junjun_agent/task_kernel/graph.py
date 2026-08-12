@@ -135,7 +135,8 @@ async def replan_node(state: KernelState) -> dict:
     except Exception as e:
         logger.warning(f"局部重规划异常: {type(e).__name__}: {e}")
     if new_steps:
-        plan.steps = [x for x in plan.steps if x.status == "done"] + list(new_steps)
+        from junjun_agent.task_kernel.plan import merge_revisal
+        merge_revisal(plan, new_steps)  # 未显式放弃的原 pending 保留（防静默丢步骤）
         return {"plan": plan.to_dict(), "phase": "decide", "replan_for": ""}
     if step is not None:
         step.status = "failed"
