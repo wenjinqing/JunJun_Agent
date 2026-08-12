@@ -225,9 +225,14 @@ async def _await_approval(runner, decision: bool, timeout=240) -> str:
 
 
 def _judge_prompt(goal: str, artifact: str) -> str:
+    # 评分口径必须排除素材深度：产物由桩素材整理，评内核的「整理力」不评
+    # 素材丰富度——裸 rubric 让思考型评委按教师心态打分，Phase 1 验收轮
+    # 结构完整的报告/笔记连续 2 分误杀（2026-08-12 实锤）。
     return (f"给下面的任务产物质量打分（1-5，只回一个数字）。\n"
             f"任务目标：{goal}\n产物：\n{artifact[:2000]}\n"
-            f"3 分 = 基本可用；4 分 = 结构清晰内容贴合；5 分 = 超出预期。")
+            f"评分口径：产物由工具返回的素材整理而成，素材本身的深度不要求；"
+            f"只评结构、贴合目标程度与可用性。3 分 = 结构清晰、内容贴合目标、"
+            f"基本可用（不强求丰富）；4-5 分 = 在此之上更周到。")
 
 
 async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict) -> dict:
@@ -281,9 +286,19 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
                 break
             await asyncio.sleep(1.0)
         if approval_task is not None:
-            approval_err = await approval_task
-            if approval_err:
-                return {"id": case["id"], "pass": False, "reason": approval_err}
+            if plan is not None and not approval_task.done():
+                # 计划先于审批到终态（如审批前的步骤先挂了）——审批轮询还在
+                # 空等，取消它按计划本体判定；否则审批超时错误会掩盖真失败
+                # （2026-08-12 Phase 1 验收轮 chain-video-feed 实锤）
+                approval_task.cancel()
+                try:
+                    await approval_task
+                except asyncio.CancelledError:
+                    pass
+            else:
+                approval_err = await approval_task
+                if approval_err:
+                    return {"id": case["id"], "pass": False, "reason": approval_err}
         if plan is None:
             return {"id": case["id"], "pass": False, "reason": "TIMEOUT(300s) 未等到终态"}
     finally:
