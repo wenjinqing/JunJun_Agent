@@ -23,6 +23,7 @@ API：ModelScope 异步文生图（api-inference.modelscope.cn）
 import asyncio
 import os
 import time
+from pathlib import Path
 
 import httpx
 from langchain_core.messages import HumanMessage
@@ -127,6 +128,60 @@ _SELF_WORDS = ("你", "自己", "自画像", "自拍")
 
 # 每会话上次画图时间戳（chat_id -> ts）
 _last_use: dict = {}
+
+# AI Ping 成品图落盘目录与生命周期（延迟删除 + 兜底清扫，见 _generate_aiping 注释）
+TMP_DIR = Path(os.environ.get("AI_DRAW_TMP_DIR", r"data\ai_draw_tmp"))
+_FINAL_KEEP_SECONDS = 30 * 60   # 成品保留窗口：覆盖 NapCat 异步读盘 + 发说说 30s 复用
+_STALE_SECONDS = 60 * 60        # 兜底清扫阈值
+_EXT_BY_MIME = {"image/png": ".png", "image/jpeg": ".jpg",
+                "image/webp": ".webp", "image/gif": ".gif"}
+
+
+async def _delayed_unlink(path: "Path", delay: float) -> None:
+    await asyncio.sleep(delay)
+    try:
+        Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _schedule_cleanup(path: "Path") -> None:
+    """成品延迟删除（测试可 monkeypatch 成同步/空操作）。"""
+    asyncio.create_task(_delayed_unlink(Path(path), _FINAL_KEEP_SECONDS),
+                        name=f"draw-clean-{Path(path).name}")
+
+
+def _sweep_stale_tmp() -> None:
+    """超龄残留清扫（进程重启等导致的漏删）。"""
+    try:
+        cutoff = time.time() - _STALE_SECONDS
+        for p in TMP_DIR.glob("*"):
+            if p.is_file() and p.stat().st_mtime < cutoff:
+                p.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+async def _download_local(url: str) -> str | None:
+    """下载远程图到 TMP_DIR，返回本地路径；失败 None（我们下不动 NapCat 也下不动）。"""
+    _sweep_stale_tmp()
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT,
+                                     follow_redirects=True) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200 or len(resp.content) < 1024:
+            logger.warning(f"成品图下载失败 HTTP {resp.status_code} len={len(resp.content)}")
+            return None
+        ext = _EXT_BY_MIME.get(resp.headers.get("content-type", "").split(";")[0].strip(),
+                               ".png")
+        TMP_DIR.mkdir(parents=True, exist_ok=True)
+        path = TMP_DIR / f"draw_{int(time.time() * 1000)}{ext}"
+        path.write_bytes(resp.content)
+        _schedule_cleanup(path)
+        return str(path)
+    except Exception as e:
+        logger.warning(f"成品图下载异常: {type(e).__name__}: {e}")
+        return None
 
 
 def _api_key() -> str:
@@ -328,9 +383,13 @@ async def poll_task(task_id: str) -> str | None:
 
 
 async def _generate_aiping(prompt: str, model: str) -> str | None:
-    """AI Ping 同步生图：POST /images/generations，返回 data[0].url；失败 None。
+    """AI Ping 同步生图：POST /images/generations，取 data[0].url 后**自己下载落盘**，
+    返回本地路径；失败 None。
 
-    OpenAI 风格同步协议（与 ModelScope 异步任务不同）；negative_prompt 不支持。
+    为什么落盘不直接发 URL（2026-08-12 实锤重复发图）：NapCat 拉远程 URL 慢/超时
+    会误报失败，send_retry 对纯图无文本指纹只能盲补发 -> 用户收两张。本地 file:///
+    路径 NapCat 读盘无下载超时。删除必须延迟（B 站 ENOENT 竞态同款教训：
+    gateway 返回后 NapCat 才异步读文件，立即删 = 发不出去）。
     """
     if not _aiping_key() or not _aiping_base():
         logger.warning("AI Ping 生图未配置 AIPING_API_KEY/AIPING_BASE_URL")
@@ -354,7 +413,7 @@ async def _generate_aiping(prompt: str, model: str) -> str | None:
         if not url:
             logger.warning(f"AI Ping 生图未返回 url: {resp.text[:200]}")
             return None
-        return str(url)
+        return await _download_local(str(url))
     except Exception as e:
         logger.warning(f"AI Ping 生图异常: {type(e).__name__}: {e}")
         return None

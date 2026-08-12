@@ -583,17 +583,26 @@ class TestAipingProvider:
         assert await ad.generate("猫", ad._DEFAULT_MODEL) is None
 
     @pytest.mark.asyncio
-    async def test_aiping_parses_url(self, _plugin, monkeypatch):
+    async def test_aiping_downloads_local(self, _plugin, monkeypatch, tmp_path):
+        """AI Ping 成品必须落盘本地（2026-08-12 实锤：发远程 URL 让 NapCat 自己下载，
+        超时误报失败 -> send_retry 盲补发 -> 用户收两张）。"""
         monkeypatch.setenv("AIPING_API_KEY", "ap-test")
         monkeypatch.setenv("AIPING_BASE_URL", "https://ap.test/api/v1")
+        monkeypatch.setattr(_plugin, "TMP_DIR", tmp_path)
+        monkeypatch.setattr(_plugin, "_schedule_cleanup", lambda p: None)
         captured = {}
+        fake_png = b"\x89PNG" + b"\x00" * 2048
 
         class _Resp:
-            status_code = 200
-            text = "{}"
+            def __init__(self, status=200, payload=None, content=b"", ctype="image/png"):
+                self.status_code = status
+                self._payload = payload or {}
+                self.content = content
+                self.text = str(self._payload)
+                self.headers = {"content-type": ctype}
 
             def json(self):
-                return {"data": [{"url": "http://img/ap.png"}]}
+                return self._payload
 
         class _Client:
             def __init__(self, **kw):
@@ -606,18 +615,58 @@ class TestAipingProvider:
                 return False
 
             async def post(self, url, json=None, headers=None):
-                captured["url"] = url
+                captured["post_url"] = url
                 captured["payload"] = json
-                captured["auth"] = headers.get("Authorization")
-                return _Resp()
+                return _Resp(200, {"data": [{"url": "http://img/ap.png"}]})
+
+            async def get(self, url):
+                captured["get_url"] = url
+                return _Resp(200, content=fake_png)
 
         monkeypatch.setattr(_plugin.httpx, "AsyncClient", _Client)
-        url = await _plugin._generate_aiping("一只猫", "Kolors")
-        assert url == "http://img/ap.png"
-        assert captured["url"] == "https://ap.test/api/v1/images/generations"
+        out = await _plugin._generate_aiping("一只猫", "Kolors")
+        assert out and out.endswith(".png")
+        p = tmp_path / out.split("\\")[-1].split("/")[-1]
+        assert p.exists() and p.read_bytes() == fake_png
+        assert captured["post_url"] == "https://ap.test/api/v1/images/generations"
         assert captured["payload"]["model"] == "Kolors"
-        assert captured["payload"]["size"] == "1024x1024"
-        assert captured["auth"] == "Bearer ap-test"
+        assert captured["get_url"] == "http://img/ap.png"
+
+    @pytest.mark.asyncio
+    async def test_aiping_download_failure_none(self, _plugin, monkeypatch, tmp_path):
+        monkeypatch.setenv("AIPING_API_KEY", "ap-test")
+        monkeypatch.setenv("AIPING_BASE_URL", "https://ap.test/api/v1")
+        monkeypatch.setattr(_plugin, "TMP_DIR", tmp_path)
+
+        class _Resp:
+            def __init__(self, status, payload=None, content=b""):
+                self.status_code = status
+                self._payload = payload or {}
+                self.content = content
+                self.text = "err"
+                self.headers = {}
+
+            def json(self):
+                return self._payload
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **kw):
+                return _Resp(200, {"data": [{"url": "http://img/x.png"}]})
+
+            async def get(self, *a, **kw):
+                return _Resp(500)
+
+        monkeypatch.setattr(_plugin.httpx, "AsyncClient", _Client)
+        assert await _plugin._generate_aiping("猫", "Kolors") is None
 
     @pytest.mark.asyncio
     async def test_aiping_http_error_none(self, _plugin, monkeypatch):

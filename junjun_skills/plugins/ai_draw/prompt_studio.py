@@ -124,14 +124,21 @@ async def craft_prompt(prompt: str, family: str) -> str:
 
 
 async def review_image(url: str, origin_prompt: str) -> str | None:
-    """VLM 验收：None=通过（或验收不可用），str=严重问题描述（供重画修订）。"""
+    """VLM 验收：None=通过（或验收不可用），str=严重问题描述（供重画修订）。
+
+    url 可以是远程 URL 或本地路径（2026-08-12 起 AI Ping 成品落盘本地）。"""
     try:
         import base64
-        import httpx
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            b64 = base64.b64encode(resp.content).decode()
+        import os.path
+        if os.path.exists(str(url)):
+            with open(url, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+        else:
+            import httpx
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                b64 = base64.b64encode(resp.content).decode()
         from junjun_llm import get_chat_model, get_callbacks
         vlm = get_chat_model("vlm")
         resp = await vlm.ainvoke([HumanMessage(content=[
