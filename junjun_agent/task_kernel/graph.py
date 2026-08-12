@@ -292,7 +292,14 @@ class GraphRunner:
         from langgraph.types import Command
         pend = self._pending.pop(plan_id, None)
         if pend and pend.get("timeout_task"):
-            pend["timeout_task"].cancel()
+            task = pend["timeout_task"]
+            # 看门狗超时路径是 _watch 自己调 resume——cancel 自己会让
+            # CancelledError 在下一个 await 把 resume 整体炸掉，计划永远卡在
+            # interrupt（生产后果：管理员 10 分钟没回 -> 任务挂死无汇报；
+            # 2026-08-12 eval approve-timeout 实锤，单测只断言 pending 弹出
+            # 没断言终态所以一直没抓到）。
+            if task is not asyncio.current_task():
+                task.cancel()
         graph = await self._ensure_graph()
         try:
             state = await graph.ainvoke(Command(resume=approved),

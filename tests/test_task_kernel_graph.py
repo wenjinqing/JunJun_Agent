@@ -250,7 +250,12 @@ class TestApproval:
 
     @pytest.mark.asyncio
     async def test_timeout_default_skip(self, harness, monkeypatch):
-        """审批超时默认跳过（宁保守不放行）。"""
+        """审批超时默认跳过（宁保守不放行）——且任务必须走到终态汇报。
+
+        终态断言是 2026-08-12 补的：看门狗自取消 bug 时期，pending 弹出、
+        工具没放行都满足，但计划永远卡在 interrupt（eval approve-timeout
+        300s 挂死实锤）——只断言前两条的版本漏检了这个回归。
+        """
         monkeypatch.setattr(executor, "_cfg", lambda: {
             "enable": True, "engine": "langgraph", "max_steps": 6,
             "max_replans": 1, "approval_timeout_seconds": 0.05})
@@ -260,9 +265,14 @@ class TestApproval:
         await runner.submit(self._gated_plan())
         assert runner.pending_approvals, "挂起后必须有待审批记录"
         assert harness["admin"], "必须私聊通知管理员"
-        await asyncio.sleep(0.3)
+        for _ in range(50):
+            if not runner.pending_approvals and _outcomes("qq:g1:group"):
+                break
+            await asyncio.sleep(0.05)
         assert not runner.pending_approvals
         assert not calls, "超时默认跳过，不许放行"
+        oc = _outcomes("qq:g1:group")
+        assert oc and oc[-1]["status"] == "done", "超时跳过后任务必须收尾汇报，不许卡死"
 
     @pytest.mark.asyncio
     async def test_hook_consumption_rules(self, harness, monkeypatch):
