@@ -177,6 +177,31 @@ class TestRunLoop:
         plan.deadline_ts = 9e18
         await executor.kernel._run(plan)
         assert plan.state == "failed"
+
+    @pytest.mark.asyncio
+    async def test_registry_error_text_counts_as_failure(self, harness, monkeypatch):
+        """注册表包装的错误文本必须判失败，不能当产出放行。
+
+        registry._wrap_error_feedback 的现役格式是 "[TOOL_ERROR kind=...]"；
+        executor 曾只认 "[TOOL_ERROR]" 精确前缀——错误文本当结果、步骤假成功、
+        下游 llm_synthesize 拿错误串当前序素材（2026-08-12 golden_tasks 实锤）。
+        """
+        import junjun_agent.task_kernel.planner as planner
+
+        async def fake_revise(plan, desc, err):
+            return None  # 重规划也救不回，直接认输（不调 LLM）
+
+        monkeypatch.setattr(planner, "revise_remaining", fake_revise)
+        _bind_tools(monkeypatch, [_StubTool(
+            "web_search",
+            lambda a: "[TOOL_ERROR kind=timeout] 工具 web_search 网络超时")])
+        plan = TaskPlan(goal="g", chat_id="qq:g5:group",
+                        steps=[Step(id="s1", action="web_search", desc="搜")])
+        plan.deadline_ts = 9e18
+        await executor.kernel._run(plan)
+        assert plan.steps[0].status == "failed", "错误文本不得判为步骤成功"
+        assert "TOOL_ERROR" in plan.steps[0].error
+        assert plan.state == "failed"
         oc = _outcomes("qq:g4:group")
         assert oc[-1]["status"] == "failed"
         assert "必败步骤" in oc[-1]["detail"] or "失败" in oc[-1]["detail"]

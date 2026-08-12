@@ -306,7 +306,10 @@ class TaskKernel:
             args = self._default_args(tool, plan, step)
         out = await tool.ainvoke(args)
         text = out if isinstance(out, str) else str(out)
-        if text.startswith("[TOOL_ERROR]"):
+        # 注册表 _wrap_error_feedback 的现役格式是 "[TOOL_ERROR kind=...]"——
+        # 只认 "[TOOL_ERROR]" 精确前缀会把错误文本当产出放行，步骤假成功、
+        # 下游合成拿错误串当素材（2026-08-12 golden_tasks 评测实锤）。
+        if text.startswith("[TOOL_ERROR"):
             raise RuntimeError(text[:200])
         return text
 

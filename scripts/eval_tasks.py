@@ -332,8 +332,9 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
             "reason": "；".join(fails), "routed": routed,
             "state": plan.state, "steps": len(steps), "replans": plan.replans,
             "tools": called_names, "judge": judge_score,
-            "step_detail": [{"id": s.id, "action": s.action, "status": s.status}
-                            for s in steps]}
+            # error 落报告：失败归因（参数瞎猜/验证不过/工具错）不靠猜
+            "step_detail": [{"id": s.id, "action": s.action, "status": s.status,
+                             "error": s.error[:100]} for s in steps]}
 
 
 async def _main(args) -> int:
