@@ -58,23 +58,30 @@ _EVAL_CFG = {
     "approval_timeout_seconds": 5,  # 生产 600s，评测等不起；timeout case 靠它快速跳过
 }
 
+_planner_raw = []  # 最近一次规划器原始产出（补丁 _extract_json 录制，归因用）
+
 # 默认桩返回（case.stub 可按工具名覆盖；必须像真话，占位假数据会被模型识破
-# 并拒绝二次利用——2026-08-06 eval_golden 实锤的 sabotage 教训）
+# 并拒绝二次利用——2026-08-06 eval_golden 实锤的 sabotage 教训）。
+# 刻意不带「（桩）」标记：思考型评委看到占位标记会先入为主压分/验收判死
+# （2026-08-12 research-ai-report 三连迭代实锤），桩身份由调用记录保证。
 _STUB_RETURNS = {
-    "web_search": "（桩）搜索结果：1. 微博热搜：某品牌发布新一代折叠屏手机，起售价 8999 元。2. 八部门印发人工智能产业高质量发展行动方案。3. 国家天文台发布系外行星观测成果。",
-    "deep_research": "（桩）调研完成：报告已整理并发送，含三个核心要点与数据来源。",
+    "web_search": "搜索结果：1. 微博热搜：某品牌发布新一代折叠屏手机，起售价 8999 元。2. 八部门印发人工智能产业高质量发展行动方案。3. 国家天文台发布系外行星观测成果。",
+    # deep_research 的桩必须像真报告正文：生产真返回全文；太简略会被内核
+    # llm_judge 验收正当判死（「内容过于简略」连判两次 -> 无法重规划，
+    # 2026-08-12 research-ai-report 假归因实锤）
+    "deep_research": "深度调研报告：\n一、现状：目标领域近两年投入持续增长，头部厂商相继发布新一代方案，落地案例从试点转向规模部署。\n二、核心要点：1. 技术路线呈多路径并行，主流方案成熟度最高但成本待降；2. 产业链上下游协同加强，关键配套环节仍有缺口；3. 政策端持续加码，标准体系正在完善。\n三、数据来源：综合公开报道、行业白皮书与券商研报（2026 年上半年）。\n四、展望：未来 1-2 年是商业化关键窗口期，建议重点关注成本曲线与标准落地节奏。",
     "get_time": "2026-08-12 15:30 星期三",
     "get_weather": "北京 明天 晴，25~33℃，微风。",
     "set_reminder": "提醒已设置成功，到点会叫你。",
-    "query_chat_history": "（桩）近期聊天：讨论了 AI 平台选型、小主机装机、周末安排。",
-    "bilibili_summary": "（桩）视频内容摘要：该讲座讲解了主题的三个要点：背景、现状、展望……",
-    "watch_video": "（桩）已仔细观看：视频讲解了三个要点……观后感：内容扎实。",
-    "ai_draw": "（桩）图片已生成并发送给对方。",
-    "unified_tts": "（桩）语音已合成并发送。",
-    "send_feed": "（桩）说说已发布。",
-    "send_message": "（桩）消息已发送。",
+    "query_chat_history": "近期聊天：讨论了 AI 平台选型、小主机装机、周末安排。",
+    "bilibili_summary": "视频内容摘要：该讲座讲解了主题的三个要点：背景、现状、展望……",
+    "watch_video": "已仔细观看：视频讲解了三个要点……观后感：内容扎实。",
+    "ai_draw": "图片已生成并发送给对方。",
+    "unified_tts": "语音已合成并发送。",
+    "send_feed": "说说已发布。",
+    "send_message": "消息已发送。",
 }
-_DEFAULT_STUB_RETURN = "（桩）操作成功。"
+_DEFAULT_STUB_RETURN = "操作成功。"
 
 
 class _Usage:
@@ -200,8 +207,12 @@ async def _run_negative(kernel, case: dict) -> dict:
             "reason": f"闲聊被接单（路由+内核双层失守）: {ack[:40]}"}
 
 
-async def _await_approval(runner, decision: bool, timeout=90) -> str:
-    """轮询待审批队列并扮演管理员决议；超时返回错误串。"""
+async def _await_approval(runner, decision: bool, timeout=240) -> str:
+    """轮询待审批队列并扮演管理员决议；超时返回错误串。
+
+    timeout 必须盖住审批前的慢思考链（搜索桩秒回，但 llm_synthesize 走
+    thinker 开思考 30-90s+，基线实测 90s 窗口在到达审批节点前就烧光，
+    误判 harness 超时——2026-08-12 approve-feed-pass 实锤）。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         pend = list(runner.pending_approvals)
@@ -249,8 +260,9 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
             return {"id": case["id"], "pass": False,
                     "reason": f"ERROR {type(e).__name__}: {e}"}
         if ack is None:
+            raw = (_planner_raw[0] if _planner_raw else "（无产出记录）")[:200]
             return {"id": case["id"], "pass": False,
-                    "reason": "规划返回 None（正例应接单）"}
+                    "reason": f"规划返回 None（正例应接单），规划器原文: {raw}"}
 
         # 人审模拟
         approval = case.get("approval")
@@ -382,6 +394,19 @@ async def _main(args) -> int:
     # interrupt/resume 语义一致，build_graph docstring 的测试先例）。
     from langgraph.checkpoint.memory import MemorySaver
     tk_graph.runner._graph = tk_graph.build_graph(MemorySaver())
+
+    # 规划器原始产出留痕：「规划返回 None」零归因没法修（未产 JSON？步骤全
+    # 非法？2026-08-12 基线 2/10 失败死在这类）——包一层 _extract_json 把
+    # 原文录进 FAIL reason。
+    import junjun_agent.task_kernel.planner as tk_planner
+    _orig_extract = tk_planner._extract_json
+
+    def _extract_rec(text):
+        _planner_raw.clear()
+        _planner_raw.append(str(text)[-500:])
+        return _orig_extract(text)
+
+    tk_planner._extract_json = _extract_rec
 
     # 副作用封堵：审批通知/主动发送/结局登记
     import junjun_core.security as sec
