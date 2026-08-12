@@ -24,6 +24,7 @@ case 格式见 tests/eval/golden_tasks.jsonl；enabled:false 的占位 case 自�
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -33,6 +34,11 @@ sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env", override=True)
+
+# 评测进程强制关 Langfuse：token 成本由 _Usage 从响应 usage 自记，不依赖
+# trace；本机 localhost:3000 代理半死时导出还会拖慢调用。只影响评测进程，
+# 不动 .env。（退出挂死的真凶是 aiosqlite，见下方 MemorySaver 补丁注释。）
+os.environ["LANGFUSE_ENABLED"] = "false"
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -358,7 +364,14 @@ async def _main(args) -> int:
     import junjun_agent.task_kernel.executor as executor
     executor._cfg = lambda: dict(_EVAL_CFG)
     from junjun_agent.task_kernel import graph as tk_graph
-    # runner 不 configure：_persist_dir 保持 None -> 内存 checkpointer，不落盘
+    # runner 不 configure：_persist_dir 保持 None -> 本意是内存 checkpointer，
+    # 但 _ensure_graph 会开 aiosqlite ":memory:" 连接——其 worker 是非守护线程，
+    # 脚本退出时解释器 _shutdown join 它 = 永远挂死（2026-08-12 py-spy 实锤：
+    # case 37s 跑完写盘，MainThread 挂 threading._shutdown 17 分钟）。
+    # 生产进程长跑无感，评测脚本短命必须换 MemorySaver（纯 dict 无线程；
+    # interrupt/resume 语义一致，build_graph docstring 的测试先例）。
+    from langgraph.checkpoint.memory import MemorySaver
+    tk_graph.runner._graph = tk_graph.build_graph(MemorySaver())
 
     # 副作用封堵：审批通知/主动发送/结局登记
     import junjun_core.security as sec
