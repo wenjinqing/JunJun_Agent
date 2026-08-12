@@ -119,13 +119,18 @@ def parse_weekly_time(spec: str, *, now: Optional[datetime] = None) -> Optional[
 
 @tool
 def set_reminder(content: str, time_spec: str, user_id: str) -> str:
-    """设置提醒（单次与周期都支持）。用户说"10分钟后提醒我""明天8点叫我"
-    "每天早上8点给我推新闻""每周五晚上提醒我交周报"时使用。
+    """设置提醒（单次与周期都支持）。只在对方【明确要求】提醒时使用
+    （"10分钟后提醒我""明天8点叫我""每周五晚上提醒我交周报"）——
+    不许主动/顺手帮人设提醒；群里不可设（会打扰全群，引导私聊）。
     Args:
         content: 提醒内容，如"开会"
         time_spec: 时间描述原文，如"10分钟后""明天8点""每天早上8点""每周五晚上8点"
         user_id: 要提醒的用户 QQ 号
     """
+    # 群禁（2026-08-12 用户裁决：群里禁用+收敛）——群提醒到点 @ 全群观感脑残，
+    # 存量群提醒在触发侧改投私聊（loop/reminder.py _fire）
+    if current_chat_id.get().endswith(":group"):
+        return "提醒不在群里设（到点会打扰全群）。想要这个提醒的话，让对方私聊我再说一遍。"
     repeat, spec = parse_repeat_type(time_spec.strip())
     ts = parse_weekly_time(spec) if repeat == "weekly" else parse_remind_time(spec)
     if ts is None:

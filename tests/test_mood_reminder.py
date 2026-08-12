@@ -229,7 +229,10 @@ class TestReminderLifecycle:
         await check_due_reminders()
         assert len(sent) == 1
         assert "喝水" in sent[0].segments[0].data
-        assert sent[0].target_group_id == "999"
+        # 群禁（2026-08-12 裁决）：存量群提醒改投当事人私聊，不在群里 @
+        assert sent[0].target_group_id is None
+        assert sent[0].target_user_id == "111"
+        assert not sent[0].segments[0].data.startswith("@")
         assert ReminderTasks.get(ReminderTasks.task_id == tid).is_completed
 
     @pytest.mark.asyncio
@@ -258,7 +261,7 @@ class TestReminderSkills:
     def test_set_reminder_skill(self):
         from junjun_skills.builtin.memory_skills import current_chat_id
         from junjun_skills.builtin.reminder_skills import set_reminder, list_reminders
-        current_chat_id.set("qq:999:group")
+        current_chat_id.set("qq:999:private")  # 群禁后提醒只发私聊（2026-08-12 裁决）
         out = set_reminder.invoke({"content": "开会", "time_spec": "30分钟后", "user_id": "111"})
         assert "已设好" in out
         assert "开会" in list_reminders.invoke({})
@@ -273,7 +276,7 @@ class TestReminderSkills:
         from junjun_skills.builtin.memory_skills import current_chat_id
         from junjun_skills.builtin.reminder_skills import set_reminder
         from junjun_core.database import ReminderTasks
-        current_chat_id.set("qq:999:group")
+        current_chat_id.set("qq:999:private")
         out = set_reminder.invoke({"content": "推科技新闻", "time_spec": "每天早上8点",
                                    "user_id": "111"})
         assert "已设好" in out and "每天" in out
@@ -285,13 +288,24 @@ class TestReminderSkills:
         from junjun_skills.builtin.memory_skills import current_chat_id
         from junjun_skills.builtin.reminder_skills import set_reminder
         from junjun_core.database import ReminderTasks
-        current_chat_id.set("qq:999:group")
+        current_chat_id.set("qq:999:private")
         out = set_reminder.invoke({"content": "交周报", "time_spec": "每周五晚上8点",
                                    "user_id": "111"})
         assert "已设好" in out and "每周" in out
         row = ReminderTasks.get(ReminderTasks.content == "交周报")
         assert row.repeat_type == "weekly"
         assert datetime.fromtimestamp(row.remind_time).weekday() == 4  # 周五
+
+    def test_set_reminder_group_rejected(self):
+        """群禁：群里设提醒必须拒绝且不落库（2026-08-12 用户裁决：群里禁用+收敛）。"""
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        from junjun_skills.builtin.reminder_skills import set_reminder
+        from junjun_core.database import ReminderTasks
+        current_chat_id.set("qq:999:group")
+        out = set_reminder.invoke({"content": "开会", "time_spec": "30分钟后",
+                                   "user_id": "111"})
+        assert "不在群里设" in out and "私聊" in out
+        assert ReminderTasks.select().where(ReminderTasks.content == "开会").count() == 0
 
     def test_manage_mood_skill(self):
         from junjun_skills.builtin.memory_skills import current_chat_id

@@ -92,14 +92,21 @@ async def _fire(task) -> None:
         pass
 
     # 发送（chat_id 格式 platform:id:type）
+    # 群禁（2026-08-12 用户裁决）：存量群提醒到点改投当事人私聊——
+    # 不在群里 @ 打扰全群，也不丢已设的提醒。
     parts = task.chat_id.split(":")
     platform, target_id, kind = parts[0], parts[1], parts[2] if len(parts) > 2 else "private"
+    to_group = kind == "group"
+    if to_group and text.startswith("@"):
+        text = text.split(" ", 1)[-1]  # 私聊里 @ 没意义，去掉前缀
     from junjun_core.contracts import ReplySet, ReplySegment
     from junjun_core.gateway.router import get_gateway
     await get_gateway().send_reply(ReplySet(
         platform=platform,
-        target_group_id=target_id if kind == "group" else None,
-        target_user_id=target_id if kind != "group" else None,
+        # 群提醒改投私聊后 group_id 恒 None；私聊目标：群提醒找当事人
+        # （task.user_id），私聊提醒找会话本人（target_id）
+        target_group_id=None,
+        target_user_id=task.user_id if to_group else target_id,
         segments=[ReplySegment(type="text", data=text)],
         should_reply=True,
     ))
