@@ -292,3 +292,105 @@ class TestDoubaoSpeakerRouting:
         monkeypatch.setenv("TTS_DOUBAO_SPEAKER", "custom_voice")
         from junjun_skills.plugins.tts import tools as tts
         assert tts._doubao_speaker_for("こんにちは") == "custom_voice"
+
+
+class TestAipingBackend:
+    """AI Ping MiniMax-Speech-02-hd 后端（2026-08-12 平台迁移接入）。"""
+
+    def test_configured(self, _plugin, monkeypatch):
+        monkeypatch.setenv("AIPING_API_KEY", "ap-test")
+        monkeypatch.setenv("AIPING_BASE_URL", "https://ap.test/api/v1")
+        assert _plugin._backend_configured("aiping")
+        monkeypatch.delenv("AIPING_API_KEY")
+        assert not _plugin._backend_configured("aiping")
+
+    def test_default_backend_env(self, _plugin, monkeypatch):
+        monkeypatch.setenv("TTS_DEFAULT_BACKEND", "aiping")
+        assert _plugin._default_backend() == "aiping"
+
+    @pytest.mark.asyncio
+    async def test_synthesize_parses_hex(self, _plugin, monkeypatch):
+        monkeypatch.setenv("AIPING_API_KEY", "ap-test")
+        monkeypatch.setenv("AIPING_BASE_URL", "https://ap.test/api/v1")
+        captured = {}
+        fake_audio = b"\xff\xfb" + b"\x00" * 512
+
+        class _Resp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"data": {"audio": fake_audio.hex()}}
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json=None, headers=None):
+                captured["url"] = url
+                captured["payload"] = json
+                captured["auth"] = headers.get("Authorization")
+                return _Resp()
+
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        out = await _plugin.synthesize_aiping("你好呀")
+        assert out == fake_audio
+        assert captured["url"] == "https://ap.test/api/v1/audio/speech"
+        assert captured["payload"]["text"] == "你好呀"
+        assert "input" not in captured["payload"]   # 网关只认 MiniMax 原生 text 字段
+        assert captured["payload"]["voice_setting"]["voice_id"] == "female-shaonv"
+        assert captured["payload"]["audio_setting"]["format"] == "mp3"
+        assert captured["auth"] == "Bearer ap-test"
+
+    @pytest.mark.asyncio
+    async def test_synthesize_http_error_none(self, _plugin, monkeypatch):
+        monkeypatch.setenv("AIPING_API_KEY", "ap-test")
+        monkeypatch.setenv("AIPING_BASE_URL", "https://ap.test/api/v1")
+
+        class _Resp:
+            status_code = 400
+            text = "bad request"
+
+            def json(self):
+                return {}
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **kw):
+                return _Resp()
+
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", _Client)
+        assert await _plugin.synthesize_aiping("你好") is None
+
+    @pytest.mark.asyncio
+    async def test_synthesize_no_key_none(self, _plugin, monkeypatch):
+        monkeypatch.delenv("AIPING_API_KEY", raising=False)
+        monkeypatch.delenv("AIPING_BASE_URL", raising=False)
+        assert await _plugin.synthesize_aiping("你好") is None
+
+    @pytest.mark.asyncio
+    async def test_fallback_prefers_aiping(self, _plugin, monkeypatch):
+        """aiping 在 BACKENDS 首位：doubao 挂了、且 aiping 已配置时先降 aiping。"""
+        monkeypatch.setenv("AIPING_API_KEY", "ap-test")
+        monkeypatch.setenv("AIPING_BASE_URL", "https://ap.test/api/v1")
+        _patch_none(monkeypatch, _plugin, "doubao")
+        _patch_ok(monkeypatch, _plugin, "aiping")
+        used, audio = await _plugin._synthesize_with_fallback("文本", "doubao")
+        assert used == "aiping"
+        assert audio == _FAKE_MP3

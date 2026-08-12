@@ -47,14 +47,29 @@ _EXPAND_MAX_LEN = 200   # 描述长于该长度时不扩写（已经够详细，
 _DEFAULT_MODEL = "Tongyi-MAI/Z-Image-Turbo"
 _DEFAULT_ANIME_MODEL = "QWQ114514123/WAI-illustrious-SDXL-v16"
 _DEFAULT_QWEN_MODEL = "Qwen/Qwen-Image-2512"
+# AI Ping 生图模型（2026-08-12 平台迁移：同步 OpenAI 风格 /images/generations，
+# 返回 data[0].url；与 ModelScope 异步任务协议不同，generate() 按模型分流）：
+#   Kolors ¥0（可图，快手中文生图——默认 SFW）、GLM-Image ¥0.10、Doubao-Seedream-4.0 ¥0.20
+_DEFAULT_KOLORS_MODEL = "Kolors"
+_DEFAULT_GLM_IMAGE_MODEL = "GLM-Image"
+_DEFAULT_SEEDREAM_MODEL = "Doubao-Seedream-4.0"
 
-# 模型别名 -> 实际 ModelScope Model-Id（env 可覆盖）：显式指定或关键词路由用
+# 模型别名 -> 实际 Model-Id（env 可覆盖）：显式指定或关键词路由用
 def _model_registry() -> dict:
     return {
+        "kolors": os.environ.get("AI_DRAW_MODEL_KOLORS", "") or _DEFAULT_KOLORS_MODEL,
+        "glm-image": os.environ.get("AI_DRAW_MODEL_GLM_IMAGE", "") or _DEFAULT_GLM_IMAGE_MODEL,
+        "seedream": os.environ.get("AI_DRAW_MODEL_SEEDREAM", "") or _DEFAULT_SEEDREAM_MODEL,
         "zimage": os.environ.get("AI_DRAW_MODEL", "") or _DEFAULT_MODEL,
         "anime": os.environ.get("AI_DRAW_MODEL_ANIME", "") or _DEFAULT_ANIME_MODEL,
         "qwen": os.environ.get("AI_DRAW_MODEL_QWEN", "") or _DEFAULT_QWEN_MODEL,
     }
+
+
+def _aiping_model_ids() -> set:
+    """当前走 AI Ping 网关的 Model-Id 集合（随 env 覆盖动态变化）。"""
+    reg = _model_registry()
+    return {reg["kolors"], reg["glm-image"], reg["seedream"]}
 
 # ---------------- 提示词工程（按模型家族定制，两套风格不可混用） ----------------
 # Z-Image-Turbo：中英双语自然语言完整描述效果最好（光照/色彩/构图/质感）
@@ -119,6 +134,19 @@ def _api_key() -> str:
     return os.environ.get("MODELSCOPE_API_KEY", "")
 
 
+def _aiping_key() -> str:
+    return os.environ.get("AIPING_API_KEY", "").strip()
+
+
+def _aiping_base() -> str:
+    return os.environ.get("AIPING_BASE_URL", "").strip().rstrip("/")
+
+
+def _any_provider_key() -> str:
+    """任一生图平台凭据（门控用：默认模型走 AI Ping，ModelScope 系别名才要 MS key）。"""
+    return _api_key() or _aiping_key()
+
+
 def _headers() -> dict:
     return {
         "Authorization": f"Bearer {_api_key()}",
@@ -160,7 +188,7 @@ def is_qwen_domain(prompt: str) -> bool:
 
 
 def route_model(prompt: str, explicit: str = "") -> str:
-    """根据描述选择生图模型：显式别名 > 写实/文字词(qwen) > 二次元词(anime) > 默认。"""
+    """根据描述选择生图模型：显式别名 > 写实/文字词(qwen) > 二次元词(anime) > 默认(kolors)。"""
     reg = _model_registry()
     if explicit and explicit.lower() in reg:
         return reg[explicit.lower()]
@@ -168,7 +196,7 @@ def route_model(prompt: str, explicit: str = "") -> str:
         return reg["qwen"]
     if is_anime(prompt):
         return reg["anime"]
-    return reg["zimage"]
+    return reg["kolors"]
 
 
 def model_style(model: str) -> str:
@@ -299,8 +327,43 @@ async def poll_task(task_id: str) -> str | None:
     return None
 
 
+async def _generate_aiping(prompt: str, model: str) -> str | None:
+    """AI Ping 同步生图：POST /images/generations，返回 data[0].url；失败 None。
+
+    OpenAI 风格同步协议（与 ModelScope 异步任务不同）；negative_prompt 不支持。
+    """
+    if not _aiping_key() or not _aiping_base():
+        logger.warning("AI Ping 生图未配置 AIPING_API_KEY/AIPING_BASE_URL")
+        return None
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "size": os.environ.get("AI_DRAW_AIPING_SIZE", "").strip() or "1024x1024",
+    }
+    headers = {"Authorization": f"Bearer {_aiping_key()}",
+               "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=_POLL_TIMEOUT) as client:
+            resp = await client.post(f"{_aiping_base()}/images/generations",
+                                     json=payload, headers=headers)
+        if resp.status_code != 200:
+            logger.warning(f"AI Ping 生图失败 HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+        data = (resp.json().get("data") or [{}])
+        url = data[0].get("url") if data else None
+        if not url:
+            logger.warning(f"AI Ping 生图未返回 url: {resp.text[:200]}")
+            return None
+        return str(url)
+    except Exception as e:
+        logger.warning(f"AI Ping 生图异常: {type(e).__name__}: {e}")
+        return None
+
+
 async def generate(prompt: str, model: str, negative: str = "") -> str | None:
-    """完整生图链路：提交 -> 轮询 -> 图片 URL；任何失败返回 None。"""
+    """完整生图链路：AI Ping 模型走同步直连，ModelScope 模型走提交->轮询；失败 None。"""
+    if model in _aiping_model_ids():
+        return await _generate_aiping(prompt, model)
     task_id = await submit_task(prompt, model, negative)
     if not task_id:
         return None
@@ -356,8 +419,8 @@ async def draw_cmd(ctx):
     prompt, model_alias = _parse_model_alias(ctx.args)
     if not prompt:
         return ("要画什么呀？用法：/draw <描述> [模型]，比如 /draw 猫娘少女\n"
-                "模型可选：zimage（默认）/ anime（二次元）/ qwen（写实/带字图最强），"
-                "不填按描述自动路由。")
+                "模型可选：kolors（默认，免费）/ anime（二次元）/ qwen（写实/带字图最强）/ "
+                "glm-image、seedream（AI Ping 付费高质量）/ zimage（旧默认），不填按描述自动路由。")
     if is_minor_nsfw(prompt):
         return "这种不行哦，涉及未成年人的色色内容君君绝对不画！换个描述吧。"
     # 群聊 R18 硬门（2026-08-06 实锤「分不清群聊私聊」：群场景此前只靠模型
@@ -371,8 +434,8 @@ async def draw_cmd(ctx):
     if left > 0:
         return f"画得太勤啦，{int(left) + 1} 秒后再来吧。"
 
-    if not _api_key():
-        return "画图功能还没配置 ModelScope 密钥喵，让主人设置 MODELSCOPE_API_KEY 吧。"
+    if not _any_provider_key():
+        return "画图功能还没配置密钥喵，让主人设置 AIPING_API_KEY 或 MODELSCOPE_API_KEY 吧。"
 
     _last_use[chat_id] = now
     fut = _begin_pending_draw(chat_id)
@@ -454,8 +517,8 @@ async def ai_draw(prompt: str, model: str = "") -> str:
     警告藏在描述中段时弱模型照犯，故置顶）。
 
     prompt 为画面描述（如「猫娘少女」「星空下的城市」）。
-    model 为可选模型别名：zimage（默认通用）/ anime（二次元）/ qwen（写实照片、
-    海报贺卡等带文字的图最强）——不填按描述自动路由。
+    model 为可选模型别名：kolors（默认通用，免费）/ anime（二次元）/ qwen（写实照片、
+    海报贺卡等带文字的图最强）/ glm-image、seedream（AI Ping 付费高质量）——不填按描述自动路由。
 
     本工具是异步的：调用后立即返回，图片画好会自动发到当前聊天，
     不要在回复里编造图片 URL，也不要说「无法发送图片」——图片会随后发出。"""
@@ -464,11 +527,11 @@ async def ai_draw(prompt: str, model: str = "") -> str:
         return "没有描述词，画不了。"
     if is_minor_nsfw(prompt):
         return "拒绝：描述涉及未成年人性内容，不会生成。"
-    if not _api_key():
-        return "画图功能未配置 MODELSCOPE_API_KEY，暂时画不了。"
+    if not _any_provider_key():
+        return "画图功能未配置生图密钥（AIPING_API_KEY 或 MODELSCOPE_API_KEY），暂时画不了。"
     model_alias = (model or "").strip().lower()
     if model_alias and model_alias not in _model_registry():
-        return f"不认识模型「{model}」，可选：zimage / anime / qwen。"
+        return f"不认识模型「{model}」，可选：kolors / anime / qwen / glm-image / seedream / zimage。"
     from junjun_skills.builtin.memory_skills import current_chat_id
     chat_id = current_chat_id.get("")
     # 群聊 R18 硬门：模型在群里违规调工具也不能真出图（最后一道防线）。

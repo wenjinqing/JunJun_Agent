@@ -330,7 +330,7 @@ class TestQwenModel:
     def test_route_model_matrix(self, _plugin):
         qwen = _plugin._DEFAULT_QWEN_MODEL
         anime = _plugin._DEFAULT_ANIME_MODEL
-        default = _plugin._DEFAULT_MODEL
+        default = _plugin._DEFAULT_KOLORS_MODEL   # 2026-08-12 起默认 SFW = AI Ping Kolors
         assert _plugin.route_model("写实照片风的猫咪") == qwen      # 写实域
         assert _plugin.route_model("一张带字的海报") == qwen        # 文字渲染域
         assert _plugin.route_model("二次元少女") == anime
@@ -339,6 +339,7 @@ class TestQwenModel:
         assert _plugin.route_model("二次元少女", explicit="qwen") == qwen  # 显式优先
         assert _plugin.route_model("猫", explicit="anime") == anime
         assert _plugin.route_model("猫", explicit="不存在") == default    # 未知别名忽略
+        assert _plugin.route_model("猫", explicit="zimage") == _plugin._DEFAULT_MODEL  # 旧默认仍可显式指定
 
     def test_model_style(self, _plugin):
         reg = _plugin._model_registry()
@@ -531,3 +532,130 @@ class TestGroupR18HardGate:
         assert _plugin.has_r18_marker("nsfw catgirl")
         assert not _plugin.has_r18_marker("动漫 猫娘少女")
         assert not _plugin.has_r18_marker("蓝色的天空")
+
+
+class TestAipingProvider:
+    """AI Ping 生图（2026-08-12 平台迁移）：同步 /images/generations 协议分流。"""
+
+    def test_registry_has_aiping_aliases(self, _plugin):
+        reg = _plugin._model_registry()
+        assert reg["kolors"] == "Kolors"
+        assert reg["glm-image"] == "GLM-Image"
+        assert reg["seedream"] == "Doubao-Seedream-4.0"
+        assert reg["zimage"] == _plugin._DEFAULT_MODEL  # 旧别名仍在
+
+    def test_registry_env_override(self, _plugin, monkeypatch):
+        monkeypatch.setenv("AI_DRAW_MODEL_KOLORS", "Custom-Kolors-X")
+        assert _plugin._model_registry()["kolors"] == "Custom-Kolors-X"
+        assert "Custom-Kolors-X" in _plugin._aiping_model_ids()
+
+    @pytest.mark.asyncio
+    async def test_generate_branches_to_aiping(self, monkeypatch):
+        # 不用 _plugin fixture（它把 generate 换成了假实现，这里要测真分流）
+        import junjun_skills.plugins.ai_draw.tools as ad
+        called = {}
+
+        async def _aiping(prompt, model):
+            called["model"] = model
+            return "http://x/ap.png"
+
+        async def _submit(prompt, model, negative=""):
+            raise AssertionError("AI Ping 模型不该走 ModelScope 任务流")
+
+        monkeypatch.setattr(ad, "_generate_aiping", _aiping)
+        monkeypatch.setattr(ad, "submit_task", _submit)
+        url = await ad.generate("猫", "Kolors")
+        assert url == "http://x/ap.png"
+        assert called["model"] == "Kolors"
+
+    @pytest.mark.asyncio
+    async def test_generate_modelscope_branch_untouched(self, monkeypatch):
+        import junjun_skills.plugins.ai_draw.tools as ad
+
+        async def _aiping(prompt, model):
+            raise AssertionError("ModelScope 模型不该走 AI Ping")
+
+        async def _submit(prompt, model, negative=""):
+            return None  # 提交即失败即可——只为验证分流方向
+
+        monkeypatch.setattr(ad, "_generate_aiping", _aiping)
+        monkeypatch.setattr(ad, "submit_task", _submit)
+        assert await ad.generate("猫", ad._DEFAULT_MODEL) is None
+
+    @pytest.mark.asyncio
+    async def test_aiping_parses_url(self, _plugin, monkeypatch):
+        monkeypatch.setenv("AIPING_API_KEY", "ap-test")
+        monkeypatch.setenv("AIPING_BASE_URL", "https://ap.test/api/v1")
+        captured = {}
+
+        class _Resp:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"data": [{"url": "http://img/ap.png"}]}
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json=None, headers=None):
+                captured["url"] = url
+                captured["payload"] = json
+                captured["auth"] = headers.get("Authorization")
+                return _Resp()
+
+        monkeypatch.setattr(_plugin.httpx, "AsyncClient", _Client)
+        url = await _plugin._generate_aiping("一只猫", "Kolors")
+        assert url == "http://img/ap.png"
+        assert captured["url"] == "https://ap.test/api/v1/images/generations"
+        assert captured["payload"]["model"] == "Kolors"
+        assert captured["payload"]["size"] == "1024x1024"
+        assert captured["auth"] == "Bearer ap-test"
+
+    @pytest.mark.asyncio
+    async def test_aiping_http_error_none(self, _plugin, monkeypatch):
+        monkeypatch.setenv("AIPING_API_KEY", "ap-test")
+        monkeypatch.setenv("AIPING_BASE_URL", "https://ap.test/api/v1")
+
+        class _Resp:
+            status_code = 500
+            text = "server error"
+
+            def json(self):
+                return {}
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, *a, **kw):
+                return _Resp()
+
+        monkeypatch.setattr(_plugin.httpx, "AsyncClient", _Client)
+        assert await _plugin._generate_aiping("猫", "Kolors") is None
+
+    @pytest.mark.asyncio
+    async def test_aiping_no_key_none(self, _plugin, monkeypatch):
+        monkeypatch.delenv("AIPING_API_KEY", raising=False)
+        monkeypatch.delenv("AIPING_BASE_URL", raising=False)
+        assert await _plugin._generate_aiping("猫", "Kolors") is None
+
+    @pytest.mark.asyncio
+    async def test_dual_key_gate(self, _plugin, monkeypatch):
+        """只有 AI Ping key（无 ModelScope key）也应能画——默认模型已走 AI Ping。"""
+        monkeypatch.delenv("MODELSCOPE_API_KEY", raising=False)
+        monkeypatch.setenv("AIPING_API_KEY", "ap-test")
+        assert _plugin._any_provider_key() == "ap-test"

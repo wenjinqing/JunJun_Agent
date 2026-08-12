@@ -4,6 +4,10 @@
 工具：unified_tts（LLM 触发，语音发到当前会话）
 
 后端（对齐旧插件 API 细节）：
+- aiping       AI Ping 聚合平台 MiniMax-Speech-02-hd：POST {AIPING_BASE_URL}/audio/speech
+               MiniMax 原生字段 {model,text,stream,voice_setting,audio_setting}，
+               返回 JSON data.audio=hex（2026-08-12 实测：OpenAI 风格 input 字段 422，
+               网关只认 text；voice_setting.voice_id 缺省报 empty field）
 - doubao       豆包 Seed-TTS 2.0 双向 WS（wss://openspeech.bytedance.com/api/v3/tts/bidirection，
                二进制帧协议复用 ja_tts 插件的内联实现，不重造）
 - siliconflow  硅基流动 MOSS-TTSD：POST https://api.siliconflow.cn/v1/audio/speech
@@ -44,8 +48,8 @@ _MIN_INTERVAL = 15.0       # 每会话最小间隔（秒）
 # 音频输出目录（NapCat record 段支持本地绝对路径）；测试可 monkeypatch
 OUTPUT_DIR = Path(os.environ.get("TTS_OUTPUT_DIR", r"E:\JunJun_Agent\data\tts"))
 
-BACKENDS = ("doubao", "siliconflow", "gsv2p", "sovits")
-_BACKEND_NAMES = {"doubao": "豆包", "siliconflow": "硅基流动",
+BACKENDS = ("aiping", "doubao", "siliconflow", "gsv2p", "sovits")
+_BACKEND_NAMES = {"aiping": "AI Ping", "doubao": "豆包", "siliconflow": "硅基流动",
                   "gsv2p": "GSV2P", "sovits": "GPT-SoVITS"}
 
 # 各后端默认音色常量（可用 env 覆盖；豆包预设表见 ja_tts.VOICE_PRESETS）
@@ -69,12 +73,55 @@ _SF_DEFAULT_VOICE = "fnlp/MOSS-TTSD-v0.5:claire"          # 旧 config.toml [sil
 _GSV2P_DEFAULT_URL = "https://gsv2p.acgnai.top/v1/audio/speech"
 _GSV2P_DEFAULT_VOICE = "原神-中文-派蒙_ZH"                 # 旧 config.toml [gsv2p]
 _SOVITS_DEFAULT_URL = "http://127.0.0.1:9880"
+_AIPING_TTS_MODEL = "MiniMax-Speech-02-hd"                 # ¥3.5/M 字符，2026-08-12 接入
+_AIPING_TTS_VOICE = "female-shaonv"                        # MiniMax 预设音色（少女音）
 
 # 每会话上次合成时间戳（chat_id -> ts）
 _last_use: dict = {}
 
 
 # ========== 各后端合成 helper（独立 async，失败返回 None，绝不抛异常） ==========
+async def synthesize_aiping(text: str) -> bytes | None:
+    """AI Ping MiniMax-Speech-02-hd：POST /audio/speech（MiniMax 原生字段），
+    返回 JSON data.audio=hex -> 解码成 mp3 字节；失败 None。"""
+    api_key = os.environ.get("AIPING_API_KEY", "").strip()
+    base = os.environ.get("AIPING_BASE_URL", "").strip()
+    if not api_key or not base:
+        return None
+    payload = {
+        "model": os.environ.get("TTS_AIPING_MODEL", "").strip() or _AIPING_TTS_MODEL,
+        "text": text,
+        "stream": False,
+        "voice_setting": {
+            "voice_id": os.environ.get("TTS_AIPING_VOICE", "").strip() or _AIPING_TTS_VOICE,
+            "speed": 1.0, "vol": 1.0, "pitch": 0,
+        },
+        "audio_setting": {"format": "mp3", "sample_rate": 32000,
+                          "bitrate": 128000, "channel": 1},
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(f"{base.rstrip('/')}/audio/speech",
+                                     json=payload, headers=headers)
+        if resp.status_code != 200:
+            logger.warning(f"tts AI Ping 失败: HTTP {resp.status_code} {resp.text[:200]}")
+            return None
+        audio_hex = (resp.json().get("data") or {}).get("audio") or ""
+        if not audio_hex:
+            logger.warning(f"tts AI Ping 返回无音频: {resp.text[:200]}")
+            return None
+        audio = bytes.fromhex(audio_hex)
+        if len(audio) < 100:
+            logger.warning("tts AI Ping 返回音频过小")
+            return None
+        return audio
+    except Exception as e:
+        logger.warning(f"tts AI Ping 合成失败: {type(e).__name__}: {e}")
+        return None
+
+
 async def synthesize_doubao(text: str, *, style: dict | None = None) -> bytes | None:
     """豆包 Seed-TTS 双向 WS 合成（协议实现复用 ja_tts 插件）。返回 mp3 字节或 None。
 
@@ -227,6 +274,9 @@ async def synthesize_sovits(text: str) -> bytes | None:
 # ========== 公共流程 ==========
 def _backend_configured(backend: str) -> bool:
     """后端是否已配置（有凭据/参考音频），决定它是否参与自动降级。"""
+    if backend == "aiping":
+        return bool(os.environ.get("AIPING_API_KEY", "").strip()
+                    and os.environ.get("AIPING_BASE_URL", "").strip())
     if backend == "doubao":
         return bool(os.environ.get("DOUBAO_TTS_API_KEY", "").strip())
     if backend == "siliconflow":
@@ -314,13 +364,14 @@ async def _synthesize_to_file(text: str, backend: str, *, chat_id: str = "",
 
 
 def _no_backend_text() -> str:
-    return ("语音功能还没配置哦（没有任何可用后端：缺 DOUBAO_TTS_API_KEY / "
-            "SILICONFLOW_API_KEY / TTS_GSV2P_TOKEN / TTS_SOVITS_REF_AUDIO），先用文字吧。")
+    return ("语音功能还没配置哦（没有任何可用后端：缺 AIPING_API_KEY / "
+            "DOUBAO_TTS_API_KEY / SILICONFLOW_API_KEY / TTS_GSV2P_TOKEN / "
+            "TTS_SOVITS_REF_AUDIO），先用文字吧。")
 
 
 # ========== 命令：/tts /voice ==========
 @register_command("tts", aliases=["voice"], plugin="tts",
-                  description="文字转语音：/tts <文本> [后端 doubao/siliconflow/gsv2p/sovits]")
+                  description="文字转语音：/tts <文本> [后端 aiping/doubao/siliconflow/gsv2p/sovits]")
 async def tts_cmd(ctx):
     args = (ctx.args or "").strip()
     if not args:
@@ -371,7 +422,7 @@ async def unified_tts(text: str, backend: str = "", emotion: str = "") -> str:
 
     Args:
         text: 要读给用户听的内容（300 字内，越短效果越好）
-        backend: 可选后端 doubao(豆包)/siliconflow(硅基流动)/gsv2p/sovits(GPT-SoVITS)，留空用默认
+        backend: 可选后端 aiping(AI Ping)/doubao(豆包)/siliconflow(硅基流动)/gsv2p/sovits(GPT-SoVITS)，留空用默认
         emotion: 可选情绪语气（中文词）：开心/兴奋/生气/发疯/难过/委屈/惊讶/害怕/冷漠/温柔/撒娇；
                  留空则自动跟随你当前的心情
     """
