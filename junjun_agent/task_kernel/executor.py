@@ -22,7 +22,9 @@ from typing import Dict, List, Optional
 
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
-from junjun_agent.task_kernel.plan import SYNTH_ACTION, Step, TaskPlan
+from junjun_agent.task_kernel.plan import (
+    SIDE_EFFECT_ACTIONS, SYNTH_ACTION, Step, TaskPlan,
+)
 
 logger = get_logger("task_kernel.executor")
 
@@ -194,7 +196,8 @@ class TaskKernel:
 
     async def _run_inner(self, plan: TaskPlan) -> None:
         from junjun_agent.task_kernel.planner import revise_remaining
-        max_replans = int(_cfg().get("max_replans", 1))
+        max_replans = int(_cfg().get("max_replans", 3))  # Phase 1：1 -> 3 配指数退避
+        backoff_base = float(_cfg().get("replan_backoff_seconds", 5))
         try:
             while True:
                 if time.time() > plan.deadline_ts:
@@ -210,8 +213,15 @@ class TaskKernel:
                         plan.state = "failed"
                         plan.note = "步骤图无法推进（依赖断裂）"
                     break
-                await asyncio.gather(*(self._run_step(plan, s) for s in ready),
-                                     return_exceptions=True)
+                # 副作用/成品硬校验（Phase 1）：无交集步骤并行，副作用步骤
+                # 串行殿后——双图事故的教训要代码兜底，不只靠 prompt 软约束。
+                safe = [s for s in ready if s.action not in SIDE_EFFECT_ACTIONS]
+                side = [s for s in ready if s.action in SIDE_EFFECT_ACTIONS]
+                if safe:
+                    await asyncio.gather(*(self._run_step(plan, s) for s in safe),
+                                         return_exceptions=True)
+                for s in side:
+                    await self._run_step(plan, s)
                 _persist(plan)
                 failed = [s for s in plan.steps if s.status == "failed"]
                 # 验证失败计数（指标进根 span）：区别于工具/网络类失败
@@ -224,6 +234,9 @@ class TaskKernel:
                     elif plan.replans < max_replans:
                         plan.replans += 1
                         logger.info(f"步骤 {s.id} 连续失败，局部重规划（第 {plan.replans} 次）")
+                        if backoff_base > 0:  # 指数退避：瞬时故障给恢复窗口
+                            await asyncio.sleep(
+                                min(60.0, backoff_base * 2 ** (plan.replans - 1)))
                         new_steps = await revise_remaining(plan, s.desc, s.error)
                         if new_steps:
                             plan.steps = ([x for x in plan.steps if x.status == "done"]
@@ -348,8 +361,11 @@ class TaskKernel:
         if step.verify == "llm_judge":
             from junjun_llm import get_chat_model
             from langchain_core.messages import HumanMessage
+            # 完成判据（Phase 1）：验收对准规划意图，避免泛泛的「内容太简略」
+            # 误杀内容达标但措辞不合评委口味的产出。
+            criteria = f"\n完成判据：{step.done_criteria}" if step.done_criteria else ""
             prompt = (f"判断下面的产出是否基本完成了步骤目标（只答「可以」或「不行+一句原因」）。\n"
-                      f"步骤目标：{step.desc}\n产出：\n{result[:1500]}")
+                      f"步骤目标：{step.desc}{criteria}\n产出：\n{result[:1500]}")
             try:
                 model = get_chat_model("utils_small") or get_chat_model("utils")
                 resp = await model.ainvoke([HumanMessage(content=prompt)])

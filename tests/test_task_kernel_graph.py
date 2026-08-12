@@ -158,6 +158,42 @@ class TestGraphFlow:
         oc = _outcomes("qq:g1:group")
         assert oc[-1]["status"] == "failed" and "时限" in oc[-1]["detail"]
 
+    @pytest.mark.asyncio
+    async def test_side_effect_serial_after_safe(self, harness, monkeypatch):
+        """execute 节点硬校验（Phase 1）：无副作用并行、副作用/成品串行殿后。"""
+        order = []
+        _bind_tools(monkeypatch, [
+            _StubTool("ai_draw", lambda a: order.append("draw") or "图已发"),
+            _StubTool("web_search", lambda a: order.append("search") or "结果"),
+        ])
+        await runner.submit(_plan([
+            Step(id="s1", action="ai_draw", desc="画"),   # 故意把成品写前面
+            Step(id="s2", action="web_search", desc="搜"),
+        ]))
+        assert order == ["search", "draw"], "副作用步骤必须排在安全步骤之后"
+        assert _outcomes("qq:g1:group")[-1]["status"] == "done"
+
+    @pytest.mark.asyncio
+    async def test_max_replans_defaults_to_three(self, harness, monkeypatch):
+        """Phase 1：max_replans 默认 1 -> 3（配置缺失时，含指数退避参数）。"""
+        monkeypatch.setattr(executor, "_cfg", lambda: {
+            "enable": True, "engine": "langgraph", "max_steps": 6,
+            "deadline_minutes": 30, "replan_backoff_seconds": 0})
+        _bind_tools(monkeypatch, [_StubTool(
+            "bad_tool", lambda a: (_ for _ in ()).throw(RuntimeError("不行")))])
+        import junjun_agent.task_kernel.planner as planner
+        revise_calls = {"n": 0}
+
+        async def fake_revise(plan, desc, err):
+            revise_calls["n"] += 1
+            return [Step(id=f"r{revise_calls['n']}", action="bad_tool",
+                         desc="换个法子还是败")]
+
+        monkeypatch.setattr(planner, "revise_remaining", fake_revise)
+        await runner.submit(_plan([Step(id="s1", action="bad_tool", desc="必败")]))
+        assert revise_calls["n"] == 3, "默认应重规划 3 次才认输"
+        assert _outcomes("qq:g1:group")[-1]["status"] == "failed"
+
 
 # ---------- 崩溃断点续跑（SqliteSaver + 同 thread_id + input None） ----------
 

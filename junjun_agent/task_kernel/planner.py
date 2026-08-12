@@ -18,7 +18,7 @@ _PLANNER_PROMPT = """你是任务规划器。把用户的委托拆成可执行�
 
 用户委托：{goal}
 
-可用工具（action 只能从这里选，或用 "llm_synthesize" 表示直接文本合成）：
+可用工具（action 只能从这里选，或用 "llm_synthesize" 表示直接文本合成；括号里是参数签名，? 结尾=可选）：
 {tool_list}
 
 规则：
@@ -26,10 +26,11 @@ _PLANNER_PROMPT = """你是任务规划器。把用户的委托拆成可执行�
 2. 步骤间有先后依赖就写 depends_on（只允许依赖前面的步骤）；无依赖的步骤会并行。
 3. 画图/语音这类成品工具（ai_draw、unified_tts 等）只能放最后一步——它们是即交即走的。发说说/发空间类需求直接一步 send_feed（它内部自带配图能力），不要拆 ai_draw→send_feed 两步（会画两张图）。
 4. verify 填验证方式：tool_ok（工具不报错即可，默认）/ llm_judge（需要判断产出质量，如报告、笔记）/ none / human（发空间、订阅推送这类对外发布动作——必须等管理员批准才执行）。
-5. args_hint 给工具的参数提示（如搜索关键词），可以给后序步骤引用前序结果写「$步骤id」。
+5. args_hint 必须严格按工具签名给参数：参数名照抄签名（必填的一个都不许漏），值给具体内容或「$步骤id」引用前序产出。拿不准可选参数就省略。
+6. 每步写 done_criteria：这一步凭什么算完成（一句话、可检查），验收时用它对准你的意图。
 
 输出格式：
-{{"steps": [{{"id": "s1", "action": "工具名", "desc": "做什么", "args_hint": {{}}, "depends_on": [], "verify": "tool_ok"}}]}}"""
+{{"steps": [{{"id": "s1", "action": "工具名", "desc": "做什么", "args_hint": {{}}, "depends_on": [], "verify": "tool_ok", "done_criteria": "凭什么算完成"}}]}}"""
 
 
 def _extract_json(text: str) -> dict:
@@ -42,38 +43,75 @@ def _extract_json(text: str) -> dict:
         return {}
 
 
+def _schema_brief(t) -> str:
+    """工具参数签名摘要（Phase 1）：名字+类型+可问号，给规划器抄参数名的依据。
+
+    2026-08-12 基线实锤：只给名字+一句描述时规划器瞎猜参数名（bilibili_summary
+    缺 url / deep_research 缺 topic / send_feed 缺 content），3/10 失败全死于
+    args_schema 校验。"""
+    fields = getattr(getattr(t, "args_schema", None), "model_fields", None)
+    if not fields:
+        return ""
+    parts = []
+    for n, f in fields.items():
+        ann = getattr(f.annotation, "__name__", None) or str(f.annotation)
+        try:
+            req = f.is_required()
+        except Exception:
+            req = True
+        parts.append(f"{n}:{ann}" + ("" if req else "?"))
+    return "(" + ", ".join(parts) + ")"
+
+
 def _tool_catalog() -> str:
-    """给规划器的工具清单（名字 + 一句描述）；熔断降级的工具不出列。"""
+    """给规划器的工具清单（名字 + 参数签名摘要 + 一句描述）；熔断降级的工具不出列。"""
     from junjun_skills.registry import get_tools
     lines = []
     for t in get_tools():
         desc = (t.description or "").strip().split("\n")[0][:60]
-        lines.append(f"- {t.name}: {desc}")
+        lines.append(f"- {t.name}{_schema_brief(t)}: {desc}")
     return "\n".join(lines)
+
+
+_PLANNER_MAX_TOKENS = 8192
+# 思考链会烧槽位 4096 上限把 JSON 截死（2026-08-12 revise 两次 output=4096 整
+# 实锤）——规划/重规划调用单独放宽；上限只是允许更多，不强制烧满。
+
+
+def _bound(model):
+    """按调用放宽 max_tokens；测试假模型没有 bind，原样返回。"""
+    return model.bind(max_tokens=_PLANNER_MAX_TOKENS) if hasattr(model, "bind") else model
 
 
 async def make_plan(goal: str, *, chat_id: str, user_id: str,
                     max_steps: int = 6, model=None, callbacks=None) -> TaskPlan | None:
-    """生成步骤图。失败/非法返回 None（调用方回退对话通道）。"""
+    """生成步骤图。失败/非法返回 None（调用方回退对话通道）。
+
+    产出不合法时带提醒重试一次：规划是低频高价值调用，偶发的散文包裹/编造
+    工具名值得一次纠偏机会（2026-08-12 基线 2/10 失败死于单次 None）。"""
     if model is None:
         from junjun_llm import get_chat_model
         model = get_chat_model("thinker")  # 规划是低频高价值：开思考的 ***REMOVED***
     from langchain_core.messages import HumanMessage
-    prompt = _PLANNER_PROMPT.format(goal=goal, tool_list=_tool_catalog(),
-                                    max_steps=max_steps)
-    resp = await model.ainvoke([HumanMessage(content=prompt)],
-                               config={"callbacks": callbacks or []})
-    payload = _extract_json(str(resp.content))
-    if not payload:
-        logger.warning(f"规划器未产出 JSON，回退对话通道: {goal[:40]}")
-        return None
     from junjun_skills.registry import get_tools
     valid = {t.name for t in get_tools()}
-    plan = parse_plan(payload, goal=goal, chat_id=chat_id, user_id=user_id,
-                      valid_actions=valid, max_steps=max_steps)
-    if plan is None:
-        logger.warning(f"规划器产出无合法步骤，回退对话通道: {goal[:40]}")
-    return plan
+    prompt = _PLANNER_PROMPT.format(goal=goal, tool_list=_tool_catalog(),
+                                    max_steps=max_steps)
+    for attempt in (1, 2):
+        resp = await _bound(model).ainvoke([HumanMessage(content=prompt)],
+                                           config={"callbacks": callbacks or []})
+        payload = _extract_json(str(resp.content))
+        if payload:
+            plan = parse_plan(payload, goal=goal, chat_id=chat_id, user_id=user_id,
+                              valid_actions=valid, max_steps=max_steps)
+            if plan is not None:
+                return plan
+        if attempt == 1:
+            logger.info(f"规划器首次未产出合法计划，追加提醒重试: {goal[:40]}")
+            prompt += ("\n\n提醒：上一次输出无法解析成合法计划。只输出纯 JSON，不要"
+                       "任何解释文字；action 必须从可用工具清单照抄，必填参数一个不漏。")
+    logger.warning(f"规划器两次均未产出合法计划，回退对话通道: {goal[:40]}")
+    return None
 
 
 _REVISER_PROMPT = """你是任务规划器。一个执行中的计划有步骤失败了，给出修正后的【剩余】步骤（纯 JSON）。
@@ -106,8 +144,8 @@ async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
     prompt = _REVISER_PROMPT.format(
         goal=plan.goal, failed_desc=failed_step_desc, error=error[:200],
         done_digest=done_digest, pending_digest=pending_digest)
-    resp = await model.ainvoke([HumanMessage(content=prompt)],
-                               config={"callbacks": callbacks or []})
+    resp = await _bound(model).ainvoke([HumanMessage(content=prompt)],
+                                       config={"callbacks": callbacks or []})
     payload = _extract_json(str(resp.content))
     if not payload:
         return None

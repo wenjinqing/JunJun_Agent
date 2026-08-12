@@ -12,6 +12,11 @@ from typing import Dict, List, Optional
 # 步骤动作白名单外的特殊动作：LLM 直接合成文本（不调用工具）
 SYNTH_ACTION = "llm_synthesize"
 
+# 副作用/成品动作（Phase 1 硬校验）：同一轮就绪步骤里它们必须串行、
+# 排在无副作用步骤之后——并行画图/发布 = 双图事故那类代价（prompt 规则
+# 是软约束，代码侧这是硬约束，execute 两处都过它）。
+SIDE_EFFECT_ACTIONS = frozenset({"ai_draw", "unified_tts", "send_feed"})
+
 _VERIFY_KINDS = ("tool_ok", "schema", "llm_judge", "human", "none")
 
 
@@ -23,6 +28,10 @@ class Step:
     args_hint: dict = field(default_factory=dict)
     depends_on: List[str] = field(default_factory=list)
     verify: str = "tool_ok"          # tool_ok / llm_judge / human / none
+    # 完成判据（Phase 1）：这一步凭什么算完成——llm_judge 验收时注入判分提示，
+    # 让验收对准规划意图而不是泛泛的「内容太简略」。旧存档无此字段 -> "" 按
+    # verify 原逻辑推断（向后兼容）。
+    done_criteria: str = ""
     status: str = "pending"          # pending/running/done/failed/skipped
     result: str = ""                 # 产出摘要（大产出的全文不落这里）
     error: str = ""
@@ -115,6 +124,7 @@ def parse_plan(payload: dict, *, goal: str, chat_id: str, user_id: str,
             desc=str(rs.get("desc") or rs.get("description") or action)[:120],
             args_hint=rs.get("args_hint") if isinstance(rs.get("args_hint"), dict) else {},
             depends_on=deps, verify=verify,
+            done_criteria=str(rs.get("done_criteria") or "")[:160],
         ))
     if not steps:
         return None

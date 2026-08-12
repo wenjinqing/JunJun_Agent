@@ -103,6 +103,20 @@ class TestParsePlan:
                        valid_actions={"a"}, max_steps=6)
         assert len(p.steps) == 6
 
+    def test_done_criteria_carried(self):
+        """Phase 1：完成判据从规划 JSON 落到 Step。"""
+        payload = {"steps": [{"id": "s1", "action": "a", "desc": "d",
+                              "done_criteria": "含三个要点"}]}
+        p = parse_plan(payload, goal="g", chat_id="c", user_id="u",
+                       valid_actions={"a"})
+        assert p.steps[0].done_criteria == "含三个要点"
+
+    def test_old_save_without_criteria_backcompat(self):
+        """向后兼容：旧存档无 done_criteria 字段 -> 恢复为 ""，不炸。"""
+        p = TaskPlan.from_dict({"goal": "g", "chat_id": "c",
+                                "steps": [{"id": "s1", "action": "a", "desc": "d"}]})
+        assert p.steps[0].done_criteria == ""
+
 
 # ---------- 执行循环 ----------
 
@@ -201,6 +215,69 @@ class TestRunLoop:
         await executor.kernel._run(plan)
         assert plan.steps[0].status == "failed", "错误文本不得判为步骤成功"
         assert "TOOL_ERROR" in plan.steps[0].error
+        assert plan.state == "failed"
+
+    @pytest.mark.asyncio
+    async def test_side_effect_serial_after_safe(self, harness, monkeypatch):
+        """Phase 1 硬校验：无副作用步骤并行，副作用/成品步骤串行殿后。"""
+        order = []
+        _bind_tools(monkeypatch, [
+            _StubTool("ai_draw", lambda a: order.append("draw") or "图已发"),
+            _StubTool("web_search", lambda a: order.append("search") or "结果"),
+        ])
+        plan = TaskPlan(goal="g", chat_id="qq:g6:group", steps=[
+            Step(id="s1", action="ai_draw", desc="画图"),   # 故意把成品写前面
+            Step(id="s2", action="web_search", desc="搜"),
+        ])
+        plan.deadline_ts = 9e18
+        await executor.kernel._run(plan)
+        assert order == ["search", "draw"], "副作用步骤必须排在安全步骤之后"
+        assert plan.state == "done"
+
+    @pytest.mark.asyncio
+    async def test_judge_prompt_carries_done_criteria(self, harness, monkeypatch):
+        """llm_judge 验收提示必须带完成判据（对准规划意图）。"""
+        seen = []
+
+        class _CapModel:
+            async def ainvoke(self, msgs, config=None):
+                seen.append(str(msgs[-1].content))
+                return AIMessage(content="可以")
+
+        import junjun_llm
+        monkeypatch.setattr(junjun_llm, "get_chat_model",
+                            lambda slot="utils": _CapModel())
+        plan = TaskPlan(goal="g", chat_id="qq:g7:group", steps=[
+            Step(id="s1", action=SYNTH_ACTION, desc="写报告", verify="llm_judge",
+                 done_criteria="含三个要点"),
+        ])
+        plan.deadline_ts = 9e18
+        await executor.kernel._run(plan)
+        assert any("完成判据" in p and "含三个要点" in p for p in seen), \
+            "验收提示没带完成判据"
+
+    @pytest.mark.asyncio
+    async def test_max_replans_defaults_to_three(self, harness, monkeypatch):
+        """Phase 1：max_replans 默认 1 -> 3（配置缺失时）。"""
+        monkeypatch.setattr(executor, "_cfg", lambda: {
+            "enable": True, "max_steps": 6, "deadline_minutes": 30,
+            "replan_backoff_seconds": 0})
+        _bind_tools(monkeypatch, [_StubTool(
+            "bad_tool", lambda a: (_ for _ in ()).throw(RuntimeError("不行")))])
+        import junjun_agent.task_kernel.planner as planner
+        revise_calls = {"n": 0}
+
+        async def fake_revise(plan, desc, err):
+            revise_calls["n"] += 1
+            return [Step(id=f"r{revise_calls['n']}", action="bad_tool",
+                         desc="换个法子还是败")]
+
+        monkeypatch.setattr(planner, "revise_remaining", fake_revise)
+        plan = TaskPlan(goal="g", chat_id="qq:g8:group",
+                        steps=[Step(id="s1", action="bad_tool", desc="必败步骤")])
+        plan.deadline_ts = 9e18
+        await executor.kernel._run(plan)
+        assert revise_calls["n"] == 3, "默认应重规划 3 次才认输"
         assert plan.state == "failed"
         oc = _outcomes("qq:g4:group")
         assert oc[-1]["status"] == "failed"
@@ -352,3 +429,56 @@ class TestTrySubmit:
         ack = await executor.kernel.try_submit("帮我调研写报告", chat_id="qq:g7:group")
         assert ack and isinstance(ack, str)
         await asyncio.sleep(0)  # 让 create_task 的收尾跑掉
+
+
+# ---------- 规划器（Phase 1：schema 摘要 / 判据落步骤 / 垃圾输出重试一次） ----------
+
+class TestPlannerBits:
+    def test_catalog_has_schema_digest(self, monkeypatch):
+        """工具清单必须带参数签名摘要——基线 3/10 失败死于规划器瞎猜参数名。"""
+        from pydantic import BaseModel
+        from junjun_agent.task_kernel import planner
+
+        class _BiliArgs(BaseModel):
+            url: str
+            hint: str = ""
+
+        tool = _StubTool("bilibili_summary", lambda a: "")
+        tool.args_schema = _BiliArgs
+        _bind_tools(monkeypatch, [tool])
+        catalog = planner._tool_catalog()
+        assert "bilibili_summary(url:str" in catalog
+        assert "hint:str?" in catalog, "可选参数要带 ? 标记"
+
+    @pytest.mark.asyncio
+    async def test_make_plan_retries_once_on_garbage(self, monkeypatch):
+        """首次产出非合法计划 -> 追加提醒重试一次（基线 2/10 失败死于单次 None）。"""
+        from junjun_agent.task_kernel import planner
+        outs = ["我觉得应该先搜一下再汇总……",
+                '{"steps": [{"id": "s1", "action": "web_search", "desc": "搜",'
+                ' "done_criteria": "拿到结果"}]}']
+
+        class _SeqModel:
+            async def ainvoke(self, msgs, config=None):
+                return AIMessage(content=outs.pop(0))
+
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "")])
+        plan = await planner.make_plan("调研", chat_id="c", user_id="u",
+                                       model=_SeqModel())
+        assert plan is not None, "第二次产出合法必须接单"
+        assert plan.steps[0].action == "web_search"
+        assert plan.steps[0].done_criteria == "拿到结果"
+
+    @pytest.mark.asyncio
+    async def test_make_plan_gives_up_after_two(self, monkeypatch):
+        from junjun_agent.task_kernel import planner
+        outs = ["不会", "还是不会"]
+
+        class _SeqModel:
+            async def ainvoke(self, msgs, config=None):
+                return AIMessage(content=outs.pop(0))
+
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "")])
+        plan = await planner.make_plan("调研", chat_id="c", user_id="u",
+                                       model=_SeqModel())
+        assert plan is None, "两次都废必须回退对话通道"

@@ -53,7 +53,8 @@ _EVAL_CFG = {
     "enable": True,
     "engine": "langgraph",
     "max_steps": 6,
-    "max_replans": 1,               # 现状基线：生产默认值（Phase 1 才调到 3）
+    "max_replans": 3,               # Phase 1 生产默认（基线存档是 1，见 harness_notes）
+    "replan_backoff_seconds": 0,    # 生产 5s 指数退避；评测等不起，桩失败也非瞬时故障
     "deadline_minutes": 10,
     "approval_timeout_seconds": 5,  # 生产 600s，评测等不起；timeout case 靠它快速跳过
 }

@@ -54,17 +54,23 @@ def _thread_cfg(plan_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 async def execute_node(state: KernelState) -> dict:
-    """跑一轮就绪步骤（并行）；human 门未批准的步骤跳过，留给 decide 路由去审批。"""
+    """跑一轮就绪步骤；human 门未批准的步骤跳过，留给 decide 路由去审批。
+    无副作用步骤并行，副作用/成品步骤串行殿后（SIDE_EFFECT_ACTIONS 硬校验）。"""
     from junjun_agent.task_kernel.executor import kernel
+    from junjun_agent.task_kernel.plan import SIDE_EFFECT_ACTIONS
     plan = TaskPlan.from_dict(state["plan"])
     if plan.deadline_ts and time.time() > plan.deadline_ts:
         plan.state, plan.note = "failed", "超过时限"
         return {"plan": plan.to_dict(), "phase": "decide"}
     ready = plan.ready_steps()
     auto = [s for s in ready if not (s.verify == "human" and not s.approved)]
-    if auto:
-        await asyncio.gather(*(kernel._run_step(plan, s) for s in auto),
+    safe = [s for s in auto if s.action not in SIDE_EFFECT_ACTIONS]
+    side = [s for s in auto if s.action in SIDE_EFFECT_ACTIONS]
+    if safe:
+        await asyncio.gather(*(kernel._run_step(plan, s) for s in safe),
                              return_exceptions=True)
+    for s in side:
+        await kernel._run_step(plan, s)
     return {"plan": plan.to_dict(), "phase": "decide"}
 
 
@@ -74,7 +80,7 @@ async def decide_node(state: KernelState) -> dict:
     if plan.state in ("done", "failed"):
         return {"plan": plan.to_dict(), "phase": "report"}
 
-    max_replans = int(_cfg().get("max_replans", 1))
+    max_replans = int(_cfg().get("max_replans", 3))  # Phase 1：1 -> 3 配指数退避
     failed = [s for s in plan.steps if s.status == "failed"]
     # 验证失败计数（audit 指标）：区别于工具/网络类失败；重试重置后 error 清空
     # 不会重复计，与 legacy 语义一致
@@ -111,12 +117,16 @@ async def decide_node(state: KernelState) -> dict:
 
 
 async def replan_node(state: KernelState) -> dict:
-    """局部重规划：只重写未执行的剩余步骤（planner.revise_remaining，thinker 槽）。"""
+    """局部重规划：只重写未执行的剩余步骤（planner.revise_remaining，thinker 槽）。
+    Phase 1：重规划前指数退避——瞬时故障（网络/限流）给恢复窗口，别急着改计划。"""
     from junjun_agent.task_kernel.planner import revise_remaining
     plan = TaskPlan.from_dict(state["plan"])
     sid = state.get("replan_for") or ""
     step = next((s for s in plan.steps if s.id == sid), None)
     plan.replans += 1
+    backoff_base = float(_cfg().get("replan_backoff_seconds", 5))
+    if backoff_base > 0:
+        await asyncio.sleep(min(60.0, backoff_base * 2 ** (plan.replans - 1)))
     logger.info(f"步骤 {sid} 连续失败，局部重规划（第 {plan.replans} 次）")
     new_steps = None
     try:
