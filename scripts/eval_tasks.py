@@ -235,6 +235,22 @@ def _judge_prompt(goal: str, artifact: str) -> str:
             f"基本可用（不强求丰富）；4-5 分 = 在此之上更周到。")
 
 
+async def _drain_kernel_tasks(timeout=150) -> None:
+    """把还在跑的内核后台任务等完——case 间隔离的命门。
+
+    计划执行是后台任务（task-kernel-lg-{plan_id}）。case 超时后僵尸计划继续
+    跑：它的工具调用落进下一条 case 的记录、它的 _report 被下一条的捕获器
+    捞走——「case 集体错拿上一条的计划」（2026-08-12 验收轮 v2 实锤，
+    research-deep 超时后 5 条 case 连环误判）。"""
+    mine = asyncio.current_task()
+    pending = [t for t in asyncio.all_tasks()
+               if t is not mine and not t.done()
+               and t.get_name().startswith("task-kernel-lg-")]
+    if pending:
+        await asyncio.wait_for(
+            asyncio.gather(*pending, return_exceptions=True), timeout=timeout)
+
+
 async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict) -> dict:
     exp = case.get("expect", {})
     chat_id = f"eval:{case['id']}:private"
@@ -242,11 +258,13 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
 
     # 捕获终态 plan（report 节点与图异常路径都经 kernel._report）。
     # 注意：try_submit 只派后台任务，_report 在后面才发生——补丁必须活到终态，
-    # 本函数结束才恢复（case 串行跑，无串扰）。
+    # 本函数结束才恢复。按本 case 的 chat_id 过滤：僵尸计划（上一条超时残留）
+    # 的汇报不许混进来（见 _drain_kernel_tasks 的事故记录）。
     orig_report = kernel._report
 
     async def _capture(plan):
-        completed[plan.plan_id] = plan
+        if plan.chat_id == chat_id:
+            completed[plan.plan_id] = plan
         await orig_report(plan)
 
     kernel._report = _capture
@@ -277,9 +295,11 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
             approval_task = asyncio.create_task(
                 _await_approval(runner, approval == "approve"))
 
-        # 等终态（审批 timeout 由看门狗 5s 自动跳过）
+        # 等终态（审批 timeout 由看门狗 5s 自动跳过）。600s：max_replans=3
+        # 时代理链 = 2 试 + 重规划（thinker 思考 30-90s）× 3 轮，300s 不够
+        # （2026-08-12 research-deep 超时实锤，还引发僵尸计划连环污染）。
         plan = None
-        deadline = time.time() + 300
+        deadline = time.time() + 600
         while time.time() < deadline:
             if completed:
                 plan = next(iter(completed.values()))
@@ -300,7 +320,7 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
                 if approval_err:
                     return {"id": case["id"], "pass": False, "reason": approval_err}
         if plan is None:
-            return {"id": case["id"], "pass": False, "reason": "TIMEOUT(300s) 未等到终态"}
+            return {"id": case["id"], "pass": False, "reason": "TIMEOUT(600s) 未等到终态"}
     finally:
         kernel._report = orig_report
 
@@ -347,10 +367,13 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
         if artifact:
             import junjun_llm
             from langchain_core.messages import HumanMessage
-            model = junjun_llm.get_chat_model("thinker")
+            # 评委用 utils（非思考）：思考型评委无视评分口径按教师心态压分
+            # （2026-08-12 两轮实锤：结构完整的报告/笔记连续 1-2 分误杀），
+            # 非思考模型照口径字面执行；评委成本也随之可忽略。
+            model = junjun_llm.get_chat_model("utils")
             resp = await model.ainvoke([HumanMessage(
                 content=_judge_prompt(plan.goal, artifact))])
-            usage.record("judge:thinker", resp)
+            usage.record("judge:utils", resp)
             digits = "".join(c for c in str(resp.content)[:3] if c.isdigit())
             judge_score = int(digits[:1]) if digits else 0
             if judge_score < 3:
@@ -449,6 +472,9 @@ async def _main(args) -> int:
         else:
             r = await _run_positive(executor.kernel, tk_graph.runner, usage,
                                     called, case)
+        # case 间隔离：等上一条的僵尸内核任务跑完再开下一条（工具记录和
+        # _report 捕获都是全局的，不排水必串扰——2026-08-12 v2 轮实锤）
+        await _drain_kernel_tasks()
         results.append(r)
         mark = "PASS" if r["pass"] else "FAIL"
         print(f"[{i}/{len(cases)}] {mark} {r['id']}"
