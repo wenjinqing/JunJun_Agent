@@ -208,12 +208,13 @@ async def _run_negative(kernel, case: dict) -> dict:
             "reason": f"闲聊被接单（路由+内核双层失守）: {ack[:40]}"}
 
 
-async def _await_approval(runner, decision: bool, timeout=240) -> str:
+async def _await_approval(runner, decision: bool, timeout=600) -> str:
     """轮询待审批队列并扮演管理员决议；超时返回错误串。
 
-    timeout 必须盖住审批前的慢思考链（搜索桩秒回，但 llm_synthesize 走
-    thinker 开思考 30-90s+，基线实测 90s 窗口在到达审批节点前就烧光，
-    误判 harness 超时——2026-08-12 approve-feed-pass 实锤）。"""
+    timeout 必须与计划等待同量级：审批前的链可能含多次重规划思考（每轮
+    30-90s+），窗口短了会在到达审批节点前烧光（90s 版 2026-08-12
+    approve-feed-pass 实锤、240s 版 chain-video-feed 实锤）；计划先到终态
+    时由 _run_positive 取消本任务，长窗口不白等。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         pend = list(runner.pending_approvals)
@@ -241,14 +242,26 @@ async def _drain_kernel_tasks(timeout=150) -> None:
     计划执行是后台任务（task-kernel-lg-{plan_id}）。case 超时后僵尸计划继续
     跑：它的工具调用落进下一条 case 的记录、它的 _report 被下一条的捕获器
     捞走——「case 集体错拿上一条的计划」（2026-08-12 验收轮 v2 实锤，
-    research-deep 超时后 5 条 case 连环误判）。"""
+    research-deep 超时后 5 条 case 连环误判）。
+    超时直接取消残余而不是等死：该 case 已按 TIMEOUT 记分，重规划长链
+    （max_replans=3 思考链）能合法超过 150s——v3 轮 drain 自己 TimeoutError
+    把整轮评测炸死在第 11 条（2026-08-12 实锤），排水永远不能弄沉船。"""
     mine = asyncio.current_task()
     pending = [t for t in asyncio.all_tasks()
                if t is not mine and not t.done()
                and t.get_name().startswith("task-kernel-lg-")]
-    if pending:
+    if not pending:
+        return
+    try:
         await asyncio.wait_for(
             asyncio.gather(*pending, return_exceptions=True), timeout=timeout)
+    except asyncio.TimeoutError:
+        left = [t for t in pending if not t.done()]
+        for t in left:
+            t.cancel()
+        if left:
+            await asyncio.gather(*left, return_exceptions=True)
+        print(f"  [drain] {len(left)} 个内核任务超时，已取消（该 case 已按超时记分）")
 
 
 async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict) -> dict:
@@ -395,6 +408,9 @@ async def _main(args) -> int:
     cases = [c for c in cases if c.get("enabled", True)]
     if args.only:
         cases = [c for c in cases if args.only in c["id"]]
+    if args.ids:
+        wanted = {s.strip() for s in args.ids.split(",") if s.strip()}
+        cases = [c for c in cases if c["id"] in wanted]
     if not cases:
         print("没有匹配的 case")
         return 1
@@ -537,6 +553,7 @@ def _show_latest() -> int:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="", help="只跑 id 包含该子串的 case")
+    ap.add_argument("--ids", default="", help="只跑指定 id（逗号分隔，精确匹配）")
     ap.add_argument("--report", action="store_true", help="只看最近一次报告")
     ap.add_argument("--baseline", action="store_true", help="跑完另存基线存档")
     args = ap.parse_args()
