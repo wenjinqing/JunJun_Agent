@@ -482,3 +482,17 @@ class TestPlannerBits:
         plan = await planner.make_plan("调研", chat_id="c", user_id="u",
                                        model=_SeqModel())
         assert plan is None, "两次都废必须回退对话通道"
+
+    def test_extract_json_bare_array_fallback(self):
+        """裸数组产出兜底成 {"steps": [...]}——revise 提示事故期的 GLM 自由发挥形态。"""
+        from junjun_agent.task_kernel import planner
+        payload = planner._extract_json('```json\n[{"id": "r1", "task": "x"}]\n```')
+        assert payload == {"steps": [{"id": "r1", "task": "x"}]}
+
+    def test_reviser_prompt_shows_full_format(self):
+        """重规划提示必须自带输出格式——「格式同前」是空引用（2026-08-12 实锤：
+        GLM 没看过规划器提示，自由发挥成裸数组+自造字段名，revise 全军覆没）。"""
+        from junjun_agent.task_kernel import planner
+        assert '"steps"' in planner._REVISER_PROMPT
+        assert '"action"' in planner._REVISER_PROMPT
+        assert 'depends_on' in planner._REVISER_PROMPT

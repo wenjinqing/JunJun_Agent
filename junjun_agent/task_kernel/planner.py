@@ -13,6 +13,7 @@ from junjun_agent.task_kernel.plan import TaskPlan, parse_plan
 logger = get_logger("task_kernel.planner")
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+_ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
 
 _PLANNER_PROMPT = """你是任务规划器。把用户的委托拆成可执行的步骤图，输出纯 JSON（不要任何其他文字）。
 
@@ -34,13 +35,30 @@ _PLANNER_PROMPT = """你是任务规划器。把用户的委托拆成可执行�
 
 
 def _extract_json(text: str) -> dict:
-    m = _JSON_RE.search(text or "")
-    if not m:
-        return {}
-    try:
-        return json.loads(m.group(0))
-    except Exception:
-        return {}
+    """规划器产出清洗：对象/数组两种形态都认，按起点谁早取谁。
+
+    2026-08-12 实锤：revise 提示只写「格式同前」没给格式，GLM 自由发挥产出
+    裸数组——对象正则会抓到数组【元素】当计划（没有 steps 键照旧全废），
+    所以对象缺 steps 时继续看数组兜底（parse_plan 仍清洗非法步骤，宽进严出）。
+    """
+    text = text or ""
+    candidates = []
+    for rx, kind in ((_JSON_RE, "obj"), (_ARRAY_RE, "arr")):
+        m = rx.search(text)
+        if m:
+            candidates.append((m.start(), kind, m.group(0)))
+    for _, kind, blob in sorted(candidates):
+        try:
+            payload = json.loads(blob)
+        except Exception:
+            continue
+        if kind == "obj":
+            if isinstance(payload, dict) and "steps" in payload:
+                return payload
+            continue  # 缺 steps 的对象：可能是裸数组的元素，让数组兜底
+        if isinstance(payload, list):
+            return {"steps": payload}
+    return {}
 
 
 def _schema_brief(t) -> str:
@@ -114,7 +132,7 @@ async def make_plan(goal: str, *, chat_id: str, user_id: str,
     return None
 
 
-_REVISER_PROMPT = """你是任务规划器。一个执行中的计划有步骤失败了，给出修正后的【剩余】步骤（纯 JSON）。
+_REVISER_PROMPT = """你是任务规划器。一个执行中的计划有步骤失败了，给出修正后的【剩余】步骤（纯 JSON，不要任何其他文字）。
 
 任务目标：{goal}
 失败的步骤：{failed_desc}
@@ -124,8 +142,13 @@ _REVISER_PROMPT = """你是任务规划器。一个执行中的计划有步骤�
 原计划中未执行的步骤：
 {pending_digest}
 
-输出修正后的剩余步骤图（格式同前，id 从 r1 开始重新编号，依赖只允许指向已完成步骤 id 或新步骤 id）。
-若能直接利用已完成产出收尾，可以只给一步 llm_synthesize。"""
+要求：
+1. id 从 r1 开始重新编号；depends_on 只允许指向已完成步骤 id 或更新的新步骤 id。
+2. action 从可用工具里选，或用 "llm_synthesize"；args_hint 严格按工具签名给参数。
+3. 若能直接利用已完成产出收尾，可以只给一步 llm_synthesize。
+
+输出格式（照这个写，别自造字段名）：
+{{"steps": [{{"id": "r1", "action": "工具名", "desc": "做什么", "args_hint": {{}}, "depends_on": [], "verify": "tool_ok", "done_criteria": "凭什么算完成"}}]}}"""
 
 
 async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
