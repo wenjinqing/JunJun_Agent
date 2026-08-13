@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
 from junjun_core import initialize_logging
-initialize_logging("INFO")
+initialize_logging("INFO", log_name="adapter")
 
 from junjun_adapter_napcat.main import main
 
