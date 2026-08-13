@@ -16,7 +16,9 @@ cwd = "${REPO_ROOT}"
 enable = true
 command = "cmd"
 args = ["/c", "npx", "-y", "tavily-mcp"]
-env = { TAVILY_API_KEY = "${TAVILY_API_KEY}", PYTHONIOENCODING = "utf-8" }
+# HTTPS_PROXY：tavily-mcp 内部用 axios（原生读 env 代理），本机直连 api.tavily.com
+# 被 GFW 概率性 RST（2026-08-13 半数 ECONNRESET 实锤），走代理稳定
+env = { TAVILY_API_KEY = "${TAVILY_API_KEY}", PYTHONIOENCODING = "utf-8", HTTPS_PROXY = "http://127.0.0.1:7890", HTTP_PROXY = "http://127.0.0.1:7890" }
 
 # ---------- 网页搜索（DuckDuckGo，免 key 兜底） ----------
 [servers.duckduckgo_search]
