@@ -312,8 +312,8 @@ async def _handle(session: ChatSession, meta: InboundMeta) -> None:
     from junjun_agent.router import route_to_task
     if route_to_task(meta.text, chat_id=session.chat_id):
         # 路由命中留 Langfuse span：accepted=false 的样本是阶段 4 误路由/规划失败抽检素材。
-        # reject_reason 区分三种回退：disabled（灰度开关关）/ planner_none（规划失败）/
-        # exception——混在一起可疑清单会被开关噪声淹没（2026-08-06 审查实锤）
+        # reject_reason：disabled（灰度开关关）/exception——2026-08-13 起规划改后台
+        # （先回接单话术），planner_none 不再同步发生，失败交代走 send_proactive。
         from junjun_core.observability import lf
         with lf.start_span(
             name=f"router.{session.chat_id}",

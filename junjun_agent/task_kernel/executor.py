@@ -156,20 +156,43 @@ class TaskKernel:
 
     async def try_submit(self, text: str, *, chat_id: str, user_id: str = "",
                          callbacks=None) -> Optional[str]:
-        """路由命中后的接单入口。返回接单话术（调用方直发）；规划失败返回
-        None——调用方回退对话通道，等于无事发生。"""
+        """路由命中后的接单入口。先回接单话术（0 等待——真人先应声再干活，
+        2026-08-13 审查 P1：旧顺序是先沉默规划 10-30s 再蹦接单，全程还堵着
+        会话串行队列），规划放后台；规划失败补一句诚实交代（话已说出，
+        回退对话通道等于装死）。仅灰度关闭时返回 None。"""
         if not enabled():
             return None
+        asyncio.create_task(
+            self._plan_and_run(text, chat_id=chat_id, user_id=user_id,
+                               callbacks=callbacks),
+            name=f"task-kernel-plan-{chat_id[-12:]}")
+        logger.info(f"[{chat_id}] 复杂任务先接单（后台规划）: {text[:40]}")
+        return random.choice(_ACK_TEMPLATES)
+
+    async def _plan_and_run(self, text: str, *, chat_id: str, user_id: str,
+                            callbacks) -> None:
+        """后台规划 + 起执行（try_submit 的下半段）。失败路径必须出声。"""
         from junjun_agent.task_kernel.planner import make_plan
         max_steps = int(_cfg().get("max_steps", 6))
+        plan = None
         try:
             plan = await make_plan(text, chat_id=chat_id, user_id=user_id,
                                    max_steps=max_steps, callbacks=callbacks)
         except Exception as e:
-            logger.warning(f"规划调用异常，回退对话通道: {type(e).__name__}: {e}")
-            return None
+            logger.warning(f"[{chat_id}] 后台规划调用异常: {type(e).__name__}: {e}")
         if plan is None:
-            return None
+            logger.info(f"[{chat_id}] 后台规划未接单（planner_none）: {text[:40]}")
+            try:
+                from junjun_agent.outbound import send_proactive
+                await send_proactive(
+                    chat_id,
+                    [ReplySegment(type="text",
+                                  data="我琢磨了一下，这个我好像拆不动——"
+                                       "能再具体说说要啥不？或者等我会儿再试。")],
+                    source="task_kernel", remember=False)
+            except Exception as e:
+                logger.warning(f"[{chat_id}] 规划失败交代发送失败: {e}")
+            return
         plan.state = "running"
         plan.deadline_ts = time.time() + float(_cfg().get("deadline_minutes", 30)) * 60
         self._plans[plan.plan_id] = plan
@@ -181,8 +204,8 @@ class TaskKernel:
                                 name=f"task-kernel-lg-{plan.plan_id}")
         else:
             asyncio.create_task(self._run(plan), name=f"task-kernel-{plan.plan_id}")
-        logger.info(f"[{chat_id}] 复杂任务接单（{len(plan.steps)} 步，{engine()} 引擎）: {text[:40]}")
-        return random.choice(_ACK_TEMPLATES)
+        logger.info(f"[{chat_id}] 复杂任务规划完成（{len(plan.steps)} 步，"
+                    f"{engine()} 引擎）: {text[:40]}")
 
     # ---------- 执行循环 ----------
 

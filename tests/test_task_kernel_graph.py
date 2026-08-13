@@ -402,6 +402,8 @@ class TestSubmitRouting:
         monkeypatch.setattr(runner, "submit", fake_submit)
         ack = await executor.kernel.try_submit("写个总结发我空间", chat_id="qq:g2:group")
         assert ack
+        # 接单前置后规划/派发各是一级 create_task，两拍才到 runner.submit
+        await asyncio.sleep(0)
         await asyncio.sleep(0)
         gated = captured["plan"].steps[1]
         assert gated.verify == "human", "发布类动作必须被强制人审"
@@ -427,3 +429,4 @@ class TestSubmitRouting:
         ack = await executor.kernel.try_submit("发个空间", chat_id="qq:g3:group")
         assert ack
         await asyncio.sleep(0)
+        await asyncio.sleep(0)  # 规划层 + 派发层各一拍

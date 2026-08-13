@@ -64,6 +64,7 @@ _EVAL_CFG = {
 }
 
 _planner_raw = []  # 最近一次规划器原始产出（补丁 _extract_json 录制，归因用）
+_sent = []         # _fake_send 捕获 (chat_id, text)——后台规划失败交代/负例兜底信号
 
 # 默认桩返回（case.stub 可按工具名覆盖；必须像真话，占位假数据会被模型识破
 # 并拒绝二次利用——2026-08-06 eval_golden 实锤的 sabotage 教训）。
@@ -201,25 +202,36 @@ def _split_case_stub(case: dict) -> tuple:
 async def _run_negative(kernel, case: dict) -> dict:
     """负例两层判定（与生产同路径）：
     1. route_to_task 判对话通道 -> 直接 PASS（0 token，绝大多数负例应死在这层）
-    2. 路由误伤放行 -> try_submit 必须返回 None（内核是第二道防线）。
+    2. 路由误伤放行 -> 2026-08-13 起 try_submit 先回话术、规划转后台——
+       第二道防线变为「后台规划拒收 + 诚实交代」：等终态信号，出现本 case
+       的计划=接单失守；捕获交代话术=拒收兜底成功。
     """
     from junjun_agent.router import route_to_task
-    if not route_to_task(case["input"], chat_id=f"eval:{case['id']}:private"):
+    chat_id = f"eval:{case['id']}:private"
+    if not route_to_task(case["input"], chat_id=chat_id):
         return {"id": case["id"], "pass": True}
     try:
         ack = await asyncio.wait_for(
-            kernel.try_submit(case["input"], chat_id=f"eval:{case['id']}:private"),
+            kernel.try_submit(case["input"], chat_id=chat_id),
             timeout=120)
     except asyncio.TimeoutError:
-        return {"id": case["id"], "pass": False, "reason": "TIMEOUT(120s) 规划调用"}
+        return {"id": case["id"], "pass": False, "reason": "TIMEOUT(120s) 接单调用"}
     except Exception as e:
         return {"id": case["id"], "pass": False,
                 "reason": f"ERROR {type(e).__name__}: {e}"}
     if ack is None:
-        return {"id": case["id"], "pass": True,
-                "reason": "（路由误伤放行，内核拒收兜底成功）"}
+        return {"id": case["id"], "pass": True, "reason": "（内核开关拒收）"}
+    deadline = time.time() + 150
+    while time.time() < deadline:
+        if any(p.chat_id == chat_id for p in kernel._plans.values()):
+            return {"id": case["id"], "pass": False,
+                    "reason": f"闲聊被接单（路由+内核双层失守）: {ack[:40]}"}
+        if any(c == chat_id and "拆不动" in t for c, t in _sent):
+            return {"id": case["id"], "pass": True,
+                    "reason": "（路由误伤放行，内核后台拒收+诚实交代兜底成功）"}
+        await asyncio.sleep(1.0)
     return {"id": case["id"], "pass": False,
-            "reason": f"闲聊被接单（路由+内核双层失守）: {ack[:40]}"}
+            "reason": "TIMEOUT(150s) 后台规划无终态信号（既未接单也未交代）"}
 
 
 async def _await_approval(runner, decision: bool, timeout=600) -> str:
@@ -263,7 +275,7 @@ async def _drain_kernel_tasks(timeout=150) -> None:
     mine = asyncio.current_task()
     pending = [t for t in asyncio.all_tasks()
                if t is not mine and not t.done()
-               and t.get_name().startswith("task-kernel-lg-")]
+               and t.get_name().startswith("task-kernel-")]  # lg-执行/plan-规划/legacy
     if not pending:
         return
     try:
@@ -331,6 +343,11 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
             if completed:
                 plan = next(iter(completed.values()))
                 break
+            # 后台规划拒收（planner None -> 诚实交代）：正例到此已败，快败不烧窗口
+            if any(c == chat_id and "拆不动" in t for c, t in _sent):
+                raw = (_planner_raw[0] if _planner_raw else "（无产出记录）")[:200]
+                return {"id": case["id"], "pass": False,
+                        "reason": f"规划返回 None（正例应接单），规划器原文: {raw}"}
             await asyncio.sleep(1.0)
         if approval_task is not None:
             if plan is not None and not approval_task.done():
@@ -490,6 +507,8 @@ async def _main(args) -> int:
     import junjun_agent.outbound as outbound
 
     async def _fake_send(chat_id_, segments, **kw):
+        text = getattr(segments[0], "data", "") if segments else ""
+        _sent.append((chat_id_, str(text)))
         return True
 
     outbound.send_proactive = _fake_send
@@ -501,6 +520,7 @@ async def _main(args) -> int:
     for i, case in enumerate(cases, 1):
         overrides, fail_counters = _split_case_stub(case)
         called.clear()
+        _sent.clear()
         stubs_holder["tools"] = _make_stub_tools(
             real_tools, called, overrides, fail_counters)
 

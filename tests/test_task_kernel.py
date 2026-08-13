@@ -403,14 +403,25 @@ class TestTrySubmit:
         assert await executor.kernel.try_submit("帮我调研写报告", chat_id="qq:x:group") is None
 
     @pytest.mark.asyncio
-    async def test_planner_failure_falls_back(self, harness, monkeypatch):
+    async def test_planner_failure_ack_then_honest_followup(self, harness, monkeypatch):
+        """新契约（2026-08-13 接单前置）：规划失败不再返回 None 回退对话通道——
+        接单话术已先回，后台规划落空必须补一句诚实交代（不许装死）。"""
         import junjun_agent.task_kernel.planner as planner
 
         async def none_plan(*a, **k):
             return None
 
         monkeypatch.setattr(planner, "make_plan", none_plan)
-        assert await executor.kernel.try_submit("帮我调研写报告", chat_id="qq:x:group") is None
+        ack = await executor.kernel.try_submit("帮我调研写报告", chat_id="qq:x:group")
+        assert ack  # 先应声
+        sent = harness["sent"]
+        for _ in range(50):  # 等后台规划任务跑完（桩即时返回，只是过几个事件循环）
+            if sent:
+                break
+            await asyncio.sleep(0.02)
+        assert sent and sent[0][0] == "qq:x:group"
+        assert "拆不动" in sent[0][1][0].data
+        assert not executor.kernel._plans  # 拒收不留计划
 
     @pytest.mark.asyncio
     async def test_accept_returns_ack(self, harness, monkeypatch):
