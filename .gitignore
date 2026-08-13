@@ -232,6 +232,9 @@ config/bot_config.toml.bak_*
 # 注意：pixiv_novel 已并入 pixiv 插件，不再独立存在
 junjun_skills/plugins/pixiv/config.toml
 
+# adapter 真实配置（本地 NapCat 连接参数；只提交 .example）
+junjun_adapter_napcat/config.toml
+
 # NapCat 看门狗（含本机路径/QQ号，本地专用）
 scripts/napcat_watchdog.py
 tests/test_napcat_watchdog.py

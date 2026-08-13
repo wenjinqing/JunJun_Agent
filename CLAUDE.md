@@ -13,7 +13,8 @@ QQ 是前端之一，不是全部）。
 - `.env`、`data/sf_keys.txt` 含活密钥：展示时只给前缀（sk-xxx...），PIXIV_COOKIE、
   Langfuse key 永不打印。
 - gitignored 不入库：`config/bot_config.toml`（只提交 `.example`）、`data/`、
-  各插件 `config.toml`、`config/bot_config.toml.bak_*`。
+  各插件 `config.toml`、`junjun_adapter_napcat/config.toml`（同只交 `.example`）、
+  `config/bot_config.toml.bak_*`。
 - `ADMIN_QQ` 是管理员信任根；R18 订阅标题群推送必须打码（URL 保留）。
 - **模型加字段必须带默认值或 `null=True`**：`init_database` 会自动
   `ALTER TABLE ADD COLUMN` 对齐旧库（`_ensure_columns`），SQLite 加列只支持
