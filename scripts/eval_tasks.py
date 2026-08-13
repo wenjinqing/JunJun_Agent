@@ -55,7 +55,10 @@ _EVAL_CFG = {
     "max_steps": 6,
     "max_replans": 3,               # Phase 1 生产默认（基线存档是 1，见 harness_notes）
     "replan_backoff_seconds": 0,    # 生产 5s 指数退避；评测等不起，桩失败也非瞬时故障
-    "deadline_minutes": 10,
+    "deadline_minutes": 6,          # 生产 30min；评测压到 6min——计划必须先于
+                                    # case 窗口（600s）到终态，留出汇报余量，
+                                    # 否则病态长链和 case 看门狗赛门（2026-08-12
+                                    # chain-video-feed 三连挂实锤）
     "approval_timeout_seconds": 5,  # 生产 600s，评测等不起；timeout case 靠它快速跳过
 }
 
@@ -81,6 +84,13 @@ _STUB_RETURNS = {
     "unified_tts": "语音已合成并发送。",
     "send_feed": "说说已发布。",
     "send_message": "消息已发送。",
+    # Phase 2 工具域：工作区/沙箱桩要像真产出（csv 有行列、跑码有输出和文件清单），
+    # 否则合成步骤拿不到素材、llm_judge 会正当判死
+    "workspace_read": "date,product,amount\n2026-08-01,键盘,1200\n2026-08-02,鼠标,560\n2026-08-03,键盘,980\n2026-08-04,显示器,2100\n2026-08-05,键盘,1130\n（共 24 行）",
+    "workspace_write": "已存到工作区：report.md（3560 字）。",
+    "workspace_list": "工作区文件：\nsales.csv（3.2KB）\nnotes.md（1.8KB）\nsummary.csv（2.1KB）",
+    "run_code": "执行完成（退出码 0，耗时 2.3s）。\n输出：\n汇总完成：24 行 3 列，总销售额 482,300 元，环比增长 12.4%；键盘类目占比最高（41%）。\n产生的文件（已存到工作区）：summary.csv（2.1KB）、trend.png（45.6KB）",
+    "fetch_page": "【示例文章标题】\n正文第一段：背景与起因。\n第二段：现状与数据。\n第三段：争议点。\n第四段：各方回应。\n第五段：后续展望。",
 }
 _DEFAULT_STUB_RETURN = "操作成功。"
 
@@ -328,12 +338,19 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
                     await approval_task
                 except asyncio.CancelledError:
                     pass
-            else:
-                approval_err = await approval_task
-                if approval_err:
-                    return {"id": case["id"], "pass": False, "reason": approval_err}
+                approval_task = None
         if plan is None:
-            return {"id": case["id"], "pass": False, "reason": "TIMEOUT(600s) 未等到终态"}
+            err = ""
+            if approval_task is not None:
+                err = await approval_task or ""
+            # kernel._plans 在 graph 引擎下不弹出（只有 legacy _run_inner 弹）——
+            # 超时现场快照直接读出卡点步骤（chain-video-feed 三连挂零日志实锤）
+            zombie = [
+                (p.plan_id, p.state,
+                 [(s.id, s.action, s.status, s.verify, s.approved) for s in p.steps])
+                for p in kernel._plans.values() if p.chat_id == chat_id]
+            return {"id": case["id"], "pass": False,
+                    "reason": f"TIMEOUT(600s) 未等到终态 {err} zombie={zombie}"}
     finally:
         kernel._report = orig_report
 

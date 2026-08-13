@@ -17,6 +17,7 @@ import asyncio
 import json
 import random
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -29,6 +30,17 @@ from junjun_agent.task_kernel.plan import (
 logger = get_logger("task_kernel.executor")
 
 _PERSIST_DIR: Optional[Path] = None   # 生产由 run_junjun 挂接；测试默认 None
+
+# 当前正在执行的步骤是否已过人审（verify=human 且管理员已放行）。
+# run_code 等高危工具的放行依据之一：非管理员任务经人审批准后，执行步骤时
+# 置 True，工具体据此放行——绕开工具自身权限门的合法路径只有这一条。
+_kernel_step_approved: ContextVar[bool] = ContextVar("jj_kernel_step_approved",
+                                                     default=False)
+
+
+def kernel_step_approved() -> bool:
+    """当前执行的步骤是否已过人审批准（高危插件工具查询用）。"""
+    return _kernel_step_approved.get()
 
 # 接单话术模板池（直发不经 echo guard——保持 8+ 防口头禅）
 _ACK_TEMPLATES = [
@@ -67,10 +79,18 @@ def _approval_actions() -> list:
 
 
 def _apply_approval_gates(plan: TaskPlan) -> None:
-    """LangGraph 引擎专属：发布类步骤强制 verify=human（执行前挂起等管理员）。"""
+    """LangGraph 引擎专属：发布类步骤强制 verify=human（执行前挂起等管理员）。
+
+    Phase 2：run_code 沙箱步骤对非管理员任务同样上人审门（群友要跑代码，
+    管理员「发/算了」裁决）；管理员自己的任务直跑——ADMIN_QQ 是信任根。
+    """
     gated = set(_approval_actions())
+    from junjun_core.security import is_admin
+    admin = is_admin(plan.user_id)
     for s in plan.steps:
-        if s.action in gated and s.verify != "human":
+        if s.verify == "human":
+            continue
+        if s.action in gated or (s.action == "run_code" and not admin):
             s.verify = "human"
 
 
@@ -273,6 +293,16 @@ class TaskKernel:
         from junjun_core.observability import lf
         step.status = "running"
         plan.attempts[step.id] = plan.attempts.get(step.id, 0) + 1
+        # 人审已批准的步骤置放行位（高危工具如 run_code 据此对非管理员放行）；
+        # 本步骤执行完即复位，不泄漏到后续步骤。
+        token = _kernel_step_approved.set(step.verify == "human" and step.approved)
+        try:
+            await self._run_step_inner(plan, step)
+        finally:
+            _kernel_step_approved.reset(token)
+
+    async def _run_step_inner(self, plan: TaskPlan, step: Step) -> None:
+        from junjun_core.observability import lf
         with lf.start_span(
             name=f"task_kernel_step.{step.action}",
             input={"desc": step.desc, "args_hint": step.args_hint},

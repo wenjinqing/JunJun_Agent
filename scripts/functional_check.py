@@ -129,6 +129,8 @@ LIVE_PROBES = [
     ("pixiv_search_novels", {"keyword": "原神"}, "P站小说搜索(在线)"),
     ("bilibili_summary", {"url": "https://www.bilibili.com/video/BV1GJ411x7h7"}, "B站视频摘要(在线)"),
     ("read_feed", {}, "读QQ空间(需NapCat在线)"),
+    ("workspace_list", {}, "工作区列表(只读)"),
+    ("fetch_page", {"url": "https://example.com"}, "网页深读(在线)"),
 ]
 
 # 明确不实调的原因（写进报告）
@@ -153,6 +155,9 @@ SKIP_REASONS = {
     "play_music": "发QQ消息", "pixiv_send_illust": "发QQ消息",
     "pixiv_download_novel": "发QQ消息",
     "subscribe_updates": "写库", "unsubscribe": "写库",
+    "run_code": "需沙箱服务+管理员门禁（pytest 已覆盖门禁/预检）",
+    "workspace_read": "需指定文件（pytest 已覆盖）",
+    "workspace_write": "写工作区文件（pytest 已覆盖）",
 }
 
 

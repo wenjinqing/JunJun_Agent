@@ -1,0 +1,8 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.workspace.tools",
+  "tools_attr": "TOOLS",
+  "available_for": [],
+  "admin_only": false
+}

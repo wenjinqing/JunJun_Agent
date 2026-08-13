@@ -442,3 +442,7 @@ complexity_routing = false  # 双腿路由（P2）：纯闲聊轮走 agent_light
 # echo_catchphrase_count = 3   # 口头禅检测：词组在 N 条不同发言里出现过即进黑名单
 # echo_catchphrase_k = 30      # 口头禅挖掘窗口（比整句撞车宽——口头禅是跨消息模式）
 
+
+# ---------- run_code 沙箱（TaskKernel Phase 2） ----------
+[sandbox]
+base_url = "http://127.0.0.1:8100"   # sandbox/server.py 的监听地址（仅本机）；服务没起时 run_code 返回不可用
