@@ -4,19 +4,20 @@
 # 运行方式由 sandbox/server.py 编排（docker run --rm -i ...，代码走 stdin）。
 # 容器自身不监听任何端口——无 ENTRYPOINT 服务，跑完即销毁。
 
-FROM python:3.12-slim
+# 版本钉死（2026-08-13 审查 P2）：基座按 digest 钉（标签可被重指漂移），
+# pip 包全量钉进 requirements.txt（含传递依赖，从验证过的镜像 freeze）。
+# apt 的 fonts-noto-cjk 随基座 digest 的 Debian 快照基本稳定，不另钉。
+FROM python:3.12.13-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
 
 # 中文字体（matplotlib/词云不写豆腐块）+ 白名单数据/文档包
 # （确认单 pandas/openpyxl/requests；2026-08-13 扩容：图表美化 seaborn、
 # 图片处理 pillow、Word 产出 python-docx、PDF 读 pdfplumber / 产 reportlab、
 # 中文分词+词云 jieba/wordcloud、二维码 qrcode——均纯 wheel，无编译）
+COPY requirements.txt /tmp/requirements.txt
 RUN apt-get update \
  && apt-get install -y --no-install-recommends fonts-noto-cjk \
  && rm -rf /var/lib/apt/lists/* \
- && pip install --no-cache-dir \
-    pandas openpyxl matplotlib seaborn requests \
-    pillow python-docx pdfplumber reportlab \
-    jieba wordcloud "qrcode[pil]"
+ && pip install --no-cache-dir -r /tmp/requirements.txt
 
 # 非 root 运行账号（uid 10001；Linux 宿主需保证 data/workspace 对该 uid 可写，
 # Docker Desktop/Windows 的 bind mount 无此问题）
