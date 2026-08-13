@@ -377,6 +377,41 @@ class TestWorkspaceSend:
         assert "拒绝" in r or "相对路径" in r
 
 
+class TestFilenameSanitize:
+    """2026-08-13 P2：Windows 保留名/非法字符消毒；消毒不得中和穿越守卫。"""
+
+    def test_reserved_names_prefixed(self, ws_root):
+        for raw in ("CON.txt", "aux", "com1.log", "LPT9.md"):
+            out = wt._resolve(raw)
+            assert out.name.startswith("_"), f"{raw} 保留名必须加前缀"
+            assert out.name.endswith(raw), "扩展名/主体保留"
+
+    def test_illegal_chars_replaced(self, ws_root):
+        out = wt._resolve('a<b>:"|?*.txt')
+        assert out.name == "a_b______.txt"
+        # 真实写入不炸（消毒前 Windows 上必炸或写成 ADS）
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("x", encoding="utf-8")
+        assert out.read_text(encoding="utf-8") == "x"
+
+    def test_trailing_dot_stripped(self, ws_root):
+        """Windows 静默吞尾点——round-trip 对不上，消毒时先去掉。"""
+        assert wt._resolve("name.").name == "name"
+
+    def test_traversal_still_rejected(self, ws_root):
+        """回归：消毒先行会把「..」洗成无害段名=放行穿越，必须消毒前显式拒。"""
+        with pytest.raises(ValueError):
+            wt._resolve("../secret.txt")
+        with pytest.raises(ValueError):
+            wt._resolve("sub/../../evil.txt")
+
+    def test_normal_names_untouched(self, ws_root):
+        """误判回归：中文名/普通名/子目录原样通过。"""
+        assert wt._resolve("报表 2026.md").name == "报表 2026.md"
+        out = wt._resolve("sub/数据分析结果.csv")
+        assert out.parent.name == "sub" and out.name == "数据分析结果.csv"
+
+
 class TestWorkspaceDelete:
     @pytest.mark.asyncio
     async def test_delete_roundtrip(self, ws_root):

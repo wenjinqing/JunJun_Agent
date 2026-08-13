@@ -61,13 +61,37 @@ def _session_dir(create: bool = False) -> Path:
     return d
 
 
+_WIN_ILLEGAL = re.compile(r'[<>:"|?*\x00-\x1f]')
+_WIN_RESERVED = ({"con", "prn", "aux", "nul"}
+                 | {f"com{i}" for i in range(1, 10)}
+                 | {f"lpt{i}" for i in range(1, 10)})
+
+
+def _sanitize_segment(seg: str) -> str:
+    """单段文件名消毒（2026-08-13 P2）：Windows 非法字符替换、保留设备名
+    （CON/PRN/AUX/NUL/COM1-9/LPT1-9，不分大小写、看扩展名前的词干）加前缀、
+    尾点/尾空格去掉（Windows 静默吞掉会致 round-trip 对不上）。
+    注意：「..」不在此处理——消毒先行会把它洗成无害段名，等于放行穿越；
+    穿越段在 _resolve 里消毒前显式拒绝。"""
+    seg = _WIN_ILLEGAL.sub("_", seg).rstrip(" .")
+    if seg.split(".", 1)[0].lower() in _WIN_RESERVED:
+        seg = "_" + seg
+    return seg or "_"
+
+
 def _resolve(user_path: str) -> Path:
     """用户相对路径 -> 工作区内绝对路径；越界（../、绝对路径）一律 ValueError。"""
     p = (user_path or "").strip().replace("\\", "/")
     if not p or p.startswith(("/", "~")) or (len(p) > 1 and p[1] == ":"):
         raise ValueError("路径必须是工作区内的相对路径（如 report.md 或 sub/a.csv）")
+    raw_parts = p.split("/")
+    if ".." in raw_parts:
+        raise ValueError("路径越出工作区，已拒绝")
+    parts = [_sanitize_segment(seg) for seg in raw_parts if seg not in ("", ".")]
+    if not parts:
+        raise ValueError("文件名消毒后为空，换个名字")
     base = _session_dir(create=False).resolve()
-    target = (base / p).resolve()
+    target = base.joinpath(*parts).resolve()
     if target != base and base not in target.parents:
         raise ValueError("路径越出工作区，已拒绝")
     return target
