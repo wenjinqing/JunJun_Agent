@@ -133,3 +133,28 @@ class TestThreeLayerSubset:
         o1 = [t.name for t in registry._canonical_order([a, b, c])]
         o2 = [t.name for t in registry._canonical_order([c, a, b])]
         assert o1 == o2 == ["get_time", "web_search", "ai_draw"]  # CORE 在前
+
+
+class TestPhase2ToolPinning:
+    """Phase 2 工具域的关键词钉住 + 误判回归（铁律：加宽命中面同 commit 配误判断言）。"""
+
+    def test_run_code_pinned_on_strong_words(self):
+        t = _named_tool("run_code")
+        for text in ("把今天聊天记录做成词云", "帮我算一下这个月的开销",
+                     "用工作区数据画个趋势图", "这个 csv 帮我统计一下"):
+            assert t in registry._pinned_by_keywords([t], text), text
+
+    def test_fetch_page_pinned_on_article_words(self):
+        t = _named_tool("fetch_page")
+        for text in ("看看这篇文章讲了啥", "这个网页里有写吗", "这个链接的内容帮我读一下"):
+            assert t in registry._pinned_by_keywords([t], text), text
+
+    def test_daily_sentences_no_misfire(self):
+        """误判回归：日常句子不许钉住 run_code/fetch_page——
+        「数据」「统计」「链接」单拎出来都太宽泛，刻意不收。"""
+        rc, fp = _named_tool("run_code"), _named_tool("fetch_page")
+        for text in ("今天群里讨论数据安全呢", "据统计局发布的消息",
+                     "这个数据说房价又涨了", "这个表情包链接发我看看",
+                     "我刚看了篇新闻", "今晚吃啥"):
+            pinned = registry._pinned_by_keywords([rc, fp], text)
+            assert pinned == [], text
