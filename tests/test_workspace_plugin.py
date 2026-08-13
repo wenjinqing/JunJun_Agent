@@ -311,6 +311,90 @@ class TestKernelApprovalGate:
         assert executor.kernel_step_approved() is False      # 执行完已复位
 
 
+# ---------------------------------------------------------------- workspace_send/delete
+
+class TestWorkspaceSend:
+    def _mkfile(self, ws_root, name="chart.png", size=100):
+        d = ws_root / "qq_111_private"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"x" * size)
+
+    @pytest.mark.asyncio
+    async def test_image_goes_outbound(self, ws_root, monkeypatch):
+        self._mkfile(ws_root, "chart.png")
+        sent = []
+
+        async def _fake_proactive(chat_id, segments, **kw):
+            sent.append((chat_id, segments))
+            return True
+
+        import junjun_agent.outbound as ob
+        monkeypatch.setattr(ob, "send_proactive", _fake_proactive)
+        r = await wt.workspace_send.ainvoke({"path": "chart.png"})
+        assert "已发到当前聊天" in r
+        assert sent and sent[0][1][0].type == "image"
+        assert sent[0][1][0].data.endswith("chart.png")
+
+    @pytest.mark.asyncio
+    async def test_docx_uploads_group_file(self, ws_root, monkeypatch):
+        """非图片走文件上传；会话种类决定群文件还是私聊文件。"""
+        self._mkfile(ws_root, "report.docx")
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        token = current_chat_id.set("qq:888:group")     # 切到群会话
+        calls = []
+
+        async def _fake_up(group_id, file_path, name=""):
+            calls.append((group_id, name))
+            return True
+
+        monkeypatch.setattr(wt, "_ROOT", ws_root)        # 会话目录随 chat_id 变
+        try:
+            (ws_root / "qq_888_group").mkdir(parents=True)
+            (ws_root / "qq_888_group" / "report.docx").write_bytes(b"doc")
+            from junjun_core import napcat_client
+            monkeypatch.setattr(napcat_client, "upload_group_file", _fake_up)
+            r = await wt.workspace_send.ainvoke({"path": "report.docx"})
+        finally:
+            current_chat_id.reset(token)
+        assert "群文件" in r
+        assert calls == [("888", "report.docx")]
+
+    @pytest.mark.asyncio
+    async def test_missing_file(self, ws_root):
+        r = await _call(wt.workspace_send, {"path": "ghost.png"})
+        assert "没有" in r
+
+    @pytest.mark.asyncio
+    async def test_too_big(self, ws_root, monkeypatch):
+        monkeypatch.setattr(wt, "_SEND_MAX_BYTES", 10)
+        self._mkfile(ws_root, "big.png", size=100)
+        r = await _call(wt.workspace_send, {"path": "big.png"})
+        assert "太大" in r
+
+    @pytest.mark.asyncio
+    async def test_traversal_blocked(self, ws_root):
+        r = await _call(wt.workspace_send, {"path": "../secret.png"})
+        assert "拒绝" in r or "相对路径" in r
+
+
+class TestWorkspaceDelete:
+    @pytest.mark.asyncio
+    async def test_delete_roundtrip(self, ws_root):
+        d = ws_root / "qq_111_private"
+        d.mkdir(parents=True)
+        (d / "tmp.txt").write_text("x", encoding="utf-8")
+        r = await wt.workspace_delete.ainvoke({"path": "tmp.txt"})
+        assert "已删除" in r
+        assert not (d / "tmp.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_missing_and_dir(self, ws_root):
+        assert "没有" in await _call(wt.workspace_delete, {"path": "ghost.txt"})
+        d = ws_root / "qq_111_private"
+        (d / "subdir").mkdir(parents=True)
+        assert "只能删文件" in await _call(wt.workspace_delete, {"path": "subdir"})
+
+
 # ---------------------------------------------------------------- fetch_page SSRF
 
 class TestFetchPageSsrf:
@@ -340,7 +424,8 @@ def test_manifest_and_tools():
     assert manifest["admin_only"] is False    # 门禁在 run_code 体内（框架门会误杀已批准步骤）
     names = [t.name for t in wt.TOOLS]
     assert names == ["run_code", "workspace_read", "workspace_write",
-                     "workspace_list", "fetch_page"]
+                     "workspace_list", "workspace_send", "workspace_delete",
+                     "fetch_page"]
     for t in wt.TOOLS:                        # docstring 铁律：≥15 字 + 何时使用
         doc = (t.description or "").strip()
         assert len(doc) >= 15 and "何时使用" in doc, t.name

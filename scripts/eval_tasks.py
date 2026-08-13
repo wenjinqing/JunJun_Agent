@@ -90,6 +90,8 @@ _STUB_RETURNS = {
     "workspace_read": "date,product,amount\n2026-08-01,键盘,1200\n2026-08-02,鼠标,560\n2026-08-03,键盘,980\n2026-08-04,显示器,2100\n2026-08-05,键盘,1130\n（共 24 行）",
     "workspace_write": "已存到工作区：report.md（3560 字）。",
     "workspace_list": "工作区文件：\nsales.csv（3.2KB）\nnotes.md（1.8KB）\nsummary.csv（2.1KB）",
+    "workspace_send": "图片 trend.png 已发到当前聊天。",
+    "workspace_delete": "已删除工作区文件：tmp.txt。",
     "run_code": "执行完成（退出码 0，耗时 2.3s）。\n输出：\n汇总完成：24 行 3 列，总销售额 482,300 元，环比增长 12.4%；键盘类目占比最高（41%）。\n产生的文件（已存到工作区）：summary.csv（2.1KB）、trend.png（45.6KB）",
     "fetch_page": "【示例文章标题】\n正文第一段：背景与起因。\n第二段：现状与数据。\n第三段：争议点。\n第四段：各方回应。\n第五段：后续展望。",
 }

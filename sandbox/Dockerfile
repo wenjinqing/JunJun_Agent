@@ -6,11 +6,17 @@
 
 FROM python:3.12-slim
 
-# 中文字体（matplotlib 画图不写豆腐块）+ 白名单数据科学包（确认单：pandas/openpyxl/requests + matplotlib 画图表）
+# 中文字体（matplotlib/词云不写豆腐块）+ 白名单数据/文档包
+# （确认单 pandas/openpyxl/requests；2026-08-13 扩容：图表美化 seaborn、
+# 图片处理 pillow、Word 产出 python-docx、PDF 读 pdfplumber / 产 reportlab、
+# 中文分词+词云 jieba/wordcloud、二维码 qrcode——均纯 wheel，无编译）
 RUN apt-get update \
  && apt-get install -y --no-install-recommends fonts-noto-cjk \
  && rm -rf /var/lib/apt/lists/* \
- && pip install --no-cache-dir pandas openpyxl matplotlib requests
+ && pip install --no-cache-dir \
+    pandas openpyxl matplotlib seaborn requests \
+    pillow python-docx pdfplumber reportlab \
+    jieba wordcloud "qrcode[pil]"
 
 # 非 root 运行账号（uid 10001；Linux 宿主需保证 data/workspace 对该 uid 可写，
 # Docker Desktop/Windows 的 bind mount 无此问题）

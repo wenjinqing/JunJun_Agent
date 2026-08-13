@@ -112,6 +112,8 @@ async def run(req: RunReq):
         "docker", "run", "--rm", "-i", "--name", name,
         "--network=none", "--read-only",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m",
+        # 只读根 fs 下 matplotlib 配置目录不可写会每次重建字体缓存并刷警告——指到 tmpfs
+        "-e", "MPLCONFIGDIR=/tmp/mpl",
         "--memory=2g", "--cpus=2", "--user", "sandbox",
         "-v", f"{wd.as_posix()}:/workspace", "-w", "/workspace",
         IMAGE,

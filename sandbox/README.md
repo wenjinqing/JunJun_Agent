@@ -41,6 +41,13 @@ base_url = "http://127.0.0.1:8100"   # 默认值，同机部署可不写
 Linux 宿主注意：`data/workspace` 需对容器内 uid 10001 可写
 （`chmod -R 777 data/workspace` 或 ACL 指定 10001）。Windows / Docker Desktop 无此问题。
 
+## 镜像内容
+
+python:3.12-slim + 中文字体（Noto CJK）+ 白名单包：pandas / numpy / openpyxl /
+matplotlib / seaborn / requests / pillow / python-docx / pdfplumber / reportlab /
+jieba / wordcloud / qrcode。matplotlib 默认已配中文字体；wordcloud 需显式传
+font_path="/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |

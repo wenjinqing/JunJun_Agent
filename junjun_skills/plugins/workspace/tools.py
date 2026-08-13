@@ -1,10 +1,12 @@
 """workspace 插件：TaskKernel Phase 2 通用工具域——沙箱跑代码 + 会话工作区 + 网页深读。
 
 LLM 工具：
-- run_code        在隔离沙箱里跑 Python（数据统计 / 文件处理 / matplotlib 画图）
+- run_code        在隔离沙箱里跑 Python（数据统计 / 文件处理 / 图表 / 文档产出）
 - workspace_read  读当前会话工作区里的文件
 - workspace_write 写文件到当前会话工作区
 - workspace_list  列出工作区文件
+- workspace_send  把工作区文件发到当前聊天（图片直发，其他传群文件/私聊文件）
+- workspace_delete 删除工作区文件
 - fetch_page      深读指定网址正文（区别于 web_search 的关键词检索）
 
 安全模型（真正的隔离在容器，工具侧只是门禁）：
@@ -34,6 +36,8 @@ _MAX_WRITE_CHARS = 256_000       # workspace_write 上限（约 256KB 文本）
 _READ_DEFAULT = 6000             # workspace_read 默认返回字符数
 _READ_MAX = 20_000
 _LIST_MAX = 200
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+_SEND_MAX_BYTES = 50 * 1024 * 1024   # workspace_send 上限
 _FETCH_MAX_CHARS = 8000          # fetch_page 返回截断（深读上下文预算）
 _FETCH_MAX_BYTES = 10 * 1024 * 1024
 _FETCH_SAVE_CHARS = 512_000      # save_as 落盘上限
@@ -133,9 +137,13 @@ def _sandbox_url() -> str:
 @tool
 async def run_code(code: str, timeout: int = 30) -> str:
     """在隔离沙箱里运行一段 Python 代码，返回输出和产生的文件列表。何时使用：需要做数据
-    计算/统计、处理工作区里的文件（csv/excel/文本）、用代码画数据图表存图时。沙箱预装
-    pandas/openpyxl/matplotlib/requests，无网络，单文件读写限定 /workspace（即当前会话
-    工作区），最长跑 30 秒。区别于 ai_draw（AI 画插画）：run_code 画的是数据图表。
+    计算/统计、处理工作区里的文件（csv/excel/文本）、用代码画数据图表存图、做 Word/PDF
+    文档、词云、二维码、图片处理时。沙箱预装 pandas/numpy/openpyxl/matplotlib/seaborn/
+    pillow/python-docx/pdfplumber/reportlab/jieba/wordcloud/qrcode/requests，无网络，
+    单文件读写限定 /workspace（即当前会话工作区），最长跑 30 秒。图表中文已自动适配
+    （matplotlib 默认 Noto Sans CJK SC）；wordcloud 要传 font_path=
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc" 才不出豆腐块。
+    区别于 ai_draw（AI 画插画）：run_code 画的是数据图表。
     非管理员使用需管理员事先批准（任务通道的人审步）。"""
     if not _run_code_permitted():
         return ("跑代码这事我得管理员点头才行——让管理员跟我说一声，"
@@ -232,6 +240,66 @@ async def workspace_list(subdir: str = "") -> str:
             entries.append(f"……（超过 {_LIST_MAX} 条，截断）")
             break
     return "工作区文件：\n" + "\n".join(entries) if entries else "工作区还是空的。"
+
+
+@tool
+async def workspace_send(path: str) -> str:
+    """把工作区里的文件发到当前聊天。何时使用：run_code 产出了图表/文档、或对方想要
+    工作区里已存的某个文件时。图片（png/jpg/gif/webp/bmp）以图片消息直接发出；
+    其他类型（docx/pdf/csv/txt/zip…）上传为群文件/私聊文件。区别于 send_message
+    （发文字消息）和 send_emoji（发表情包库里的贴纸）。"""
+    target = _resolve(path)
+    if not target.is_file():
+        raise ValueError(f"工作区里没有「{path}」这个文件；先调 workspace_list 看看")
+    size = target.stat().st_size
+    if size > _SEND_MAX_BYTES:
+        raise ValueError(f"文件太大（{_fmt_size(size)}，上限 50MB），发不出去")
+    kind, cid = _chat_target()
+    if not kind:
+        raise RuntimeError("拿不到当前会话，发送失败")
+    if target.suffix.lower() in _IMAGE_EXTS:
+        from junjun_agent.outbound import send_proactive
+        from junjun_core.contracts import ReplySegment
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        ok = await send_proactive(current_chat_id.get(""),
+                                  [ReplySegment(type="image", data=str(target))],
+                                  source="workspace", remember=False)
+        if not ok:
+            raise RuntimeError("图片发送失败（网关未送达）")
+        return f"图片 {path} 已发到当前聊天。"
+    from junjun_core import napcat_client
+    if kind == "group":
+        ok = await napcat_client.upload_group_file(cid, str(target), name=target.name)
+        if not ok:
+            raise RuntimeError("群文件上传失败（NapCat 未确认）")
+        return f"文件 {path}（{_fmt_size(size)}）已上传到群文件。"
+    ok = await napcat_client.upload_private_file(cid, str(target), name=target.name)
+    if not ok:
+        raise RuntimeError("私聊文件发送失败（NapCat 未确认）")
+    return f"文件 {path}（{_fmt_size(size)}）已发给对方。"
+
+
+@tool
+async def workspace_delete(path: str) -> str:
+    """删除工作区里的某个文件（只删文件，目录删不掉）。何时使用：对方明确要求删掉
+    某个已存文件、或清理过期产物腾地方时。"""
+    target = _resolve(path)
+    if not target.exists():
+        raise ValueError(f"工作区里没有「{path}」；先调 workspace_list 看看")
+    if not target.is_file():
+        raise ValueError("只能删文件；目录请先把里面的文件删完")
+    target.unlink()
+    logger.info(f"工作区删除: {target}")
+    return f"已删除工作区文件：{path}。"
+
+
+def _chat_target() -> tuple:
+    """当前会话 -> (kind, id)：kind=group/private；解析失败返回 (\"\", \"\")。"""
+    from junjun_skills.builtin.memory_skills import current_chat_id
+    parts = (current_chat_id.get("") or "").split(":")
+    if len(parts) == 3 and parts[2] in ("group", "private") and parts[1]:
+        return parts[2], parts[1]
+    return "", ""
 
 
 # ---------------------------------------------------------------- fetch_page 网页深读
@@ -331,4 +399,5 @@ def _html_to_text(raw: bytes) -> tuple:
     return title, "\n".join(lines)
 
 
-TOOLS = [run_code, workspace_read, workspace_write, workspace_list, fetch_page]
+TOOLS = [run_code, workspace_read, workspace_write, workspace_list, workspace_send,
+         workspace_delete, fetch_page]

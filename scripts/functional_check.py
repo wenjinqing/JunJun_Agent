@@ -158,6 +158,8 @@ SKIP_REASONS = {
     "run_code": "需沙箱服务+管理员门禁（pytest 已覆盖门禁/预检）",
     "workspace_read": "需指定文件（pytest 已覆盖）",
     "workspace_write": "写工作区文件（pytest 已覆盖）",
+    "workspace_send": "发 QQ 消息/上传文件（副作用）",
+    "workspace_delete": "删工作区文件（pytest 已覆盖）",
 }
 
 

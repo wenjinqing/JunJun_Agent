@@ -15,7 +15,8 @@ SYNTH_ACTION = "llm_synthesize"
 # 副作用/成品动作（Phase 1 硬校验）：同一轮就绪步骤里它们必须串行、
 # 排在无副作用步骤之后——并行画图/发布 = 双图事故那类代价（prompt 规则
 # 是软约束，代码侧这是硬约束，execute 两处都过它）。
-SIDE_EFFECT_ACTIONS = frozenset({"ai_draw", "unified_tts", "send_feed"})
+# workspace_send（Phase 2）：把工作区文件发到聊天，同属发布类。
+SIDE_EFFECT_ACTIONS = frozenset({"ai_draw", "unified_tts", "send_feed", "workspace_send"})
 
 _VERIFY_KINDS = ("tool_ok", "schema", "llm_judge", "human", "none")
 
