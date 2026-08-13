@@ -177,6 +177,11 @@ silent_hours = "02:00-06:00"  # 静默时段（不主动）
 enable_in_groups = false      # 群聊主动发言（风险高易烦人，默认关）
 enable_in_private = true      # 私聊主动发言
 
+# ---------- 主动出站总闸（订阅推送/提醒/任务汇报等所有 send_proactive） ----------
+[outbound]
+daily_global_budget = 300  # 全局每日主动消息上限（0=关闭）；超限丢弃+上报管理员
+daily_chat_budget = 60     # 单会话每日主动消息上限（0=关闭）
+
 # ---------- 提醒任务 ----------
 [reminder]
 check_interval_seconds = 60  # 到期提醒轮询间隔（秒）；重启自动恢复未到期提醒

@@ -49,14 +49,89 @@ def _remember(chat_id: str, text: str) -> None:
         pass
 
 
+# ---------------------------------------------------------------- 全局日出站预算
+# （2026-08-13 审查 P1）：主动搭话 loop 有自己的 per-chat 日限额
+# （max_daily_proactive），但订阅推送/提醒/任务汇报/深研成品全都直走
+# send_proactive，没有总闸——循环 bug 或订阅风暴就是无限刷屏。单点收口：
+# 全局日预算 + 单会话日预算（[outbound] daily_global_budget/daily_chat_budget，
+# 0=关闭对应维度），超限丢弃 + 当日首超私聊上报管理员（notify_admin 直走
+# 网关不经本模块，无递归）。重启清零：可接受的粒度，持久化得不偿失。
+_budget_day = ""
+_budget_total = 0
+_budget_per_chat: dict = {}
+_budget_alerted = False
+
+
+def _budget_cfg() -> Tuple[int, int]:
+    try:
+        from junjun_core.config import get_global_config
+        raw = get_global_config().raw.get("outbound", {})
+        return (int(raw.get("daily_global_budget", 300)),
+                int(raw.get("daily_chat_budget", 60)))
+    except Exception:
+        return 300, 60
+
+
+def _budget_reset_if_new_day() -> None:
+    global _budget_day, _budget_total, _budget_per_chat, _budget_alerted
+    import time as _time
+    today = _time.strftime("%Y-%m-%d")
+    if _budget_day != today:
+        _budget_day, _budget_total = today, 0
+        _budget_per_chat, _budget_alerted = {}, False
+
+
+def _budget_check(chat_id: str) -> bool:
+    """今日额度是否还够；够则记账。按尝试计（发送失败也计）——
+    失败重试风暴同样烧预算，正是要拦的对象。"""
+    global _budget_total
+    _budget_reset_if_new_day()
+    gb, cb = _budget_cfg()
+    if gb > 0 and _budget_total >= gb:
+        return False
+    if cb > 0 and _budget_per_chat.get(chat_id, 0) >= cb:
+        return False
+    _budget_total += 1
+    _budget_per_chat[chat_id] = _budget_per_chat.get(chat_id, 0) + 1
+    return True
+
+
+async def _budget_alert(chat_id: str, source: str) -> None:
+    """当日首超私聊上报管理员——预算被打爆本身就是「哪里循环了」的信号。"""
+    global _budget_alerted
+    if _budget_alerted:
+        return
+    _budget_alerted = True
+    try:
+        from junjun_core.security import notify_admin
+        await notify_admin(
+            f"主动消息日预算已超限（{source} -> {chat_id}），"
+            "今天的后续主动消息会被丢弃。如果不是在做批量推送，"
+            "可能是哪里循环了，查一下日志。")
+    except Exception:
+        pass
+
+
+def _reset_budget_for_test() -> None:
+    """仅供测试。"""
+    global _budget_day, _budget_total, _budget_per_chat, _budget_alerted
+    _budget_day, _budget_total = "", 0
+    _budget_per_chat, _budget_alerted = {}, False
+
+
 async def send_proactive(chat_id: str, segments: List[ReplySegment], *,
                          source: str = "proactive", remember: bool = True) -> bool:
     """主动推送到会话。返回是否送达。
 
     - 文本段过主管线同款清洗（clean_markdown：去 markdown/星号表演）
+    - 全局/单会话日预算闸（超限丢弃 + 当日首超上报管理员）
     - 发送成功且 remember=True 时回填记忆 + 落库（bot 记得自己说过什么）
     - 任何异常静默返回 False（直发绝不能炸主流程）
     """
+    if not _budget_check(chat_id):
+        logger.warning(f"[{chat_id}] 主动消息超出日预算被丢弃({source})")
+        await _budget_alert(chat_id, source)
+        return False
     cleaned: List[ReplySegment] = []
     for s in segments:
         if s.type == "text" and isinstance(s.data, str):
