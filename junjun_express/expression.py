@@ -1,9 +1,10 @@
 """表达学习：对齐原 express/expression_learner + expression_selector 语义。
 
 - learner: 定期从群聊消息提取他人表达方式（situation 语境 -> style 句式），
-  存 Expression 表，重复出现 count+1
-- selector: 回复前按当前语境选适配表达注入 prompt（学了要用）
-- learning_list 按会话配置强度；expression_groups 跨会话共享（简化：全局共享）
+  存 Expression 表，重复出现 count+1；入库过粗筛（指令式/网址/@全体不学）
+- selector: 回复前按当前语境选适配表达注入 prompt（学了要用）；
+  默认只本群学自用，share_across_chats=true 才群间共享（私聊来源永不进群）
+- learning_list 按会话配置强度
 """
 
 import json
@@ -26,6 +27,21 @@ _LEARN_PROMPT = """以下是 QQ 群聊片段。找出其中有特色的表达方
 
 _MIN_LEARN_BATCH = 15   # 累积消息数触发学习
 _MAX_INJECT = 3         # 注入 prompt 的表达数上限
+
+# 入库粗筛（2026-08-13 审查 P1）：学来的表达会原样注进 prompt——群友故意说
+# 「有特色」的指令式句子就是间接注入通道；网址/@全体学了再复述是观感事故。
+# 粗筛不追求完美，只挡明显有害的；误判代价（少学一条）远小于漏判（注入进prompt）。
+_BLOCK_PATTERNS = [
+    re.compile(r"忽略.*(指令|之前|上述)|系统提示|system\s*prompt|ignore\s+(previous|all)", re.I),
+    re.compile(r"https?://|www\.", re.I),
+    re.compile(r"@全体成员|@everyone", re.I),
+]
+
+
+def _passes_intake(situation: str, style: str) -> bool:
+    """入库粗筛：True=可入库。"""
+    text = f"{situation} {style}"
+    return not any(p.search(text) for p in _BLOCK_PATTERNS)
 
 
 class ExpressionLearner:
@@ -80,6 +96,9 @@ class ExpressionLearner:
             style = str(e.get("style", "")).strip()[:200]
             if not situation or not style:
                 continue
+            if not _passes_intake(situation, style):
+                logger.info(f"[{chat_id}] 表达粗筛拦截: {style[:30]}")
+                continue
             row = Expression.get_or_none(
                 (Expression.chat_id == chat_id) & (Expression.style == style))
             if row:
@@ -96,13 +115,24 @@ class ExpressionLearner:
 
 
 def select_expressions(chat_id: str, context: str, *, top_k: int = _MAX_INJECT) -> List[dict]:
-    """按语境关键词选适配表达（count 加权）。跨会话共享：本会话优先，全局补充。"""
+    """按语境关键词选适配表达（count 加权）。
+
+    跨群限制（2026-08-13 审查 P1）：默认只学自用——A 群的梗不在 B 群说
+    （隐私生命线，同 UserSceneProfile 的 source_scene 隔离）；私聊来源永不
+    进任何群。[expression] share_across_chats=true 时群与群之间才共享。
+    """
     from junjun_core.database import Expression
     rows = list(Expression.select().order_by(Expression.count.desc()).limit(100))
     if not rows:
         return []
     own = [r for r in rows if r.chat_id == chat_id]
-    others = [r for r in rows if r.chat_id != chat_id]
+    share = bool(get_global_config().raw.get("expression", {})
+                 .get("share_across_chats", False))
+    if share and chat_id.endswith(":group"):
+        others = [r for r in rows
+                  if r.chat_id != chat_id and r.chat_id.endswith(":group")]
+    else:
+        others = []
 
     def score(r):
         s = r.count

@@ -254,6 +254,8 @@ max_message_length = 50   # 参与复读的消息最大长度（长文不跟）
 [expression]
 # learning_list = [{ target = "" }]  # 学习范围：空=全会话学习；填 "qq:群号:group" 限定
 learning_list = []
+share_across_chats = false     # 群间共享学到的表达；默认 false 只本群学自用
+                               #（A 群的梗不在 B 群说；私聊来源永不进群）
 reflect = false                # 表达反思：定期（10-15 分钟随机）把新学表达发管理员求证
 reflect_operator_id = ""       # 管理员会话，格式 "qq:QQ号:private"，例 "qq:123456:private"；回「删除 N」即删
 
