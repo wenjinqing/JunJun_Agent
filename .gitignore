@@ -237,6 +237,12 @@ junjun_skills/plugins/pixiv/config.toml
 # adapter 真实配置（本地 NapCat 连接参数；只提交 .example）
 junjun_adapter_napcat/config.toml
 
+# vrchat_agent 真实配置（含 QQ 白名单；只提交 .example）
+junjun_skills/plugins/vrchat_agent/config.toml
+
+# docs/ 不入库（2026-08-13 用户拍板：含路线图的本地工作文档一律留本地，不入库不推送）
+docs/
+
 # NapCat 看门狗（含本机路径/QQ号，本地专用）
 scripts/napcat_watchdog.py
 tests/test_napcat_watchdog.py
@@ -244,12 +250,3 @@ data/napcat_watchdog.*
 
 # 本地交接包/迁移工作目录
 junjun_migration_*/
-
-# 项目文档选择性入库（2026-08-13 用户拍板）：只收使用/部署/验证类 enduring 文档；
-# 开发计划/调试/过程性文档继续本地（2026-08-05 决定不变）
-docs/*
-!docs/00_总目标.md
-!docs/使用指南.md
-!docs/部署手册_AlibabaCloudLinux3.md
-!docs/启动前检查清单_2026-08-05.md
-!docs/生产验证清单_2026-08-03.md

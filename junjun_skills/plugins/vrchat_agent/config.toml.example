@@ -1,0 +1,10 @@
+# vrchat_agent - 配置文件
+# 让君君通过 AnyaDance 虚拟设备驱动自主活动于 VRChat。提供挥手、点头、鞠躬、拍手、行走等语义动作工具供 LLM 调用。
+# 配置版本: 1.0.0
+
+[anya]
+
+
+[behavior]
+
+
