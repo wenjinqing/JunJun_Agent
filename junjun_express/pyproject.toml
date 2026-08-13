@@ -6,7 +6,10 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "httpx",
-    "junjun-core"
+    "junjun-core",
+    "junjun-llm",
+    "junjun-memory"
+    # 不声明 junjun-agent / junjun-skills：反向声明成环（agent->skills->express）
 ]
 
 [build-system]

@@ -6,7 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "langchain-openai",
     "langfuse",
-    "openai"
+    "openai",
+    "junjun-core"
 ]
 
 [build-system]

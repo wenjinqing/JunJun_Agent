@@ -5,7 +5,8 @@ description = "QQ 接入适配器：NapCat WS 协议"
 requires-python = ">=3.11"
 dependencies = [
     "maim-message",
-    "websockets"
+    "websockets",
+    "junjun-core"   # logger/config/database 均直接 import（logger.py 顶层导入，硬依赖）
 ]
 
 [build-system]

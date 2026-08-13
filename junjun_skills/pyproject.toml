@@ -11,7 +11,11 @@ dependencies = [
     "pydantic",
     "websockets",
     "Pillow",
-    "feedparser"
+    "feedparser",
+    "junjun-core",
+    "junjun-llm",
+    "junjun-memory"
+    # 不声明 junjun-agent / junjun-express：它们声明依赖本包，反向声明成环
 ]
 
 [build-system]

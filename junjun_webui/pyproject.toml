@@ -5,7 +5,10 @@ description = "WebUI"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi",
-    "uvicorn"
+    "uvicorn",
+    "junjun-core",
+    "junjun-express",
+    "junjun-skills"
 ]
 
 [build-system]

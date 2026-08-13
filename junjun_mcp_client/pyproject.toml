@@ -6,7 +6,9 @@ requires-python = ">=3.11"
 dependencies = [
     "mcp",
     "langchain-mcp-adapters",
-    "langchain-core"
+    "langchain-core",
+    "junjun-core",
+    "junjun-skills"
 ]
 
 [build-system]
