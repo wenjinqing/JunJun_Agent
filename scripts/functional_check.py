@@ -160,6 +160,7 @@ SKIP_REASONS = {
     "workspace_write": "写工作区文件（pytest 已覆盖）",
     "workspace_send": "发 QQ 消息/上传文件（副作用）",
     "workspace_delete": "删工作区文件（pytest 已覆盖）",
+    "workspace_save_file": "需聊天里真有入站文件（pytest 已覆盖）",
 }
 
 

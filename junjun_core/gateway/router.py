@@ -38,6 +38,7 @@ class InboundMeta:
     sticker_urls: list = None    # 消息中的表情包 URL（偷图用；OneBot sub_type=1 / mface）
     voice_records: list = None   # 消息中的语音引用（url/file id，ASR 转写用）
     video_urls: list = None      # 消息中的视频文件 URL（抽帧+抽音感知用）
+    file_refs: list = None       # 消息中的文件引用 [{name,size,url}]（存工作区用）
     has_emoji: bool = False      # 含 QQ 原生表情
 
 
@@ -148,8 +149,9 @@ class Gateway:
         sticker_urls = _extract_stickers(msg.message_segment)
         voice_records = _extract_voices(msg.message_segment)
         video_urls = _extract_videos(msg.message_segment)
-        if not text and not image_urls and not sticker_urls and not voice_records and not video_urls:
-            logger.debug("消息无文本/图片/语音/视频内容，跳过")
+        file_refs = _extract_files(msg.message_segment)
+        if not text and not image_urls and not sticker_urls and not voice_records and not video_urls and not file_refs:
+            logger.debug("消息无文本/图片/语音/视频/文件内容，跳过")
             return
 
         chat_id = f"{info.platform}:{group_id if group_info else user_id}:{'group' if group_info else 'private'}"
@@ -174,6 +176,7 @@ class Gateway:
             sticker_urls=sticker_urls,
             voice_records=voice_records,
             video_urls=video_urls,
+            file_refs=file_refs,
             has_emoji=_has_emoji(msg.message_segment),
         )
 
@@ -277,6 +280,24 @@ def _extract_videos(seg: Seg) -> list:
             refs.extend(_extract_videos(sub))
     elif seg.type == "video_file" and isinstance(seg.data, str) and seg.data:
         refs.append(seg.data)
+    return refs
+
+
+def _extract_files(seg: Seg) -> list:
+    """文件段结构化引用（适配器已解析 name/size/url 为 JSON），坏数据跳过不炸主链路。"""
+    import json as _json
+    refs = []
+    if seg.type == "seglist" and isinstance(seg.data, list):
+        for sub in seg.data:
+            refs.extend(_extract_files(sub))
+    elif seg.type == "file_ref" and isinstance(seg.data, str) and seg.data:
+        try:
+            d = _json.loads(seg.data)
+        except (ValueError, TypeError):
+            return refs
+        if isinstance(d, dict) and d.get("url"):
+            refs.append({"name": str(d.get("name") or "未命名文件"),
+                         "size": int(d.get("size") or 0), "url": str(d["url"])})
     return refs
 
 

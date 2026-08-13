@@ -28,3 +28,4 @@
 {"id": "neg-chitchat-food", "scene": "private", "input": "中午吃啥好呢", "note": "负例：自言自语式闲聊", "expect": {"submit_rejected": true}}
 {"id": "neg-question-simple", "scene": "private", "input": "1+1 等于几", "note": "负例：秒答问题", "expect": {"submit_rejected": true}}
 {"id": "neg-emoji-react", "scene": "private", "input": "哈哈哈笑死我了", "note": "负例：情绪反应", "expect": {"submit_rejected": true}}
+{"id": "file-inbound-process", "scene": "private", "input": "我刚发了个表格过来，帮我统计一下里面的销售额", "enabled": true, "expect": {"plan_done": true, "must_use": ["workspace_save_file|run_code"]}, "approval": "approve"}

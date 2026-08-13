@@ -425,7 +425,7 @@ def test_manifest_and_tools():
     names = [t.name for t in wt.TOOLS]
     assert names == ["run_code", "workspace_read", "workspace_write",
                      "workspace_list", "workspace_send", "workspace_delete",
-                     "fetch_page"]
+                     "workspace_save_file", "fetch_page"]
     for t in wt.TOOLS:                        # docstring 铁律：≥15 字 + 何时使用
         doc = (t.description or "").strip()
         assert len(doc) >= 15 and "何时使用" in doc, t.name

@@ -21,14 +21,20 @@ when: 需要真算数、处理文件、画数据图表、做词云/二维码/Wor
 | 图片处理（压缩/裁剪/水印） | run_code 用 pillow |
 | 深读某个网页全文 | fetch_page（区别于 web_search 只返回结果列表） |
 
-## 工作区六件
+## 工作区七件
 
 - workspace_list / workspace_read / workspace_write / workspace_delete：管文件
+- **workspace_save_file：把对方刚发来的文件收进工作区**——「看看这个表格/总结这个
+  PDF」的第一步永远是先存，只认最近 10 分钟内收到的。
 - **workspace_send：把文件发给对方**——图片直接发图，docx/pdf 这类上传成群文件
   （私聊发私聊文件）。**产出不发等于没做**：要图表/文档的需求，最后一步记得 send。
 - 工作区是跨天的：上次存的报告，下次「把那个报告改成表格」能读回来接着弄。
 
 ## 黄金链路（例）
+
+「这个表格帮我统计一下」（对方刚发来 xlsx/csv）：
+1. workspace_save_file 收进工作区 → 2. run_code（pandas 读 /workspace 里的文件算）
+→ 3. 要图表就存 png 再 workspace_send；只要数字就直接答。
 
 「把今天的聊天记录做成词云发出来」：
 1. query_chat_history 拿记录 → 2. workspace_write 存 txt

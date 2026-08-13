@@ -112,6 +112,17 @@ async def _plain_text_of(message, group_id: str = "") -> str:
     return "".join(parts).strip()
 
 
+def _fmt_size(n: int) -> str:
+    """文件大小人性化：1234567 -> 1.2MB。"""
+    if n <= 0:
+        return "大小未知"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.1f}{unit}" if unit != "B" else f"{n}B"
+        n /= 1024
+    return f"{n}B"
+
+
 class MessageHandler:
     def __init__(self):
         self.server_connection = None
@@ -257,9 +268,44 @@ class MessageHandler:
                 if ref:
                     segs.append(Seg(type="voice", data=ref))
             elif t == "file":
-                # 文件段：转占位文本
-                segs.append(Seg(type="text", data="[文件]"))
+                # 文件段：可读占位文本 + file_ref 结构化引用（name/size/url），
+                # 下游「最近的文件」工具凭 url 下载进工作区（文件入口闭环）。
+                name = str(d.get("name") or "未命名文件")
+                try:
+                    size = int(d.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                url = str(d.get("url") or "")
+                if not url:
+                    url = await self._resolve_file_url(d, group_id)
+                segs.append(Seg(type="text", data=f"[文件：{name}（{_fmt_size(size)}）]"))
+                if url:
+                    import json as _json
+                    segs.append(Seg(type="file_ref", data=_json.dumps(
+                        {"name": name, "size": size, "url": url}, ensure_ascii=False)))
         return segs, at_bot
+
+    async def _resolve_file_url(self, data: dict, group_id: str) -> str:
+        """群文件段常无 url（go-cqhttp 系只有 id/busid）：调 get_group_file_url 补。
+        私聊离线文件 NapCat 一般自带 url。任何失败返回空串——占位文本仍在，只是存不了。"""
+        file_id = str(data.get("id") or "")
+        if not (group_id and file_id):
+            return ""
+        params = {"group_id": int(group_id), "file_id": file_id}
+        busid = data.get("busid")
+        if busid is not None:
+            try:
+                params["busid"] = int(busid)
+            except (TypeError, ValueError):
+                pass
+        try:
+            from ..send_handler.nc_sending import nc_message_sender
+            resp = await nc_message_sender.send_message_to_napcat("get_group_file_url", params)
+            return str((resp.get("data") or {}).get("url") or "")
+        except Exception as e:
+            from ..logger import logger
+            logger.debug(f"get_group_file_url 失败: {e}")
+            return ""
 
     async def _expand_forward(self, data: dict, depth: int = 1) -> str:
         """展开合并转发消息为可读文本。失败降级占位，不阻塞主链路。"""

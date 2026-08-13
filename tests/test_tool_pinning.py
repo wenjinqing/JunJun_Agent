@@ -158,3 +158,18 @@ class TestPhase2ToolPinning:
                      "我刚看了篇新闻", "今晚吃啥"):
             pinned = registry._pinned_by_keywords([rc, fp], text)
             assert pinned == [], text
+
+    def test_save_file_pinned_on_received_file_words(self):
+        t = _named_tool("workspace_save_file")
+        for text in ("刚发的文件帮我看看", "这个文件能处理吗", "这个表格统计一下",
+                     "这个pdf讲了啥"):
+            assert t in registry._pinned_by_keywords([t], text), text
+
+    def test_save_file_no_misfire(self):
+        """误判回归：「文件/表格/pdf」不带指向词不钉——「发个文件给他」
+        「做个表格」「pdf 是什么」都不是收文件场景。"""
+        t = _named_tool("workspace_save_file")
+        for text in ("把这个结果做成表格发群里", "帮我整理一份文档",
+                     "pdf 和 word 有啥区别", "文件夹怎么整理比较好",
+                     "这是我今天的作业"):
+            assert registry._pinned_by_keywords([t], text) == [], text

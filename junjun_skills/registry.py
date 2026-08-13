@@ -574,6 +574,7 @@ _TOPIC_KEYWORDS = {
     # 不收——误判回归见 test_tool_pinning.py
     "run_code": ["跑代码", "词云", "趋势图", "算一下", "统计一下", "excel", "csv"],
     "fetch_page": ["这篇文章", "这个网页", "这篇帖子", "这个链接"],
+    "workspace_save_file": ["刚发的文件", "这个文件", "发来的文件", "这个表格", "这个pdf", "这个文档"],
 }
 
 

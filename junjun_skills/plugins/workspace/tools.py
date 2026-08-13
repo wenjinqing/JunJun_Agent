@@ -7,6 +7,7 @@ LLM 工具：
 - workspace_list  列出工作区文件
 - workspace_send  把工作区文件发到当前聊天（图片直发，其他传群文件/私聊文件）
 - workspace_delete 删除工作区文件
+- workspace_save_file 把聊天里刚收到的文件（表格/PDF/文本等）存进工作区
 - fetch_page      深读指定网址正文（区别于 web_search 的关键词检索）
 
 安全模型（真正的隔离在容器，工具侧只是门禁）：
@@ -293,6 +294,56 @@ async def workspace_delete(path: str) -> str:
     return f"已删除工作区文件：{path}。"
 
 
+@tool
+async def workspace_save_file(save_as: str = "") -> str:
+    """把当前聊天里最近收到的文件（别人刚发来的表格/PDF/文本/压缩包等）下载存进
+    工作区。何时使用：对方发来文件让你处理（「看看这个表格」「把这个 PDF 总结一下」）、
+    或任务需要用到刚收到的文件时——先存进来，再用 run_code 处理或 workspace_send 发回
+    结果。save_as 可改名（可带子目录），留空用原文件名。只认最近 10 分钟内收到的文件，
+    超过 50MB 存不下。区别于 workspace_write（写文本内容）和 fetch_page（抓网页）。"""
+    from junjun_skills.builtin.memory_skills import current_chat_id
+    from junjun_memory.recent_files import recent_file
+    ref = recent_file(current_chat_id.get("") or "")
+    if not ref:
+        return ("最近 10 分钟这个聊天里没收到过文件。让对方先把文件发出来，"
+                "发完跟我说一声我就能存。")
+    url = str(ref.get("url") or "")
+    if not url.startswith(("http://", "https://")):
+        raise RuntimeError("文件下载地址不合法（只认 http/https）")
+    name = (save_as or "").strip() or str(ref.get("name") or "未命名文件")
+    target = _resolve(name)
+    try:
+        data = await _download_capped(url, _SEND_MAX_BYTES)
+    except OverflowError:
+        raise RuntimeError(f"文件超过 50MB 上限，存不下（声明大小 "
+                           f"{_fmt_size(int(ref.get('size') or 0))}）")
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"文件下载失败: {type(e).__name__}（链接可能已过期，"
+                           f"让对方重发一次）") from e
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    logger.info(f"工作区存文件: {target} ({len(data)}B, 原名 {ref.get('name')})")
+    return (f"已把「{ref.get('name')}」存到工作区：{name}"
+            f"（{_fmt_size(len(data))}）。接下来可以用 run_code 处理它。")
+
+
+async def _download_capped(url: str, cap: int) -> bytes:
+    """流式下载，超 cap 立即中止抛 OverflowError（不读完，防拖死连接）。"""
+    chunks, total = [], 0
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            length = int(resp.headers.get("content-length") or 0)
+            if length > cap:
+                raise OverflowError(url)
+            async for chunk in resp.aiter_bytes(65536):
+                total += len(chunk)
+                if total > cap:
+                    raise OverflowError(url)
+                chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _chat_target() -> tuple:
     """当前会话 -> (kind, id)：kind=group/private；解析失败返回 (\"\", \"\")。"""
     from junjun_skills.builtin.memory_skills import current_chat_id
@@ -400,4 +451,4 @@ def _html_to_text(raw: bytes) -> tuple:
 
 
 TOOLS = [run_code, workspace_read, workspace_write, workspace_list, workspace_send,
-         workspace_delete, fetch_page]
+         workspace_delete, workspace_save_file, fetch_page]

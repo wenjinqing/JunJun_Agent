@@ -244,6 +244,16 @@ async def _pre_decision(session: ChatSession, meta: InboundMeta) -> None:
             prewarm_videos(meta.video_urls)
         except Exception:
             pass
+    # ---- 文件登记（同构，0 成本不下载只记引用）：发文件 -> 再 @君君「处理一下
+    # 刚发的表格」，workspace_save_file 凭登记取回下载地址。被屏蔽者到不了这里
+    #（拦截在 junjun_processor 前段），符合「不搭理=不登记」----
+    if not meta.is_self and getattr(meta, "file_refs", None):
+        try:
+            from junjun_memory.recent_files import note_recent_file
+            for ref in meta.file_refs:
+                note_recent_file(session.chat_id, ref)
+        except Exception:
+            pass
 
     return
 
