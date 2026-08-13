@@ -1,34 +1,15 @@
-"""Adapter 专用日志（轻量包装）。"""
+"""Adapter 日志：统一走 core 的 structlog 管线（2026-08-13 审查 P2）。
 
-import logging
-import sys
-from pathlib import Path
+此前本模块自带 stdlib logger + RotatingFileHandler 写 logs/adapter.log，
+而 run_adapter.py 的 initialize_logging(log_name="adapter") 又让 core tee
+写同一个文件——同进程双写者、两套轮转互踩（tee rename 时 stdlib handler
+还握着句柄，Windows 上 rename 炸但被 except 吞掉，表现为轮转静默失效）。
+旧 _Logger 门面的 error(m, **k) 还静默吞 exc_info。
 
-_logger = logging.getLogger("junjun_adapter")
-if not _logger.handlers:
-    h = logging.StreamHandler(sys.stdout)
-    h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
-    _logger.addHandler(h)
-    # 落盘轮转（2026-08-13 审查 P1：adapter 崩溃即丢事故现场）：与 core 的
-    # structlog tee 不同文件（adapter.log），单进程单文件无跨进程 rename 冲突
-    try:
-        from logging.handlers import RotatingFileHandler
-        log_dir = Path(__file__).resolve().parent.parent / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        fh = RotatingFileHandler(
-            log_dir / "adapter.log",
-            maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
-        _logger.addHandler(fh)
-    except Exception:
-        pass  # 落盘失败不挡启动
-    _logger.setLevel(logging.INFO)
-    _logger.propagate = False  # 防止根 logger 重复输出一遍
+现在只留接口皮：initialize_logging 由进程入口负责（run_adapter.py 已做），
+模块侧只取 logger。测试进程里没人初始化时 get_logger 自举默认 bot.log，无害。
+"""
 
-class _Logger:
-    def info(self, m): _logger.info(m)
-    def warning(self, m): _logger.warning(m)
-    def error(self, m, **k): _logger.error(m)
-    def debug(self, m): _logger.debug(m)
+from junjun_core.observability import get_logger
 
-logger = _Logger()
+logger = get_logger("junjun_adapter")
