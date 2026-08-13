@@ -202,6 +202,46 @@ def _any_provider_key() -> str:
     return _api_key() or _aiping_key()
 
 
+# ---- 用户日配额（2026-08-13 审查 P2）：画图烧 API 额度，此前零限额——
+# 群友刷图/模型失控重试都是纯成本。按派单尝试计（画失败也占额，宁保守）。
+# 内存计数重启清零：可接受的粒度（同 outbound 日预算），持久化得不偿失。
+_quota_day = ""
+_quota_used: dict = {}
+
+
+def _quota_refusal() -> str:
+    """超配额返回婉拒文案（模型照着回），否则记账返回 ""。
+    [ai_draw] daily_quota_per_user（默认 10，0=关）；管理员豁免。"""
+    from junjun_core.security import current_user_id, is_admin, is_admin_privileged
+    user_id = current_user_id.get("")
+    if not user_id:
+        return ""
+    try:
+        if is_admin_privileged() or is_admin(user_id):
+            return ""
+    except Exception:
+        pass
+    global _quota_day, _quota_used
+    try:
+        from junjun_core.config import get_global_config
+        limit = int(get_global_config().raw.get("ai_draw", {})
+                    .get("daily_quota_per_user", 10))
+    except Exception:
+        limit = 10
+    if limit <= 0:
+        return ""
+    import time as _time
+    today = _time.strftime("%Y-%m-%d")
+    if _quota_day != today:
+        _quota_day, _quota_used = today, {}
+    used = _quota_used.get(user_id, 0)
+    if used >= limit:
+        return (f"今天已经给 ta 画了 {used} 张，到每日上限（{limit} 张/人）了，"
+                "明天再来。照这个意思轻松婉拒，别派单。")
+    _quota_used[user_id] = used + 1
+    return ""
+
+
 def _headers() -> dict:
     return {
         "Authorization": f"Bearer {_api_key()}",
@@ -609,6 +649,9 @@ async def ai_draw(prompt: str, model: str = "") -> str:
     if chat_id in _PENDING:
         return "上一张还在画，画好会自动发到当前聊天，不要重复派单。" \
                "如果对方在催，告诉 ta 还在画；超过两三分钟还没收到再来找你。"
+    refusal = _quota_refusal()
+    if refusal:
+        return refusal
     fut = _begin_pending_draw(chat_id)
     return await task_manager.submit(
         kind="ai_draw",

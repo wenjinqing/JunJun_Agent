@@ -220,6 +220,7 @@ __marimo__/
 # ===== JunJun_Agent 项目专用 =====
 logs/
 data/
+data_local_fork_*/   # 本地数据副本（含 .env 备份/活密钥/生产库备份），2026-08-13 险些 git add -A 入库
 *.db
 *.db-shm
 *.db-wal

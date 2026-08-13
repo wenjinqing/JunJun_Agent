@@ -324,6 +324,96 @@ class TestTool:
         assert "MODELSCOPE_API_KEY" in out
 
 
+class TestUserQuota:
+    """2026-08-13 审查 P2：用户日配额——画图烧 API 额度，此前零限额，
+    群友刷图/模型失控重试都是纯成本。按派单尝试计（画失败也占额，宁保守）。"""
+
+    @pytest.fixture(autouse=True)
+    def _quota_state(self, _plugin, monkeypatch):
+        _plugin._quota_used.clear()
+        _plugin._quota_day = ""
+        monkeypatch.setenv("ADMIN_QQ", "99999")  # 测试用户 12345 恒为非管理员
+        yield
+        _plugin._quota_used.clear()
+        _plugin._quota_day = ""
+
+    @staticmethod
+    def _quota_cfg(monkeypatch, limit):
+        from junjun_core.config import get_global_config
+        monkeypatch.setitem(get_global_config().raw, "ai_draw",
+                            {"daily_quota_per_user": limit})
+
+    @staticmethod
+    async def _call(_plugin, user_id="12345", privileged=False):
+        from junjun_core.security import admin_privileged, current_user_id
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        t1 = current_user_id.set(user_id)
+        t2 = admin_privileged.set(privileged)
+        t3 = current_chat_id.set("qq:999:group")
+        try:
+            return await _plugin.ai_draw.ainvoke({"prompt": "星空"})
+        finally:
+            current_user_id.reset(t1)
+            admin_privileged.reset(t2)
+            current_chat_id.reset(t3)
+
+    @pytest.mark.asyncio
+    async def test_over_quota_refused_before_dispatch(self, _fake_gateway, _plugin, monkeypatch):
+        self._quota_cfg(monkeypatch, 2)
+        assert "在弄了" in await self._call(_plugin)
+        await _drain()
+        assert "在弄了" in await self._call(_plugin)
+        await _drain()
+        out = await self._call(_plugin)
+        assert "上限" in out and "在弄了" not in out   # 婉拒文案
+        await _drain()
+        assert len(_fake_gateway) == 2                 # 第三张根本没派单
+
+    @pytest.mark.asyncio
+    async def test_under_quota_dispatches(self, _fake_gateway, _plugin, monkeypatch):
+        """误判回归：配额内正常派单。"""
+        self._quota_cfg(monkeypatch, 10)
+        assert "在弄了" in await self._call(_plugin)
+        await _drain()
+        assert len(_fake_gateway) == 1
+
+    @pytest.mark.asyncio
+    async def test_admin_exempt(self, _fake_gateway, _plugin, monkeypatch):
+        self._quota_cfg(monkeypatch, 1)
+        assert "在弄了" in await self._call(_plugin, user_id="99999", privileged=True)
+        await _drain()
+        assert "在弄了" in await self._call(_plugin, user_id="99999", privileged=True)
+        await _drain()
+        assert len(_fake_gateway) == 2                 # 超限照样派
+
+    @pytest.mark.asyncio
+    async def test_new_day_resets(self, _fake_gateway, _plugin, monkeypatch):
+        self._quota_cfg(monkeypatch, 1)
+        assert "在弄了" in await self._call(_plugin)
+        await _drain()
+        _plugin._quota_day = "2000-01-01"              # 模拟跨天
+        assert "在弄了" in await self._call(_plugin)
+        await _drain()
+        assert len(_fake_gateway) == 2
+
+    @pytest.mark.asyncio
+    async def test_zero_limit_disables(self, _fake_gateway, _plugin, monkeypatch):
+        self._quota_cfg(monkeypatch, 0)
+        for _ in range(3):
+            assert "在弄了" in await self._call(_plugin)
+            await _drain()
+        assert len(_fake_gateway) == 3
+
+    @pytest.mark.asyncio
+    async def test_quota_isolated_per_user(self, _fake_gateway, _plugin, monkeypatch):
+        self._quota_cfg(monkeypatch, 1)
+        assert "在弄了" in await self._call(_plugin, user_id="12345")
+        await _drain()
+        assert "在弄了" in await self._call(_plugin, user_id="67890")  # 别人不受影响
+        await _drain()
+        assert "上限" in await self._call(_plugin, user_id="12345")    # 自己超限
+
+
 class TestQwenModel:
     """Qwen-Image-2512：写实/文字域自动路由 + 显式别名。"""
 
