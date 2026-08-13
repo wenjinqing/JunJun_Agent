@@ -328,6 +328,51 @@ class TestCircuitBreaker:
         assert out == "权限不足，只有管理员能用"  # 没被熔断拦截
 
 
+class TestWrapIdempotent:
+    """2026-08-13 审查 P1：clear() 后重注册不得叠罗汉。
+
+    包装层就地改原工具对象，重注册叠两层后的实害：内层记失败、外层看到
+    「正常返回」记成功——熔断永远攒不够连击，且测试结果依赖执行顺序。
+    """
+
+    def test_reregister_does_not_stack_wraps(self):
+        calls = []
+
+        @tool
+        def always_fail_re(x: str) -> str:
+            """重注册必挂工具。
+
+            Args:
+                x: 输入
+            """
+            calls.append(x)
+            raise ConnectionError("down")
+
+        registry.register(always_fail_re)
+        func_once = always_fail_re.func
+        assert (always_fail_re.metadata or {}).get("_wrap_errfb") is True
+        registry.clear()
+        registry.register(always_fail_re)      # 二刷：不得再包一层
+        assert always_fail_re.func is func_once, "重注册叠了第二层包装"
+
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        current_chat_id.set("qq:rebrk:group")
+        always_fail_re.invoke({"x": "1"})
+        always_fail_re.invoke({"x": "2"})
+        out3 = always_fail_re.invoke({"x": "3"})
+        assert out3.startswith("[TOOL_ERROR kind=熔断"), \
+            "叠罗汉时内层失败+外层成功相互抵消，熔断永远不会开"
+        assert len(calls) == 2
+
+    def test_relax_str_args_idempotent(self):
+        """宽松化二刷自动跳过：已宽松的 annotation 不再是裸 str。"""
+        registry.register(dummy_skill)
+        schema_once = dummy_skill.args_schema
+        registry.clear()
+        registry.register(dummy_skill)
+        assert dummy_skill.args_schema is schema_once
+
+
 class TestFallbackMapPrompt:
     """换乘地图进 system prompt（persona rules）。"""
 

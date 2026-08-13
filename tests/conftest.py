@@ -63,3 +63,21 @@ def _clean_skill_registry():
     yield
     from junjun_skills import registry
     registry.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tool_health_state(tmp_path, monkeypatch):
+    """工具健康度/熔断/失败日志是模块级全局态，不隔离就是跨测试顺序依赖
+    （2026-08-13 实锤：registry 包装幂等修正后真实记账生效，前文文件的失败
+    把熔断攒开，后文文件同 chat 同工具的调用收到「熔断拦截」文本噎死断言）。
+    顺手兜底硬约束：不打补丁的测试此前会真写生产 data/tool_health.json /
+    tool_failures.jsonl（2026-08-06 同类事故）。"""
+    from junjun_skills import breaker, health, patches
+    monkeypatch.setattr(health, "_STATE_PATH", tmp_path / "tool_health.json")
+    monkeypatch.setattr(patches, "_LOG_PATH", tmp_path / "tool_failures.jsonl")
+    monkeypatch.setattr(patches, "_STATE_PATH", tmp_path / "patches_state.json")
+    health._reset_for_test()
+    breaker._failures.clear()
+    yield
+    health._reset_for_test()
+    breaker._failures.clear()

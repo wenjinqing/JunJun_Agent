@@ -30,10 +30,18 @@ def register(skill: BaseTool, available_for: Optional[Callable] = None,
     """
     if skill.name in _registry:
         raise ValueError(f"skill 重名: {skill.name}")
+    # 包装幂等（2026-08-13 审查 P1）：宽松化/admin 门/错误反馈都是就地改原工具
+    # 对象，clear() 后重注册（测试常态）会在已包装对象上叠罗汉——健康度/熔断
+    # 双计数、wait_for 嵌套，测试结果依赖执行顺序。按层打标，包过的层不重包。
+    # （_relax_str_args 内部有同款守卫：pydantic 会把 BeforeValidator 收进
+    #  metadata、annotation 仍是裸 str，光看类型会误判成没宽松过。）
     _relax_str_args(skill)
-    if admin_only:
+    if admin_only and not _wrapped(skill, "admin"):
         skill = _wrap_admin_gate(skill)
-    skill = _wrap_error_feedback(skill)  # 最外层：逃逸异常 -> [TOOL_ERROR] 结构化文本
+        _stamp_wrap(skill, "admin")
+    if not _wrapped(skill, "errfb"):
+        skill = _wrap_error_feedback(skill)  # 最外层：逃逸异常 -> [TOOL_ERROR] 结构化文本
+        _stamp_wrap(skill, "errfb")
     _registry[skill.name] = skill
     _availability[skill.name] = available_for
     _skill_plugin[skill.name] = plugin
@@ -70,7 +78,11 @@ def _relax_str_args(skill: BaseTool) -> None:
     defs = {}
     relaxed = []
     for name, f in schema.model_fields.items():
-        if f.annotation is str:
+        # 幂等守卫（2026-08-13）：pydantic v2 会把 Annotated 的元数据收进
+        # f.metadata、f.annotation 仍是裸 str——光看 annotation 二刷会再包
+        # 一层 BeforeValidator（LaxLax 叠罗汉）。
+        already = any(getattr(m, "func", None) is _num_to_str for m in f.metadata)
+        if f.annotation is str and not already:
             # FieldInfo 直接当 default 传会丢 description（模型理解参数的命根子），显式重建
             new_field = Field(default=f.default, description=f.description,
                               json_schema_extra=f.json_schema_extra)
@@ -94,6 +106,17 @@ def _admin_refusal(tool_name: str, args: tuple, kwargs: dict) -> str:
                      current_nickname.get(),
                      current_chat_id.get(), detail)
     return "（权限不足：这个操作只有管理员能做，已通知管理员）"
+
+
+def _wrapped(skill: BaseTool, layer: str) -> bool:
+    """该层包装是否已打过（register 幂等标记，见 register 注释）。"""
+    return bool((getattr(skill, "metadata", None) or {}).get(f"_wrap_{layer}"))
+
+
+def _stamp_wrap(skill: BaseTool, layer: str) -> None:
+    md = dict(getattr(skill, "metadata", None) or {})
+    md[f"_wrap_{layer}"] = True
+    skill.metadata = md
 
 
 def _wrap_admin_gate(skill: BaseTool) -> BaseTool:
