@@ -5,6 +5,8 @@
     uv run python scripts/eval_tasks.py --only feed   # 只跑 id 含 feed 的 case
     uv run python scripts/eval_tasks.py --report      # 只看最近一次报告
     uv run python scripts/eval_tasks.py --baseline    # 跑完另存基线存档
+    uv run python scripts/eval_tasks.py --diff        # 不跑，只把最近报告与基线对比
+    uv run python scripts/eval_tasks.py --max-tokens 500000   # 成本帽（默认 80 万，0=关）
 
 设计（照 eval_golden.py 骨架，判定从「调了什么工具」升级为三层）：
 - 真实 planner/执行器（langgraph 引擎）+ 真实 LLM；工具执行体换记录桩——
@@ -262,6 +264,40 @@ def _judge_prompt(goal: str, artifact: str) -> str:
             f"基本可用（不强求丰富）；4-5 分 = 在此之上更周到。")
 
 
+_CANARY: dict = {}   # 评委金丝雀结果（本跑次缓存；ok/good_score/bad_score）
+
+
+async def _ensure_judge_canary(usage: _Usage) -> dict:
+    """评委金丝雀：拿「注定高分/注定低分」两个合成产物先校枪（审查 P2）。
+
+    评委漂了（换槽位模型/提示被带歪），所有 judge 分数都不可信——金丝雀
+    不过时分数只记录不判定（2026-08-12 思考型评委连续误杀的教训制度化）。
+    首次 judge 前跑一次缓存全程；成本 = 2 次 utils 调用，可忽略。"""
+    if _CANARY:
+        return _CANARY
+    import junjun_llm
+    from langchain_core.messages import HumanMessage
+    model = junjun_llm.get_chat_model("utils")
+    goal = "整理一份 AI 行业调研笔记"
+    good = ("# AI 行业调研笔记\n## 一、现状\n头部厂商相继发布新一代方案，"
+            "落地从试点转向规模部署。\n## 二、要点\n1. 技术多路径并行，主流方案"
+            "成熟度最高；2. 政策端持续加码。\n## 三、展望\n未来 1-2 年是商业化"
+            "关键窗口，建议关注成本曲线。")
+    bad = "不知道，没查到。"
+    scores = {}
+    for tag, artifact in (("good", good), ("bad", bad)):
+        resp = await model.ainvoke([HumanMessage(content=_judge_prompt(goal, artifact))])
+        usage.record("judge-canary:utils", resp)
+        digits = "".join(c for c in str(resp.content)[:3] if c.isdigit())
+        scores[tag] = int(digits[:1]) if digits else 0
+    ok = scores["good"] >= 4 and scores["bad"] <= 2
+    _CANARY.update(ok=ok, good_score=scores["good"], bad_score=scores["bad"])
+    if not ok:
+        print(f"  [金丝雀] 评委失准（好稿 {scores['good']} 分 / 烂稿 {scores['bad']} 分），"
+              "本轮 judge 分数只记录不判定")
+    return _CANARY
+
+
 async def _drain_kernel_tasks(timeout=150) -> None:
     """把还在跑的内核后台任务等完——case 间隔离的命门。
 
@@ -412,10 +448,12 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
 
     # 质量抽检（产物类 case 才跑，控制成本）
     judge_score = None
+    judge_suspect = False
     if exp.get("judge"):
         artifact = max((s.result for s in steps if s.status == "done" and s.result),
                        key=len, default="")
         if artifact:
+            canary = await _ensure_judge_canary(usage)
             import junjun_llm
             from langchain_core.messages import HumanMessage
             # 评委用 utils（非思考）：思考型评委无视评分口径按教师心态压分
@@ -428,12 +466,15 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
             digits = "".join(c for c in str(resp.content)[:3] if c.isdigit())
             judge_score = int(digits[:1]) if digits else 0
             if judge_score < 3:
-                fails.append(f"质量抽检 {judge_score} 分（<3）: {artifact[:60]}")
+                if canary.get("ok"):
+                    fails.append(f"质量抽检 {judge_score} 分（<3）: {artifact[:60]}")
+                else:
+                    judge_suspect = True   # 评委失准：分数留痕但不判死
 
     return {"id": case["id"], "pass": not fails,
             "reason": "；".join(fails), "routed": routed,
             "state": plan.state, "steps": len(steps), "replans": plan.replans,
-            "tools": called_names, "judge": judge_score,
+            "tools": called_names, "judge": judge_score, "judge_suspect": judge_suspect,
             # error 落报告：失败归因（参数瞎猜/验证不过/工具错）不靠猜
             "step_detail": [{"id": s.id, "action": s.action, "status": s.status,
                              "error": s.error[:100]} for s in steps]}
@@ -517,7 +558,16 @@ async def _main(args) -> int:
 
     results = []
     t0 = time.time()
+    cost_capped = False
     for i, case in enumerate(cases, 1):
+        # 成本帽（审查 P2）：case 间检查——重规划链单 case 可能烧几十万 token，
+        # 失控跑全量就是纯烧钱。帽触发不判未跑的 case（不是它们失败）。
+        tot = usage.totals()
+        if args.max_tokens and (tot["input"] + tot["output"]) >= args.max_tokens:
+            print(f"[成本帽] 已烧 {tot['input'] + tot['output']} tokens ≥ 上限 "
+                  f"{args.max_tokens}，剩余 {len(cases) - i + 1} 条不再跑")
+            cost_capped = True
+            break
         overrides, fail_counters = _split_case_stub(case)
         called.clear()
         _sent.clear()
@@ -536,27 +586,34 @@ async def _main(args) -> int:
         mark = "PASS" if r["pass"] else "FAIL"
         print(f"[{i}/{len(cases)}] {mark} {r['id']}"
               + ("" if r["pass"] else f"  -- {r['reason']}"))
-        _write_report(results, t0, usage)
+        _write_report(results, t0, usage, cost_capped=cost_capped)
 
     passed = sum(1 for r in results if r["pass"])
     steps_list = [r["steps"] for r in results if r.get("steps")]
     routed_hits = sum(1 for r in results if r.get("routed"))
     routed_base = sum(1 for r in results if "routed" in r)
-    print(f"\n==== {passed}/{len(results)} 通过，耗时 {time.time()-t0:.0f}s ====")
+    print(f"\n==== {passed}/{len(results)} 通过"
+          + (f"（成本帽截断，{len(cases) - len(results)} 条未跑）" if cost_capped else "")
+          + f"，耗时 {time.time()-t0:.0f}s ====")
     if steps_list:
         print(f"指标：成功率 {passed}/{len(results)}"
               f" | 平均步数 {sum(steps_list)/len(steps_list):.1f}"
               f" | 路由覆盖率 {routed_hits}/{routed_base}")
     print(f"token：{usage.totals()}")
-    print(f"报告: {_write_report(results, t0, usage)}")
+    print(f"报告: {_write_report(results, t0, usage, cost_capped=cost_capped)}")
+    tot = usage.totals()
+    _diff_baseline(results, tot["input"] + tot["output"])
     if args.baseline:
         src = REPORT_DIR / "eval_tasks_report_latest.json"
         BASELINE_FILE.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         print(f"基线存档: {BASELINE_FILE}")
+    if cost_capped:
+        return 2   # 跑不完不是全绿
     return 0 if passed == len(results) else 1
 
 
-def _write_report(results: list, t0: float, usage: _Usage) -> Path:
+def _write_report(results: list, t0: float, usage: _Usage, *,
+                  cost_capped: bool = False) -> Path:
     REPORT_DIR.mkdir(exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(t0))
     path = REPORT_DIR / f"eval_tasks_report_{ts}.json"
@@ -566,6 +623,7 @@ def _write_report(results: list, t0: float, usage: _Usage) -> Path:
     routed_base = sum(1 for r in results if "routed" in r)
     path.write_text(json.dumps({
         "ts": ts, "passed": passed, "total": len(results),
+        "cost_capped": cost_capped, "judge_canary": dict(_CANARY),
         "success_rate": passed / len(results) if results else 0,
         "avg_steps": (sum(steps_list) / len(steps_list)) if steps_list else 0,
         "router_coverage": {"routed": routed_hits, "total": routed_base},
@@ -575,6 +633,48 @@ def _write_report(results: list, t0: float, usage: _Usage) -> Path:
     (REPORT_DIR / "eval_tasks_report_latest.json").write_text(
         path.read_text(encoding="utf-8"), encoding="utf-8")
     return path
+
+
+def _diff_baseline(results: list, cur_tokens: int = 0) -> None:
+    """跑完自动对比基线存档（审查 P2）：状态翻转逐条列出——PASS->FAIL 是回归，
+    FAIL->PASS 是改善；基线没有的新 case 单列。没有基线存档就静默（首次跑）。"""
+    if not BASELINE_FILE.exists():
+        return
+    try:
+        base = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    bmap = {r["id"]: r for r in base.get("results", [])}
+    regressions = [r for r in results if bmap.get(r["id"], {}).get("pass") and not r["pass"]]
+    improvements = [r for r in results
+                    if r["id"] in bmap and not bmap[r["id"]]["pass"] and r["pass"]]
+    new_cases = [r["id"] for r in results if r["id"] not in bmap]
+    print(f"\n---- 基线对比（{base.get('ts', '?')} 存档"
+          f" {base.get('passed', '?')}/{base.get('total', '?')}）----")
+    if not regressions and not improvements and not new_cases:
+        print("无状态翻转")
+    for r in regressions:
+        print(f"  回归 {r['id']}  -- {r.get('reason', '')[:80]}")
+    for r in improvements:
+        print(f"  改善 {r['id']}")
+    if new_cases:
+        print(f"  新增 case（基线没有）: {new_cases}")
+    bt = base.get("tokens") or {}
+    if bt and cur_tokens:
+        print(f"  token：基线 {bt.get('input', 0) + bt.get('output', 0)}"
+              f" -> 本轮 {cur_tokens}（配置不同则不可直接比）")
+
+
+def _diff_latest() -> int:
+    """不跑评测，只把最近一次报告与基线对比。"""
+    p = REPORT_DIR / "eval_tasks_report_latest.json"
+    if not p.exists():
+        print("还没有任务评测报告")
+        return 1
+    rep = json.loads(p.read_text(encoding="utf-8"))
+    tok = rep.get("tokens") or {}
+    _diff_baseline(rep.get("results", []), tok.get("input", 0) + tok.get("output", 0))
+    return 0
 
 
 def _show_latest() -> int:
@@ -597,7 +697,12 @@ if __name__ == "__main__":
     ap.add_argument("--ids", default="", help="只跑指定 id（逗号分隔，精确匹配）")
     ap.add_argument("--report", action="store_true", help="只看最近一次报告")
     ap.add_argument("--baseline", action="store_true", help="跑完另存基线存档")
+    ap.add_argument("--diff", action="store_true", help="不跑评测，只把最近报告与基线对比")
+    ap.add_argument("--max-tokens", type=int, default=800_000,
+                    help="成本帽：烧超即停（默认 80 万 token，0=关闭）")
     args = ap.parse_args()
     if args.report:
         sys.exit(_show_latest())
+    if args.diff:
+        sys.exit(_diff_latest())
     sys.exit(asyncio.run(_main(args)))
