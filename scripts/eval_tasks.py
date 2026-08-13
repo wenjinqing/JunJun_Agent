@@ -60,6 +60,7 @@ _EVAL_CFG = {
                                     # 否则病态长链和 case 看门狗赛门（2026-08-12
                                     # chain-video-feed 三连挂实锤）
     "approval_timeout_seconds": 5,  # 生产 600s，评测等不起；timeout case 靠它快速跳过
+    "step_timeout_seconds": 120,    # 生产默认 300s；评测窗 600s 要容得下 超时->重试->重规划
 }
 
 _planner_raw = []  # 最近一次规划器原始产出（补丁 _extract_json 录制，归因用）

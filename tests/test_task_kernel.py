@@ -548,3 +548,24 @@ class TestPlannerBits:
         是逼工具返回它生产不了的东西（2026-08-12 watch_video 观后感判据必死实锤）。"""
         from junjun_agent.task_kernel import planner
         assert "给工具步骤配 llm_judge" in planner._PLANNER_PROMPT
+
+
+class TestStepTimeout:
+    """步骤级超时（Phase 2）：挂死的 LLM/工具调用按失败处理，retry/replan 接管。"""
+
+    @pytest.mark.asyncio
+    async def test_hung_step_fails_fast(self, monkeypatch):
+        from junjun_agent.task_kernel import executor
+        monkeypatch.setattr(executor, "_cfg", lambda: {"step_timeout_seconds": 0.05})
+        plan = TaskPlan(goal="g", chat_id="c",
+                        steps=[Step(id="s1", action="web_search", desc="x")])
+
+        async def _hang(self, plan, step):
+            import asyncio
+            await asyncio.sleep(10)
+
+        monkeypatch.setattr(executor.TaskKernel, "_run_step_inner", _hang)
+        await executor.kernel._run_step(plan, plan.steps[0])
+        assert plan.steps[0].status == "failed"
+        assert "超时" in plan.steps[0].error
+        assert executor.kernel_step_approved() is False  # 放行位没被超时路径泄漏

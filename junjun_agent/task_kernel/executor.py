@@ -297,7 +297,16 @@ class TaskKernel:
         # 本步骤执行完即复位，不泄漏到后续步骤。
         token = _kernel_step_approved.set(step.verify == "human" and step.approved)
         try:
-            await self._run_step_inner(plan, step)
+            # 步骤级超时（Phase 2）：节点只在入口查计划死线，一个挂死的 LLM 调用
+            # （限流重试风暴）能把图永远卡在 execute 里——计划死线够不着进行中的
+            # await（2026-08-13 file-chart 评测 600s 僵尸实锤）。超时按普通失败
+            # 处理，retry/replan 机器自然接管。
+            timeout = float(_cfg().get("step_timeout_seconds", 300))
+            await asyncio.wait_for(self._run_step_inner(plan, step), timeout=timeout)
+        except TimeoutError:
+            step.status = "failed"
+            step.error = f"步骤执行超时（{timeout:.0f}s 无响应）"
+            logger.info(f"步骤 {step.id} 超时按失败处理: {step.desc[:40]}")
         finally:
             _kernel_step_approved.reset(token)
 
