@@ -173,3 +173,33 @@ class TestPhase2ToolPinning:
                      "pdf 和 word 有啥区别", "文件夹怎么整理比较好",
                      "这是我今天的作业"):
             assert registry._pinned_by_keywords([t], text) == [], text
+
+
+class TestCodeLabPinning20260814:
+    """2026-08-14（trace ede13923）：任务全文零命中导致 run_code 被裁——
+    「沙箱/图表」入钉词，意图组整组挂载 workspace 六件。"""
+
+    def test_run_code_pinned_on_sandbox_chart_words(self):
+        t = _named_tool("run_code")
+        for text in ("在沙箱里帮我跑一下", "画个图表看看分布"):
+            assert t in registry._pinned_by_keywords([t], text), text
+
+    def test_run_code_new_words_no_misfire(self):
+        """误判回归：「沙盒游戏」与日常句不钉。"""
+        t = _named_tool("run_code")
+        for text in ("这个沙盒游戏真好玩", "今晚吃啥", "我刚看了篇新闻"):
+            assert t not in registry._pinned_by_keywords([t], text), text
+
+    def test_intent_mounts_workspace_group(self):
+        """意图层：沙箱/数据分析诉求整组挂载（只给 run_code 会「算出来发不出」）。"""
+        names = registry._intent_mounted("帮我在沙箱里跑代码，画个趋势图")
+        for n in ("run_code", "workspace_write", "workspace_read",
+                  "workspace_list", "workspace_save_file", "workspace_send"):
+            assert n in names, n
+
+    def test_intent_no_misfire_daily(self):
+        """误判回归：日常句/插画诉求不挂 code-lab 组。"""
+        for text in ("今天好累", "给我画一张猫娘", "提醒我开会",
+                     "这个沙盒游戏不错", "查一下天气"):
+            names = registry._intent_mounted(text)
+            assert "run_code" not in names, text

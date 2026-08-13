@@ -276,3 +276,41 @@ class TestBackgroundRoleStructure:
         from junjun_agent.agent import _background_to_messages
         msgs = _background_to_messages("甲: 在吗\n乙: 他不在")
         assert len(msgs) == 1 and isinstance(msgs[0], HumanMessage)
+
+
+class TestCodeLabIntent:
+    """2026-08-14 trace ede13923 实锤：数据分析/沙箱诉求此前无意图组，
+    run_code 被掩码裁掉后模型抓 tavily_extract 冒充「跑代码」——
+    意图组整组挂载 + 自检追问 + 漏绑全绑补救三件套兜底。"""
+
+    def test_sandbox_intent_nudged(self):
+        msgs = [_ai_with_tools("web_search")]
+        nudge = _intent_nudge("帮我在沙箱里跑代码画个趋势图", msgs, ALL_TOOLS)
+        assert nudge and "run_code" in nudge[0]
+
+    def test_full_bind_when_run_code_masked(self):
+        """run_code 被裁掉 -> 追问 + 全绑补救（不再让模型对着空工具带找工具）。"""
+        msgs = [_ai_with_tools("web_search")]
+        nudge = _intent_nudge("这份数据帮我做个数据分析，画个占比图", msgs,
+                              {"web_search"})
+        assert nudge and "run_code" in nudge[0]
+        assert nudge[1] is True
+
+    def test_chart_words_beat_ai_draw(self):
+        """「画个趋势图/图表」是数据图表不是插画——code-lab 组必须先命中。"""
+        msgs = [_ai_with_tools()]
+        nudge = _intent_nudge("画个趋势图给我看看这个月的数据", msgs, ALL_TOOLS)
+        assert nudge and "run_code" in nudge[0]
+
+    def test_no_nudge_when_workspace_tool_called(self):
+        """组内任一行动工具调用即算证据（先收文件再跑码是正常链路）。"""
+        msgs = [_ai_with_tools("workspace_save_file")]
+        assert _intent_nudge("在沙箱里跑代码处理这个表格", msgs, ALL_TOOLS) is None
+
+    def test_no_nudge_on_unrelated(self):
+        """误判回归：日常句不触发 code-lab 意图。"""
+        msgs = [_ai_with_tools()]
+        for text in ("今天好累", "给我画一张猫娘", "这个沙盒游戏不错",
+                     "提醒我下午开会", "这个视频讲了啥"):
+            nudge = _intent_nudge(text, msgs, ALL_TOOLS)
+            assert not (nudge and "run_code" in nudge[0]), text

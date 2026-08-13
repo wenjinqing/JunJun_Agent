@@ -74,8 +74,30 @@ _STEP_JOINS = ("然后", "接着", "之后", "再顺", "最后再", "然后再")
 _ACTION_WORDS = ("查", "搜", "找", "画", "写", "整理", "总结", "翻译", "下载",
                  "调研", "分析", "对比", "生成", "看完", "读完")
 
-# 否定句排除：「别帮我调研」「不用写报告」是制止不是派单
+# 否定句排除：「别帮我调研」「不用写报告」是制止不是派单。
+# 2026-08-14 收窄（trace ede13923 实锤）：全文子串匹配会把「…画两张图，
+# 在群里输出 Markdown 报告，不要发文件链接」这类**产出格式约束**误当取消，
+# 真实复杂任务被否决掉进对话通道烧穿。现在：否定词后 6 字内出现任务信号词
+# 才否决；信号词紧跟 得/太 是程度约束（「不要写得太长」）不否决。
 _NEGATIONS = ("别", "不要", "不用", "不许", "不准", "算了", "先不")
+_NEGATION_SCOPES = ("调研", "研究", "报告", "笔记", "综述", "简报", "攻略",
+                    "文档", "清单", "方案", "任务", "写", "整理", "汇总",
+                    "订阅", "盯", "提醒", "搜", "查", "画", "做", "生成")
+
+
+def _negated(t: str) -> bool:
+    """否定词是否真在否决任务本身（而非产出格式/程度约束）。"""
+    for neg in _NEGATIONS:
+        idx = t.find(neg)
+        while idx != -1:
+            scope = t[idx + len(neg): idx + len(neg) + 6]
+            hit = next((w for w in _NEGATION_SCOPES if w in scope), None)
+            if hit is not None:
+                after = scope.split(hit, 1)[1]
+                if not after.startswith(("得", "太")):
+                    return True
+            idx = t.find(neg, idx + 1)
+    return False
 
 _Q_RE = re.compile(r"[吗呢啊？?]$")
 
@@ -88,10 +110,9 @@ def route_to_task(text: str, *, chat_id: str = "") -> bool:
     # 纯疑问句不派单（「调研报告怎么写」是请教不是委托）
     if _Q_RE.search(t) and not any(w in t for w in ("帮我", "给我", "麻烦", "请你")):
         return False
-    # 否定句：「别调研了」「不用写报告」是制止
-    for neg in _NEGATIONS:
-        if neg in t:
-            return False
+    # 否定句：「别调研了」「不用写报告」是制止（收窄后的作用域判定）
+    if _negated(t):
+        return False
     # 时程承诺
     if any(w in t for w in _SCHEDULE_WORDS):
         logger.debug(f"路由->任务通道（时程承诺）: {t[:30]}")

@@ -125,3 +125,40 @@ class TestRouteWidening20260813:
     def test_plain_summary_stays_chat(self):
         """「总结一下聊的」是单步蒸馏（无来源动作），对话通道足够。"""
         assert route_to_task("总结一下我们今天聊了啥") is False
+
+
+class TestNegationScope20260814:
+    """2026-08-14 否定词收窄（trace ede13923 实锤）：全文子串匹配把
+    「…输出 Markdown 报告，不要发文件链接」的产出格式约束误当取消，
+    真实复杂任务被否决掉进对话通道烧穿。现在否定词后 6 字内出现
+    任务信号词才否决，且信号词紧跟 得/太 的程度约束不否决。"""
+
+    def test_format_constraint_not_cancel(self):
+        """生产原文：结尾「不要发文件链接」是格式约束，整单必须派任务通道。"""
+        assert route_to_task(
+            '君君，现在有一个复杂任务交给你:\n"你是一个数据分析专家。请先在沙箱里'
+            '自己生成一份模拟的 Q3 销售数据（包含字段：日期、区域、销售额、订单量、'
+            '利润），数据要有一定的噪音（空值、异常值、重复行）。然后基于这份数据，'
+            '完成以下分析：\n\n自动清洗：处理空值、重复值、异常值\n\n剔除华东地区'
+            '（假设华东数据录入错误）\n\n计算剔除华东后的总增长率，找出表现最差的 '
+            '3 个区域\n\n生成两张图：月度趋势折线图 + 各区域对比柱状图（均剔除华东）'
+            '\n\n在群里直接输出一份 Markdown 报告，图片必须直接预览显示，不要发文件链接"'
+        ) is True
+
+    def test_manner_constraint_not_cancel(self):
+        """「别写得太长」「不用做太复杂」是程度约束不是取消。"""
+        assert route_to_task("帮我写一份总结报告，别写得太长") is True
+        assert route_to_task("帮我调研下洗地机然后整份清单，不用做太复杂") is True
+
+    def test_real_cancels_still_veto(self):
+        """真取消照常否决（回对话通道）。"""
+        assert route_to_task("别调研了，我自己看") is False
+        assert route_to_task("不用写报告了") is False
+        assert route_to_task("先不做了，回头再说") is False
+        assert route_to_task("别盯那个up主了") is False
+        assert route_to_task("算了别搜了") is False
+
+    def test_constraint_only_message_stays_chat(self):
+        """防过纠正：全文没有任务信号时，格式约束本身不构成派单。"""
+        assert route_to_task("不要发文件链接哦") is False
+        assert route_to_task("别太长就行") is False

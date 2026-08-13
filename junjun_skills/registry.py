@@ -368,6 +368,15 @@ _INTENT_GROUPS = [
      ("web_search",), "web_search"),
     (("发个语音", "发语音", "语音说", "唱首", "唱一", "念给", "说日语", "日语说"),
      ("unified_tts", "ja_tts"), None),
+    # 代码沙箱/数据分析（2026-08-14 trace ede13923 实锤：run_code 无意图组、
+    # TOPIC 词又窄，「沙箱里生成数据→清洗→分析→画图→出报告」首轮 run_code
+    # 被掩码裁掉——模型读完手册找不到工具，抓 tavily_extract 冒充「跑代码」。
+    # 整组挂载 workspace 六件：只给 run_code 不给 workspace_send 会「算出来发不出」。
+    # 必须排在 ai_draw 前：「画个趋势图/图表」是数据图表不是插画，先命中本组）
+    (("沙箱", "跑代码", "运行代码", "跑个代码", "跑段代码", "用python", "用 python",
+      "数据分析", "数据清洗", "趋势图", "占比图", "词云", "数据图", "图表"),
+     ("run_code", "workspace_write", "workspace_read", "workspace_list",
+      "workspace_save_file", "workspace_send"), "run_code"),
     (("帮我画", "画一张", "画个", "画一", "画张", "生成图", "画幅", "涩图", "色图"),
      ("ai_draw",), "ai_draw"),
 ]
@@ -604,7 +613,10 @@ _TOPIC_KEYWORDS = {
     "cancel_background_task": ["取消任务", "别做了", "不用做了", "停掉"],
     # Phase 2 工具域（2026-08-13）：收紧的强触发词，宽泛词（数据/表格/链接）
     # 不收——误判回归见 test_tool_pinning.py
-    "run_code": ["跑代码", "词云", "趋势图", "算一下", "统计一下", "excel", "csv"],
+    # 2026-08-14 补「沙箱/图表」（trace ede13923：任务全文零命中，
+    # run_code 被裁掉逼出 tavily_extract 冒充事件）
+    "run_code": ["跑代码", "词云", "趋势图", "算一下", "统计一下", "excel", "csv",
+                 "沙箱", "图表"],
     "fetch_page": ["这篇文章", "这个网页", "这篇帖子", "这个链接"],
     "workspace_save_file": ["刚发的文件", "这个文件", "发来的文件", "这个表格", "这个pdf", "这个文档"],
 }

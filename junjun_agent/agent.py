@@ -725,7 +725,10 @@ class JunJunAgent:
                 logger.info(f"[{self.session.chat_id}] 复读自检命中，追问重说 "
                             f"[trace={trace_id}]: {text[:30]} ≈ {hit[:30]}")
                 try:
-                    retry = await agent.ainvoke(
+                    # 补救轮重建 agent 实例：复读熔断/搜索预算是实例级计数，
+                    # 沿用旧实例 = 补救轮开局就背着主轮烧掉的配额
+                    retry = await self._build_agent(
+                        allow_silence=not addressed, model=round_model).ainvoke(
                         {"messages": messages + [
                             HumanMessage(content=_ECHO_NUDGE.format(hit=hit[:60]))]},
                         config={
@@ -766,7 +769,12 @@ class JunJunAgent:
             logger.warning(f"[{self.session.chat_id}] 必回场景模型空输出，追问一次 "
                            f"[trace={trace_id}]")
             try:
-                retry = await agent.ainvoke(
+                # 重建全新 agent 实例：复读熔断/搜索预算是实例级计数，沿用旧实例
+                # = 补救轮开局就背着主轮烧掉的配额（2026-08-14 实锤：主轮把
+                # use_skill 计数烧到阈值，补救轮重读手册被当场熔断，连烧 11 步
+                # 撞 GraphRecursionError——复读熔断拦的是循环，不该把补救轮闷死）
+                retry = await self._build_agent(
+                    allow_silence=not addressed, model=round_model).ainvoke(
                     {"messages": messages + [HumanMessage(content=_EMPTY_NUDGE)]},
                     config={
                         "callbacks": callbacks or [],
