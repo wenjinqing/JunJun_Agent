@@ -19,7 +19,10 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
+
+# 系统代理（Windows 注册表）会拦截 localhost 请求——显式空代理绕开
+_opener = build_opener(ProxyHandler({}))
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -59,7 +62,7 @@ def _fetch_observations(host: str, auth: str, since: datetime) -> tuple:
               f"&fromStartTime={since.strftime('%Y-%m-%dT%H:%M:%S.000Z')}")
         req = Request(f"{host}/api/public/observations?{qs}",
                       headers={"Authorization": auth})
-        with urlopen(req, timeout=15) as r:
+        with _opener.open(req, timeout=15) as r:
             data = json.loads(r.read())
         items = data.get("data", [])
         out.extend(items)

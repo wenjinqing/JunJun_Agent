@@ -46,7 +46,10 @@ def fetch_traces(hours: int, limit: int) -> list:
     auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
     traces, page = [], 1
-    with httpx.Client(headers={"Authorization": f"Basic {auth}"}, timeout=30.0) as client:
+    # trust_env=False：Windows 注册表系统代理会拦截 localhost 请求（httpx 默认
+    # trust_env=True 会读注册表；本机代理不回流 localhost 时直接 502，2026-08-13 实锤）
+    with httpx.Client(headers={"Authorization": f"Basic {auth}"}, timeout=30.0,
+                      trust_env=False) as client:
         while len(traces) < limit:
             resp = client.get(f"{host}/api/public/traces",
                               params={"limit": min(100, limit - len(traces)),
