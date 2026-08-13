@@ -293,6 +293,18 @@ class TaskKernel:
         from junjun_core.observability import lf
         step.status = "running"
         plan.attempts[step.id] = plan.attempts.get(step.id, 0) + 1
+        # 身份链（2026-08-13 审查 P1 双案实锤）：步骤执行不一定在发起消息的
+        # context 里——审批恢复复制的是管理员的 context（is_admin_privileged
+        # 全真、current_chat_id 是管理员私聊，后续步骤借管理员身份执行特权
+        # 工具、结果流回群聊=跨会话隐私外泄）；断点恢复是空 context（workspace
+        # 工具全落共享 unknown/ 目录且零报错）。步骤必须按 plan 发起者身份跑，
+        # 人审只翻转批准位，不附带管理员身份。
+        from junjun_core.security import set_caller
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        # at_bot=True：任务只在被 @/私聊直呼（显式指令语义）时才路由进来，
+        # 忠实还原提交时的权限判定（管理员在群里派单=当时的 @bot 指令）
+        set_caller(plan.user_id, at_bot=True, is_group=plan.chat_id.endswith(":group"))
+        current_chat_id.set(plan.chat_id)
         # 人审已批准的步骤置放行位（高危工具如 run_code 据此对非管理员放行）；
         # 本步骤执行完即复位，不泄漏到后续步骤。
         token = _kernel_step_approved.set(step.verify == "human" and step.approved)

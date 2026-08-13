@@ -569,3 +569,114 @@ class TestStepTimeout:
         assert plan.steps[0].status == "failed"
         assert "超时" in plan.steps[0].error
         assert executor.kernel_step_approved() is False  # 放行位没被超时路径泄漏
+
+
+class TestStepIdentity:
+    """步骤按 plan 发起者身份执行（2026-08-13 审查 P1 双案）：
+    审批恢复复制管理员 context——步骤不许借管理员身份（跨会话隐私外泄）；
+    断点恢复是空 context——workspace 工具不许落共享 unknown/。"""
+
+    async def _run_and_capture(self, monkeypatch, plan):
+        from junjun_core import security
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        seen = {}
+
+        async def _fake_call(self, plan, step):
+            seen["user_id"] = security.current_user_id.get()
+            seen["chat_id"] = current_chat_id.get()
+            seen["privileged"] = security.is_admin_privileged()
+            return "ok"
+
+        async def _ok_verify(self, plan, step, result):
+            return True
+
+        monkeypatch.setattr(executor.TaskKernel, "_call_tool", _fake_call)
+        monkeypatch.setattr(executor.TaskKernel, "_verify", _ok_verify)
+        await executor.kernel._run_step(plan, plan.steps[0])
+        assert plan.steps[0].status == "done"
+        return seen
+
+    @pytest.mark.asyncio
+    async def test_non_admin_plan_in_admin_context(self, monkeypatch):
+        """P1-1 案发现场：管理员批完一步，后续步骤必须回到提交者（非管理员）身份。"""
+        from junjun_core import security
+        from junjun_skills.builtin.memory_skills import current_chat_id
+        monkeypatch.setenv("ADMIN_QQ", "99999")
+        security.set_caller("99999", at_bot=True, is_group=False)  # 管理员审批 context
+        tok = current_chat_id.set("qq:99999:private")
+        try:
+            plan = TaskPlan(goal="g", chat_id="qq:777:group", user_id="12345",
+                            steps=[Step(id="s1", action="x", desc="d")])
+            seen = await self._run_and_capture(monkeypatch, plan)
+            assert seen["user_id"] == "12345"           # 不是管理员
+            assert seen["chat_id"] == "qq:777:group"    # 不是管理员私聊
+            assert seen["privileged"] is False          # 不继承审批特权
+        finally:
+            current_chat_id.reset(tok)
+            security.set_caller("", at_bot=False, is_group=False)
+
+    @pytest.mark.asyncio
+    async def test_admin_group_plan_keeps_privilege(self, monkeypatch):
+        """不误伤：管理员本人在群里派单（提交必经 @bot=显式指令）特权仍在。"""
+        from junjun_core import security
+        monkeypatch.setenv("ADMIN_QQ", "99999")
+        security.set_caller("", at_bot=False, is_group=False)  # 模拟断点恢复空 context
+        try:
+            plan = TaskPlan(goal="g", chat_id="qq:777:group", user_id="99999",
+                            steps=[Step(id="s1", action="x", desc="d")])
+            seen = await self._run_and_capture(monkeypatch, plan)
+            assert seen["user_id"] == "99999"
+            assert seen["privileged"] is True
+        finally:
+            security.set_caller("", at_bot=False, is_group=False)
+
+
+class TestApprovalTransparency:
+    """审批必须带实际入参（2026-08-13 审查 P1）：只给 desc 是盲批。"""
+
+    def test_fmt_step_args_truncates(self):
+        from junjun_agent.task_kernel.graph import _fmt_step_args
+        assert _fmt_step_args(None) == ""
+        assert _fmt_step_args(Step(id="s", action="a", desc="d")) == ""
+        s = Step(id="s", action="run_code", desc="d",
+                 args_hint={"code": "print(1)"})
+        assert _fmt_step_args(s) == '{"code": "print(1)"}'
+        big = Step(id="s", action="run_code", desc="d",
+                   args_hint={"code": "x" * 1000})
+        out = _fmt_step_args(big)
+        assert len(out) < 510 and out.endswith("……")
+
+    @pytest.mark.asyncio
+    async def test_notify_admin_includes_args(self, monkeypatch):
+        from junjun_core import security
+        from junjun_agent.task_kernel import graph as tk_graph
+        sent = []
+
+        async def _fake_notify(text):
+            sent.append(text)
+            return True
+
+        monkeypatch.setattr(security, "notify_admin", _fake_notify)
+        plan = TaskPlan(goal="统计表格", chat_id="qq:777:group")
+        await tk_graph.runner._notify_admin(plan, {
+            "goal": "统计表格",
+            "step": {"id": "s2", "action": "run_code", "desc": "跑统计",
+                     "args": '{"code": "print(1)"}'},
+        })
+        assert sent and "参数：" in sent[0] and "print(1)" in sent[0]
+
+    @pytest.mark.asyncio
+    async def test_notify_admin_no_args_no_line(self, monkeypatch):
+        from junjun_core import security
+        from junjun_agent.task_kernel import graph as tk_graph
+        sent = []
+
+        async def _fake_notify(text):
+            sent.append(text)
+            return True
+
+        monkeypatch.setattr(security, "notify_admin", _fake_notify)
+        plan = TaskPlan(goal="g", chat_id="c")
+        await tk_graph.runner._notify_admin(plan, {
+            "goal": "g", "step": {"id": "s1", "action": "web_search", "desc": "d"}})
+        assert sent and "参数：" not in sent[0]

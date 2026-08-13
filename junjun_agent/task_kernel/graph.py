@@ -145,6 +145,18 @@ async def replan_node(state: KernelState) -> dict:
     return {"plan": plan.to_dict(), "phase": "report", "replan_for": ""}
 
 
+def _fmt_step_args(step) -> str:
+    """审批通知用的入参摘要：JSON 截断 500 字（run_code 的 code 就在这里面）。"""
+    if step is None or not getattr(step, "args_hint", None):
+        return ""
+    import json as _json
+    try:
+        s = _json.dumps(step.args_hint, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        s = str(step.args_hint)
+    return s[:500] + ("……" if len(s) > 500 else "")
+
+
 async def approval_node(state: KernelState) -> dict:
     """人审门：interrupt 挂起；Command(resume=True/False) 恢复。重启后重新挂起，
     runner 侧负责重新通知管理员。"""
@@ -159,7 +171,10 @@ async def approval_node(state: KernelState) -> dict:
         "goal": plan.goal[:80],
         "step": {"id": sid,
                  "action": step.action if step else "",
-                 "desc": step.desc if step else ""},
+                 "desc": step.desc if step else "",
+                 # 审批透明化（2026-08-13 审查 P1）：只给 desc 是盲批——恶意
+                 # 参数可以藏在人畜无害的描述后面，管理员必须看到实际入参
+                 "args": _fmt_step_args(step)},
     })
     if step is not None:
         if approved:
@@ -364,7 +379,8 @@ class GraphRunner:
                 "goal": plan.goal[:80],
                 "step": {"id": awaiting,
                          "action": step.action if step else "",
-                         "desc": step.desc if step else ""},
+                         "desc": step.desc if step else "",
+                         "args": _fmt_step_args(step)},
             })
             self._arm_timeout(plan_id)
             logger.info(f"任务 {plan_id} 的待审批已从断点恢复（重新通知管理员）")
@@ -391,8 +407,11 @@ class GraphRunner:
     async def _notify_admin(self, plan: TaskPlan, payload: dict) -> None:
         from junjun_core.security import notify_admin
         step = payload.get("step", {})
+        args = step.get("args") or ""
+        args_line = f"参数：{args}\n" if args else ""
         text = (f"【任务审批】{payload.get('goal', '')}\n"
                 f"下一步要做：{step.get('desc', '')}（{step.get('action', '')}）\n"
+                f"{args_line}"
                 f"回「发」放行，回「算了」跳过。10 分钟没回默认跳过。")
         try:
             if not await notify_admin(text):

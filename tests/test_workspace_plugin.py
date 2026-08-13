@@ -144,8 +144,8 @@ class _FakeClient:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, json=None):
-        type(self).posts.append((url, json))
+    async def post(self, url, json=None, headers=None):
+        type(self).posts.append((url, json, headers))
         return _FakeResp()
 
 
@@ -184,7 +184,7 @@ class TestRunCodeGate:
             security.current_user_id.reset(token)
         assert "hello" in r and "out.txt" in r
         assert len(fake_sandbox) == 1
-        url, payload = fake_sandbox[0]
+        url, payload, _headers = fake_sandbox[0]
         assert url.endswith("/run") and payload["timeout"] <= 30
         assert ":" not in payload["workdir"]                 # workdir 已清洗
 
