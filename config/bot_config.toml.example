@@ -140,7 +140,8 @@ all_global = true  # true=黑话库全群共享 / false=按会话隔离
 [database]
 enable_auto_cleanup = true     # 自动清理开关
 cleanup_retention_days = 60    # LLMUsage（token 用量）保留天数，超期删除
-cleanup_interval_hours = 24    # 清理任务执行间隔（小时）；只清 llm_usage+低频黑话，不动聊天记录
+messages_retention_days = 365  # 聊天记录保留天数（记忆原料，窗口给足；0=不清）
+cleanup_interval_hours = 24    # 清理任务执行间隔（小时）
 
 # ---------- 工具（⏸️ 预留，当前版本未读取，保留对齐原配置） ----------
 [tool]

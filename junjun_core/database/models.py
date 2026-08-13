@@ -45,7 +45,8 @@ class Messages(BaseModel):
     message_id = CharField(index=True)
     chat_id = CharField(index=True)          # 会话键 platform:id:type
     time = FloatField(index=True)
-    user_id = CharField(default="")
+    user_id = CharField(default="", index=True)   # 2026-08-13 补索引（按人查记录
+                                                  # 全表扫）；老库由 _ensure_indexes 补建
     user_nickname = CharField(default="")
     group_id = CharField(default="", index=True)
     processed_plain_text = TextField(default="")
@@ -320,7 +321,73 @@ ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji,
               BlockedUser]
 
 
+def _ensure_columns(database, models=None) -> None:
+    """轻量加列迁移（2026-08-13 审查 P1）：模型新增字段 -> ALTER TABLE ADD COLUMN。
+
+    create_tables(safe=True) 只补缺表不补列——此前给模型加字段，生产库不会
+    跟着长，peewee 显式列查询直接 OperationalError「no such column」。
+    只加不改不删；无默认值且非空的列跳过并告警（SQLite 加列只支持常量默认，
+    这类列得人工迁移）——宁可跳过一列，也不能让启动炸死。
+    database 显式传入：测试用 tmp 库调本函数，绝不许碰全局生产句柄。
+    """
+    from playhouse.migrate import SqliteMigrator, migrate
+
+    from junjun_core.observability import get_logger
+    logger = get_logger("db.migrate")
+    migrator = SqliteMigrator(database)
+    for model in (models or ALL_TABLES):
+        table = model._meta.table_name
+        existing = {row[1] for row in
+                    database.execute_sql(f"PRAGMA table_info({table})")}
+        if not existing:
+            continue  # 表还没建（create_tables 会先跑）
+        for f in model._meta.sorted_fields:
+            if f.column_name in existing:
+                continue
+            if not f.null and f.default is None:
+                logger.warning(f"{table}.{f.column_name} 无默认值且非空，"
+                               "自动加列跳过（需人工迁移）")
+                continue
+            try:
+                migrate(migrator.add_column(table, f.column_name, f))
+                logger.info(f"表 {table} 自动加列: {f.column_name}")
+            except Exception as e:
+                logger.warning(f"表 {table} 加列 {f.column_name} 失败（跳过）: "
+                               f"{type(e).__name__}: {e}")
+
+
+def _ensure_indexes(database, models=None) -> None:
+    """既有表补建缺失的单列索引（create_tables 不管老表的索引）。
+
+    只补 index=True 的单列索引；复合索引（Meta.indexes）与 unique 约束
+    不在自动范围（unique 对存量重复数据会炸，得人工来）。
+    """
+    from junjun_core.observability import get_logger
+    logger = get_logger("db.migrate")
+    for model in (models or ALL_TABLES):
+        table = model._meta.table_name
+        existing = {r[0] for r in database.execute_sql(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
+            (table,))}
+        for f in model._meta.sorted_fields:
+            if not f.index:
+                continue
+            name = f"{table}_{f.column_name}"
+            if name in existing:
+                continue
+            try:
+                database.execute_sql(
+                    f'CREATE INDEX IF NOT EXISTS "{name}" '
+                    f'ON "{table}" ("{f.column_name}")')
+                logger.info(f"表 {table} 补建索引: {name}")
+            except Exception as e:
+                logger.warning(f"表 {table} 补建索引 {name} 失败（跳过）: "
+                               f"{type(e).__name__}: {e}")
+
+
 def init_database() -> None:
-    """建表（幂等）。"""
+    """建表（幂等）+ 加列对齐（模型新字段自动 ALTER TABLE）+ 补缺失索引。"""
     db.connect(reuse_if_open=True)
     db.create_tables(ALL_TABLES, safe=True)
+    _ensure_columns(db)
+    _ensure_indexes(db)
