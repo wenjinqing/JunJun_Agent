@@ -306,6 +306,40 @@ class TestRunLoop:
         # 验收两次都不过 -> 重试后 replan（planner 真调会失败返回 None）-> failed
         assert plan.state == "failed"
 
+    @pytest.mark.asyncio
+    async def test_judge_exception_failopen_leaves_trace(self, harness, monkeypatch,
+                                                         capsys):
+        """2026-08-13 审查 P1：验收调用异常按通过处理（fail-open 语义保留，
+        工具产出已在不当失败），但必须留痕——plan.verify_skipped 计数 +
+        warning + 终态汇报点名，否则 key 故障时全步骤「验收通过」汇报成功。
+        """
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "搜索结果")])
+
+        class _BoomJudge:
+            async def ainvoke(self, msgs, config=None):
+                if "只答「可以」" in str(msgs[-1].content):
+                    raise RuntimeError("key 炸了")
+                return AIMessage(content="汇报文本")
+
+        import junjun_llm
+        monkeypatch.setattr(junjun_llm, "get_chat_model",
+                            lambda slot="utils": _BoomJudge())
+        plan = TaskPlan(goal="g", chat_id="qq:g9:group", steps=[
+            Step(id="s1", action="web_search", desc="深度调研", verify="llm_judge"),
+        ])
+        plan.deadline_ts = 9e18
+        await executor.kernel._run(plan)
+        assert plan.state == "done", "验收异常应 fail-open，步骤产出已在不当失败"
+        assert plan.verify_skipped == 1
+        sent = "\n".join(str(seg.data) for _, segs, _ in harness["sent"]
+                         for seg in segs)
+        assert "验收环节没跑通" in sent, "终态汇报必须点名未经验收的步骤"
+        assert "验收调用异常" in capsys.readouterr().out
+        # 持久化往返不丢；旧存档无此字段 -> 0 不炸
+        assert TaskPlan.from_dict(plan.to_dict()).verify_skipped == 1
+        old = TaskPlan.from_dict({"goal": "g", "chat_id": "c", "steps": []})
+        assert old.verify_skipped == 0
+
 
 # ---------- Langfuse 指标（方案 §六：plan 为 trace，步骤为 span） ----------
 

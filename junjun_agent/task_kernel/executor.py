@@ -448,8 +448,14 @@ class TaskKernel:
                 if verdict.strip().startswith("不行"):
                     step.error = f"验收不通过：{verdict[:100]}"
                     return False
-            except Exception:
-                pass  # 验收调用本身炸了不当失败（工具结果已在）
+            except Exception as e:
+                # 验收调用本身炸了不当失败（工具结果已在）——但 2026-08-13 审查
+                # P1：fail-open 不能无声，key 故障时全步骤「验收通过」汇报成功
+                # 是教科书级掩盖。留痕：warning + plan 计数，终态汇报可见。
+                plan.verify_skipped += 1
+                logger.warning(f"步骤 {step.id} 验收调用异常按通过处理"
+                               f"（本计划第 {plan.verify_skipped} 次未经验收）: "
+                               f"{type(e).__name__}: {e}")
         return True
 
     # ---------- 汇报 ----------
@@ -465,6 +471,12 @@ class TaskKernel:
         except Exception as e:
             logger.warning(f"汇报合成异常，用模板兜底: {e}")
             text = self._fallback_report(plan)
+        if plan.verify_skipped:
+            # fail-open 留痕的落地一半（2026-08-13 审查 P1）：验收异常被按通过
+            # 处理的步骤必须在终态汇报里点名——否则 key 故障时全步骤「验收通过」
+            # 汇报成功，用户无从察觉。追加而非塞进合成提示：LLM 可能吞掉。
+            text = (text or "") + \
+                f"\n（{plan.verify_skipped} 步的验收环节没跑通，按产出直接算通过）"
         said = ""
         if text:
             sent = await send_proactive(
