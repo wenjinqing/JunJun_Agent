@@ -214,6 +214,12 @@ def _record_usage(messages: list, chat_id: str, request_type: str = "agent") -> 
                     completion_tokens=int(u.get("output_tokens", 0)),
                     chat_id=chat_id,
                 )
+                # 日累计超阈软告警（2026-08-13 审查 P1：花费失控不能靠月账单发现）
+                try:
+                    from junjun_core.alerting import note_usage
+                    note_usage(int(u.get("input_tokens", 0)) + int(u.get("output_tokens", 0)))
+                except Exception:
+                    pass
     except Exception as e:
         logger.debug(f"token 用量记录失败（忽略）: {e}")
 

@@ -115,6 +115,11 @@ def _pool_specs(cfg: dict, defaults: dict) -> List[ModelSpec]:
     keys = sf_pool.healthy_keys()
     if not keys:
         logger.warning("SF_POOL 号池为空（检查 data/sf_keys.txt 与 key 余额）")
+        try:
+            from junjun_core.alerting import note_pool_empty
+            note_pool_empty()
+        except Exception:
+            pass
         return []
     max_legs = int(_pool_cfg().get("max_legs", 10))
     keys = keys[:max_legs]

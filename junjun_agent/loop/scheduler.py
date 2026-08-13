@@ -171,6 +171,10 @@ def register_default_tasks() -> None:
         from junjun_agent.loop.statistics import output_statistics
         await output_statistics()
 
+    async def alerts_daily():
+        from junjun_core.alerting import daily_usage_report
+        await daily_usage_report()
+
     async def online_time():
         from junjun_agent.loop.statistics import record_online_time
         await record_online_time()
@@ -227,6 +231,12 @@ def register_default_tasks() -> None:
     scheduler.add(ScheduledTask("proactive_chat", proactive_scan, interval=proactive_min * 60))
     scheduler.add(ScheduledTask("emoji_register", emoji_register, interval=emoji_min * 60))
     scheduler.add(ScheduledTask("statistics", statistics, interval=4 * 3600))
+    # 用量日报推送（2026-08-13 审查 P1：统计只打日志没人看，推送才有人看）；
+    # [alerts] daily_report_time "HH:MM" 可调，默认 23:50
+    _alert_t = str(raw.get("alerts", {}).get("daily_report_time", "23:50")).split(":")
+    scheduler.add(ScheduledTask("alerts_daily", alerts_daily,
+                                cron_hour=int(_alert_t[0]),
+                                cron_minute=int(_alert_t[1]) if len(_alert_t) > 1 else 0))
     scheduler.add(ScheduledTask("online_time", online_time, interval=60))
     scheduler.add(ScheduledTask("db_cleanup", db_cleanup, interval=cleanup_h * 3600))
     scheduler.add(ScheduledTask("expression_reflect", expression_reflect, interval=5 * 60))
