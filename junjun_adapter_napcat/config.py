@@ -36,6 +36,8 @@ class ChatConfig:
     poke_chat_min_interval: int = 20   # 会话地板：全会话最小放行间隔（秒）
     poke_escalate_count: int = 5       # 连戳被抑制这么多次后放一条吐槽
     poke_escalate_cooldown: int = 600  # 吐槽之后的冷却（秒）
+    poke_group_daily_replies: int = 3  # 群戳日回敬额度：同群同人每天前 N 次反戳/表情
+                                       # （0 token，不进决策链）；私聊不受影响
 
 
 @dataclass
@@ -80,6 +82,7 @@ class AdapterConfig:
                 poke_chat_min_interval=int(ch.get("poke_chat_min_interval", 20)),
                 poke_escalate_count=int(ch.get("poke_escalate_count", 5)),
                 poke_escalate_cooldown=int(ch.get("poke_escalate_cooldown", 600)),
+                poke_group_daily_replies=int(ch.get("poke_group_daily_replies", 3)),
             ),
         )
 

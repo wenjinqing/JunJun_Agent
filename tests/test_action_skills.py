@@ -250,16 +250,19 @@ class TestPeekGroupChat:
 
 
 class TestNoticePoke:
-    @pytest.mark.asyncio
-    async def test_poke_to_bot_becomes_addressed_message(self, monkeypatch):
+    """戳一戳新政（2026-08-13 用户裁决）：群戳不进决策链（0 token 廉价回敬，
+    日额度 3 次），私聊维持「合成 addressed 文本进决策」。"""
+
+    def _common_patches(self, monkeypatch):
         from junjun_adapter_napcat.recv_handler import notice_handler as nh
+        nh._reset_for_test()
 
         sent = []
 
         async def _fake_send(msg_base):
             sent.append(msg_base)
 
-        # poke 必须经 message_send_instance 走 WS 到核心网关——
+        # poke 进决策必须经 message_send_instance 走 WS 到核心网关——
         # adapter 是独立进程，本进程的 gateway 只是 echo 占位（旧路由 poke 必丢）
         monkeypatch.setattr(
             "junjun_adapter_napcat.message_sending.message_send_instance.message_send",
@@ -278,14 +281,72 @@ class TestNoticePoke:
 
         monkeypatch.setattr(cfg_mod, "get_config", lambda: _Cfg())
 
+        nc_calls = []
+
+        class _FakeNC:
+            async def send_message_to_napcat(self, action, params):
+                nc_calls.append((action, params))
+                return {"status": "ok"}
+
+        monkeypatch.setattr(
+            "junjun_adapter_napcat.send_handler.nc_sending.nc_message_sender",
+            _FakeNC())
+        return nh, sent, nc_calls
+
+    @pytest.mark.asyncio
+    async def test_private_poke_becomes_addressed_message(self, monkeypatch):
+        """私聊戳：合成 addressed 文本走决策链（维持原样，仅私聊）。"""
+        nh, sent, nc_calls = self._common_patches(monkeypatch)
         await nh.notice_handler.handle_notice({
             "post_type": "notice", "notice_type": "notify", "sub_type": "poke",
-            "self_id": 10000001, "target_id": 10000001, "user_id": 12345, "group_id": 999,
+            "self_id": 10000001, "target_id": 10000001, "user_id": 12345,
         })
         assert len(sent) == 1
         msg = sent[0]
         assert msg.message_info.additional_config["at_bot"] is True
         assert "戳" in msg.message_segment.data
+        assert nc_calls == []                      # 私聊不走 adapter 本地回敬
+
+    @pytest.mark.asyncio
+    async def test_group_poke_cheap_reply_no_decision(self, monkeypatch):
+        """群戳：不进决策（0 token），adapter 本地反戳或发表情。"""
+        nh, sent, nc_calls = self._common_patches(monkeypatch)
+        await nh.notice_handler.handle_notice({
+            "post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+            "self_id": 10000001, "target_id": 10000001, "user_id": 12345, "group_id": 999,
+        })
+        assert sent == []                          # 决策链一口都没吃到
+        assert len(nc_calls) == 1
+        action, params = nc_calls[0]
+        assert action in ("send_poke", "send_group_msg")
+        if action == "send_group_msg":             # 表情路径：内置小黄豆
+            assert params["message"][0]["type"] == "face"
+        else:                                      # 反戳路径：目标正确
+            assert params["user_id"] == 12345 and params["group_id"] == 999
+
+    @pytest.mark.asyncio
+    async def test_group_poke_daily_budget(self, monkeypatch):
+        """日额度 3 次：第 4 次起直接无视（token 止损的命门）。"""
+        nh, sent, nc_calls = self._common_patches(monkeypatch)
+        monkeypatch.setattr(nh, "_poke_cfg", lambda: (0, 0, 5, 600, 3))
+        poke = {"post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+                "self_id": 10000001, "target_id": 10000001, "user_id": 12345,
+                "group_id": 999}
+        for _ in range(5):
+            await nh.notice_handler.handle_notice(poke)
+        assert sent == []
+        assert len(nc_calls) == 3                  # 前 3 次回敬，第 4/5 次无视
+
+    @pytest.mark.asyncio
+    async def test_group_poke_throttle_before_budget(self, monkeypatch):
+        """连戳先被防抖抑制（60s 窗口），不烧日额度。"""
+        nh, sent, nc_calls = self._common_patches(monkeypatch)
+        poke = {"post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+                "self_id": 10000001, "target_id": 10000001, "user_id": 12345,
+                "group_id": 999}
+        await nh.notice_handler.handle_notice(poke)
+        await nh.notice_handler.handle_notice(poke)   # 60s 内第二戳 -> 抑制
+        assert len(nc_calls) == 1
 
     @pytest.mark.asyncio
     async def test_poke_not_targeting_bot_ignored(self, monkeypatch):

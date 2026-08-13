@@ -300,9 +300,24 @@ class OutboxMessage(BaseModel):
     attempts = IntegerField(default=0)    # 回放尝试次数（上限后丢弃）
 
 
+class BlockedUser(BaseModel):
+    """屏蔽名单：管理员按会话拉黑某人（多为其他 bot）。其消息记完记忆即丢弃，
+    不进决策/命令/拦截器（0 token）——防 bot 互回循环的硬闸（2026-08-13 用户裁决）。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    chat_id = CharField(index=True)       # 会话键 platform:id:type
+    user_id = CharField()
+    created_by = CharField(default="")    # 操作的管理员 QQ
+    created_ts = FloatField(default=time.time)
+
+    class Meta:
+        indexes = ((("chat_id", "user_id"), True),)
+
+
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
               OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity,
-              UserSceneProfile, Intention, SkillPatch, ShortTermMemory, OutboxMessage]
+              UserSceneProfile, Intention, SkillPatch, ShortTermMemory, OutboxMessage,
+              BlockedUser]
 
 
 def init_database() -> None:

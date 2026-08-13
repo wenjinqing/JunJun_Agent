@@ -237,7 +237,10 @@ class TestKnowledgeRecall:
 
 
 class TestPokeRouting:
-    """poke 必须走 WS 发给核心网关，不再调本进程 echo gateway。"""
+    """poke 必须走 WS 发给核心网关，不再调本进程 echo gateway。
+
+    2026-08-13 起该路由只剩私聊：群戳改为 adapter 本地廉价回敬（0 token，
+    不进决策链），见 test_poke_throttle.py。"""
 
     @pytest.mark.asyncio
     async def test_poke_goes_to_message_sending(self, monkeypatch):
@@ -256,6 +259,6 @@ class TestPokeRouting:
         handler = notice_handler.NoticeHandler()
         await handler._handle_poke({
             "self_id": "10000001", "target_id": "10000001",  # 戳的是 bot 自己
-            "user_id": "12345", "group_id": "678",
+            "user_id": "12345", "group_id": None,            # 私聊
         })
         assert len(sent) == 1

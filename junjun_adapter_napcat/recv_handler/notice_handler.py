@@ -1,21 +1,26 @@
 """notice 事件处理：戳一戳（notify/poke）入站。
 
-对齐总目标功能清单 #1「戳一戳」：群友/私聊戳 bot -> 合成一条 addressed 文本消息
-进正常决策链（L1 @ 旁路必回），由 persona 决定如何俏皮回应，而非硬编码回复。
+群聊（2026-08-13 用户裁决）：戳一戳一律【不进决策链】——每条戳都过 LLM
+token 消耗巨大，群里还有别的 bot 时会互戳滚雪球。同一人在同群每天前
+poke_group_daily_replies 次（默认 3）直接廉价回敬：反戳回去或发个内置
+表情（各半随机），adapter 本地直发 NapCat，0 token；当日额度用完直接无视。
 
-防刷屏（2026-08-03）：被连戳时每条都回太烦人，也不像真人。三层抑制：
+私聊维持原样：合成一条 addressed 文本消息进正常决策链（L1 @ 旁路必回）——
+量小，且私聊戳是亲昵行为，值得 persona 认真回应。
+
+防刷屏（2026-08-03，群聊私聊都生效）：三层抑制——
 1. 同人同事窗口内只放一条（poke_min_interval，默认 60s）；
 2. 会话地板：全会话最多每条 poke_chat_min_interval（默认 20s）放一条，
    防多人同时戳把回复刷爆；
-3. 连戳升级：同一人被连续抑制 poke_escalate_count（默认 5）次后，放一条
-   「（连续戳了你好几下）」让她名正言顺地吐槽一次，然后进入更长冷却
-   （poke_escalate_cooldown，默认 600s）——像真人：先不理，烦了就哼一声。
+3. 连戳升级：同一人被连续抑制 poke_escalate_count（默认 5）次后放一条，
+   然后进入更长冷却（poke_escalate_cooldown，默认 600s）。
 """
 
+import random
 import time
 
 from maim_message import (
-    UserInfo, GroupInfo, Seg, BaseMessageInfo, MessageBase, FormatInfo,
+    UserInfo, Seg, BaseMessageInfo, MessageBase, FormatInfo,
 )
 
 from ..config import get_config
@@ -26,19 +31,25 @@ _last: dict = {}
 _suppressed: dict = {}
 _escalated: dict = {}
 _chat_last: dict = {}
+# (chat_key, user_id) -> (日期串, 当日已回敬次数)：群戳廉价回敬的日额度
+_group_daily: dict = {}
 
 _POKE_TEXT = "（戳了戳你）"
 _POKE_ESCALATE_TEXT = "（连续戳了你好几下）"
 
+# QQ 内置小黄豆（得意/害羞/微笑）——adapter 本地可发，不依赖 bot 核心的表情库
+_FACE_POOL = ("4", "6", "14")
+
 
 def _poke_cfg() -> tuple:
-    """(同人最小间隔, 会话地板, 升级阈值, 升级后冷却)。配置缺失时用默认值。"""
+    """(同人最小间隔, 会话地板, 升级阈值, 升级后冷却, 群戳日回敬额度)。配置缺失用默认值。"""
     chat = getattr(get_config(), "chat", None)
     return (
         int(getattr(chat, "poke_min_interval", 60) or 60),
         int(getattr(chat, "poke_chat_min_interval", 20) or 20),
         int(getattr(chat, "poke_escalate_count", 5) or 5),
         int(getattr(chat, "poke_escalate_cooldown", 600) or 600),
+        int(getattr(chat, "poke_group_daily_replies", 3) or 3),
     )
 
 
@@ -50,6 +61,9 @@ def _gc_state(now: float) -> None:
     for d in (_last, _suppressed, _escalated):
         for k in [k for k, v in d.items() if (v if isinstance(v, float) else 0) < cutoff]:
             d.pop(k, None)
+    for k in [k for k, (day, _n) in _group_daily.items()
+              if day != time.strftime("%Y-%m-%d", time.localtime(cutoff))]:
+        _group_daily.pop(k, None)
 
 
 def _reset_for_test() -> None:
@@ -57,6 +71,7 @@ def _reset_for_test() -> None:
     _suppressed.clear()
     _escalated.clear()
     _chat_last.clear()
+    _group_daily.clear()
 
 
 class NoticeHandler:
@@ -80,17 +95,23 @@ class NoticeHandler:
         if text is None:
             return  # 被防抖抑制（连戳刷屏）
 
+        if group_id:
+            # 群聊：廉价回敬（反戳/表情），不进决策链（0 token）
+            if not self._consume_group_budget(user_id, group_id):
+                logger.info(f"戳一戳当日回敬额度用完，无视 [user={user_id} group={group_id}]")
+                return
+            await self._cheap_reply(user_id, str(group_id))
+            return
+
+        # 私聊：合成 addressed 文本进正常决策链
         platform = get_config().junjun_server.platform_name
         user_info = UserInfo(platform=platform, user_id=user_id, user_nickname="", user_cardname=None)
-        group_info = (
-            GroupInfo(platform=platform, group_id=str(group_id), group_name="") if group_id else None
-        )
         msg_info = BaseMessageInfo(
             platform=platform,
             message_id=f"poke-{user_id}-{int(time.time())}",
             time=time.time(),
             user_info=user_info,
-            group_info=group_info,
+            group_info=None,
             template_info=None,
             format_info=FormatInfo(content_format=["text"], accept_format=["text"]),
             additional_config={"at_bot": True},  # 戳一戳 = 直呼，走 L1 @ 旁路
@@ -100,18 +121,63 @@ class NoticeHandler:
             message_segment=Seg(type="text", data=text),
             raw_message=text,
         )
-        logger.info(f"收到戳一戳 [user={user_id} group={group_id}]，转决策链")
+        logger.info(f"收到私聊戳一戳 [user={user_id}]，转决策链")
         # adapter 是独立进程，必须和普通消息一样走 WS 发给核心网关——
         # 直接调本进程的 gateway 只会拿到 echo 占位处理器，poke 会被静默丢弃
         from ..message_sending import message_send_instance
         await message_send_instance.message_send(msg_base)
 
     @staticmethod
+    def _consume_group_budget(user_id: str, group_id) -> bool:
+        """群戳日额度：同群同人每天最多 N 次廉价回敬。True=本次放行（已计数）。"""
+        budget = _poke_cfg()[4]
+        day = time.strftime("%Y-%m-%d")
+        key = (f"g:{group_id}", user_id)
+        d, n = _group_daily.get(key, ("", 0))
+        if d != day:
+            d, n = day, 0
+        if n >= budget:
+            return False
+        _group_daily[key] = (d, n + 1)
+        return True
+
+    @staticmethod
+    async def _cheap_reply(user_id: str, group_id: str) -> None:
+        """反戳回去（新旧 action 兜底）或发个内置表情——adapter 本地直发 NapCat。"""
+        from ..send_handler.nc_sending import nc_message_sender
+        if random.random() < 0.5:
+            for action, params in (
+                    ("send_poke", {"user_id": int(user_id), "group_id": int(group_id)}),
+                    ("send_group_poke", {"group_id": int(group_id),
+                                         "user_id": int(user_id)})):
+                try:
+                    resp = await nc_message_sender.send_message_to_napcat(action, params)
+                except Exception as e:
+                    logger.warning(f"戳一戳回敬异常 [{action}]: {e}")
+                    continue
+                if resp.get("status") == "ok":
+                    logger.info(f"戳一戳已回敬 [{action} user={user_id} group={group_id}]")
+                    return
+                logger.warning(f"戳一戳回敬 [{action}] 失败: {resp}")
+        face = random.choice(_FACE_POOL)
+        try:
+            resp = await nc_message_sender.send_message_to_napcat(
+                "send_group_msg",
+                {"group_id": int(group_id),
+                 "message": [{"type": "face", "data": {"id": face}}]})
+            if resp.get("status") == "ok":
+                logger.info(f"戳一戳回表情 [face={face} user={user_id} group={group_id}]")
+            else:
+                logger.warning(f"戳一戳回表情失败: {resp}")
+        except Exception as e:
+            logger.warning(f"戳一戳回表情异常: {e}")
+
+    @staticmethod
     def _throttle(user_id: str, group_id) -> "str | None":
-        """防刷屏闸门。返回要合成的文本，None = 本条抑制。"""
+        """防刷屏闸门。返回要合成/放行的文本，None = 本条抑制。"""
         now = time.time()
         _gc_state(now)
-        min_interval, chat_floor, escalate_n, esc_cooldown = _poke_cfg()
+        min_interval, chat_floor, escalate_n, esc_cooldown, _budget = _poke_cfg()
         chat_key = f"g:{group_id}" if group_id else f"u:{user_id}"
         key = (chat_key, user_id)
         interval = esc_cooldown if _escalated.get(key) else min_interval

@@ -790,6 +790,16 @@ async def junjun_processor(session: ChatSession, meta: InboundMeta) -> Optional[
             user_id=meta.user_id or "", message_id=meta.message_id, at_bot=meta.at_bot,
         )
     _store_inbound(session, meta)
+    # 屏蔽名单（管理员设，多为其他 bot）：记完记忆直接丢——不进决策队列、不触发
+    # 命令/拦截器/意向钩子（0 token），@bot 也不回。防 bot 互回循环的硬闸。
+    # 必须在「别烦我」静音钩子等所有消费点之前：被屏蔽的 bot 没资格让全群静音。
+    try:
+        from junjun_agent.blocklist import is_blocked
+        if not meta.is_self and meta.user_id and is_blocked(session.chat_id, meta.user_id):
+            logger.info(f"[{session.chat_id}] {meta.user_id} 在屏蔽名单，本条不响应")
+            return None
+    except Exception:
+        pass
     # 复杂任务人审（LangGraph 引擎）：管理员的「发/算了」最优先消费，
     # 不进决策队列（在记忆入库之后——审批回复也是真实消息，如实记录）
     try:

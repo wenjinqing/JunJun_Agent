@@ -133,7 +133,15 @@ def _match(text: str) -> Optional[tuple]:
 
     "/" 开头的文本不会误中 raw 命令：raw 匹配要求整句相等或「关键词+空格」
     开头，"/关键词" 两种都不满足，天然安全，无需特判。
+
+    句首的「@你 」先剥掉再匹配：群里 @bot 的 @段入站时已转成这个文本前缀，
+    不剥的话「@君君 /屏蔽 xx」永远不命中——admin_only 命令在群里等于残废
+    （admin_privileged 又恰恰要求 @bot 才激活，2026-08-13 屏蔽命令实锤）。
     """
+    if not text:
+        return None
+    while text.startswith("@你 "):
+        text = text[len("@你 "):].strip()
     if not text:
         return None
     for c in _commands:
