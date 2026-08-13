@@ -48,7 +48,8 @@ class ReflectionLoop:
         if self._count < every or self._running:
             return
         self._count = 0
-        asyncio.create_task(self._run_safe())
+        from junjun_core.bg_tasks import fire_and_forget
+        fire_and_forget(self._run_safe(), name="reflection")
 
     async def _run_safe(self) -> None:
         self._running = True

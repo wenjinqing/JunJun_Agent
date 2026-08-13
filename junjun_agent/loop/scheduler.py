@@ -101,8 +101,10 @@ class Scheduler:
                 if task.due():
                     task.mark_run()
                     # 并发执行：慢任务（LLM 生成/VLM 注册）不阻塞 reminders 等其他任务
-                    asyncio.create_task(self._run_one(task),
-                                        name=f"sched-{task.name}")
+                    # 强引用留存：裸 create_task 会被 GC 收走（2026-08-13 实锤）
+                    from junjun_core.bg_tasks import fire_and_forget
+                    fire_and_forget(self._run_one(task),
+                                    name=f"sched-{task.name}")
             await asyncio.sleep(self.TICK)
 
     async def _run_one(self, task: ScheduledTask) -> None:

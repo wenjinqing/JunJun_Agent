@@ -118,10 +118,12 @@ def maybe_scan(chat_id: str, user_id: str, nickname: str, text: str) -> None:
     if not should_scan(text or ""):
         return
     try:
-        asyncio.get_running_loop().create_task(
-            scan(chat_id, user_id, nickname, text))
+        asyncio.get_running_loop()
     except RuntimeError:
-        pass  # 无线程事件循环（测试/脚本环境）就跳过
+        return  # 无线程事件循环（测试/脚本环境）就跳过
+    from junjun_core.bg_tasks import fire_and_forget
+    fire_and_forget(scan(chat_id, user_id, nickname, text),
+                    name=f"event-radar-{chat_id[-12:]}")
 
 
 async def scan(chat_id: str, user_id: str, nickname: str, text: str,

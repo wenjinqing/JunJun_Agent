@@ -44,6 +44,11 @@ class ModelSpec:
     # Qwen 系才认那个字段；思考 token 不占 max_tokens 配额（实测 max_tokens=50
     # 仍 reasoning=213 + 正文正常），所以关思考图的是费用和延迟）
     extra_body: dict = field(default_factory=dict)
+    # 单跳请求超时/重试：默认 60s×4 次适合闲聊槽；思考型槽（thinker 规划）
+    # 单次生成轻松超 60s——2026-08-13 生产实锤：thinker 两条腿 4×60s 全超时
+    # 烧穿，后台规划整单超时蒸发。槽级/条目级配置 timeout/max_retries 覆盖。
+    timeout: float = 60.0
+    max_retries: int = 3
 
 
 @dataclass
@@ -92,6 +97,8 @@ def _spec_from(cfg: dict, defaults: dict) -> Optional[ModelSpec]:
         temperature=float(merged.get("temperature", 0.7)),
         max_tokens=int(merged.get("max_tokens", 1024)),
         extra_body=dict(merged.get("extra_body") or {}),
+        timeout=float(merged.get("timeout", 60.0)),
+        max_retries=int(merged.get("max_retries", 3)),
     )
 
 
@@ -129,6 +136,8 @@ def _pool_specs(cfg: dict, defaults: dict) -> List[ModelSpec]:
         temperature=float(merged.get("temperature", 0.7)),
         max_tokens=int(merged.get("max_tokens", 1024)),
         extra_body=dict(merged.get("extra_body") or {}),
+        timeout=float(merged.get("timeout", 60.0)),
+        max_retries=int(merged.get("max_retries", 3)),
     ) for k in keys]
 
 
@@ -170,8 +179,8 @@ def _build_chat(spec: ModelSpec) -> ChatOpenAI:
         api_key=spec.api_key,
         temperature=spec.temperature,
         max_tokens=spec.max_tokens,
-        timeout=60,
-        max_retries=3,  # 503 限流时自动重试（指数退避），避免 L2 gate 直接兜底 no_reply
+        timeout=spec.timeout,
+        max_retries=spec.max_retries,  # 503 限流时自动重试（指数退避），避免 L2 gate 直接兜底 no_reply
         http_socket_options=_SOCKET_OPTIONS,
         extra_body=spec.extra_body or None,
     )

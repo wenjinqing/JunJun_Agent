@@ -75,3 +75,56 @@ extra_body = { thinking = { type = "disabled" } }
         assert len(specs) == 2
         assert all(s.extra_body == {"thinking": {"type": "disabled"}} for s in specs)
         models.reset_slots()
+
+
+class TestSlotTimeoutRetries:
+    """槽级 timeout/max_retries 透传（2026-08-13 生产实锤：思考型 thinker 槽
+    默认 60s×4 重试，规划两条腿 4×60s 全超时烧穿——思考槽必须能放宽单跳、
+    减重试让给下一条腿）。"""
+
+    def test_slot_timeout_applies(self, tmp_path, monkeypatch):
+        toml = _write(tmp_path, """
+[task.thinker]
+temperature = 0.3
+timeout = 180
+max_retries = 1
+[[task.thinker.models]]
+base_url_env = "DS_BASE_URL"
+model_env = "DS_MODEL"
+api_key_env = "DEEPSEEK_API_KEY"
+""")
+        monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
+        monkeypatch.setenv("DS_BASE_URL", "https://api.***REMOVED***.com")
+        monkeypatch.setenv("DS_MODEL", "***REMOVED***")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+        models.reset_slots()
+        spec = models._load_slots()["thinker"].specs[0]
+        assert spec.timeout == 180.0 and spec.max_retries == 1
+        chat = models._build_chat(spec)
+        assert chat.request_timeout == 180.0 and chat.max_retries == 1
+        models.reset_slots()
+
+    def test_default_timeout_unchanged(self):
+        """不配的槽维持 60s×3 旧行为（闲聊槽的防挂保护不动）。"""
+        spec = models.ModelSpec(base_url="https://x/v1", model="m", api_key="k")
+        chat = models._build_chat(spec)
+        assert chat.request_timeout == 60.0 and chat.max_retries == 3
+
+    def test_entry_level_overrides_slot(self, tmp_path, monkeypatch):
+        """条目级覆盖槽级（同 temperature/max_tokens 的合并语义）。"""
+        toml = _write(tmp_path, """
+[task.thinker]
+timeout = 180
+[[task.thinker.models]]
+base_url_env = "DS_BASE_URL"
+model_env = "DS_MODEL"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout = 30
+""")
+        monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
+        monkeypatch.setenv("DS_BASE_URL", "https://api.***REMOVED***.com")
+        monkeypatch.setenv("DS_MODEL", "***REMOVED***")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
+        models.reset_slots()
+        assert models._load_slots()["thinker"].specs[0].timeout == 30.0
+        models.reset_slots()

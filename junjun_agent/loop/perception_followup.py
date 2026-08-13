@@ -42,8 +42,9 @@ def schedule(session, entries: List[dict]) -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(_followup(session, fresh),
-                     name=f"perception-followup-{chat_id}")
+    from junjun_core.bg_tasks import fire_and_forget
+    fire_and_forget(_followup(session, fresh),
+                    name=f"perception-followup-{chat_id}")
     logger.info(f"[{chat_id}] 感知后续已登记: {len(fresh)} 项在途"
                 f"（{','.join(_KIND_NAMES.get(e['kind'], e['kind']) for e in fresh)}）")
 

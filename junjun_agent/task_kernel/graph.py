@@ -460,7 +460,9 @@ async def approval_hook(session, meta) -> bool:
         return False
     plan_id = next(iter(runner.pending_approvals))  # FIFO：一次只批最早一单
     info = runner.pending_approvals.get(plan_id, {})
-    asyncio.create_task(runner.resume(plan_id, decision))
+    from junjun_core.bg_tasks import fire_and_forget
+    fire_and_forget(runner.resume(plan_id, decision),
+                    name=f"task-kernel-resume-{plan_id}")
     ack = "好，这步放行。" if decision else "行，这步跳过。"
     try:
         from junjun_agent.outbound import send_proactive

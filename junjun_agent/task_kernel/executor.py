@@ -21,6 +21,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from junjun_core.bg_tasks import fire_and_forget
 from junjun_core.contracts import ReplySegment
 from junjun_core.observability import get_logger
 from junjun_agent.task_kernel.plan import (
@@ -162,7 +163,9 @@ class TaskKernel:
         回退对话通道等于装死）。仅灰度关闭时返回 None。"""
         if not enabled():
             return None
-        asyncio.create_task(
+        # 强引用后台任务：裸 create_task 会被 GC 在任意 await 点收走
+        # （2026-08-13 生产实锤：规划任务跑 8 分钟后蒸发，无日志无汇报）
+        fire_and_forget(
             self._plan_and_run(text, chat_id=chat_id, user_id=user_id,
                                callbacks=callbacks),
             name=f"task-kernel-plan-{chat_id[-12:]}")
@@ -200,10 +203,10 @@ class TaskKernel:
         if engine() == "langgraph":
             _apply_approval_gates(plan)
             from junjun_agent.task_kernel import graph as tk_graph
-            asyncio.create_task(tk_graph.runner.submit(plan),
-                                name=f"task-kernel-lg-{plan.plan_id}")
+            fire_and_forget(tk_graph.runner.submit(plan),
+                            name=f"task-kernel-lg-{plan.plan_id}")
         else:
-            asyncio.create_task(self._run(plan), name=f"task-kernel-{plan.plan_id}")
+            fire_and_forget(self._run(plan), name=f"task-kernel-{plan.plan_id}")
         logger.info(f"[{chat_id}] 复杂任务规划完成（{len(plan.steps)} 步，"
                     f"{engine()} 引擎）: {text[:40]}")
 
