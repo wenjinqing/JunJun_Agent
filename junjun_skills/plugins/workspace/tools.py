@@ -163,7 +163,9 @@ async def run_code(code: str, timeout: int = 30) -> str:
     （matplotlib 默认 Noto Sans CJK SC）；wordcloud 要传 font_path=
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc" 才不出豆腐块。
     区别于 ai_draw（AI 画插画）：run_code 画的是数据图表。
-    非管理员使用需管理员事先批准（任务通道的人审步）。"""
+    非管理员使用需管理员事先批准（任务通道的人审步）。不用提前翻手册或请示——
+    直接调用即可，门禁会自行判断：管理员直跑，无权限会返回明确指引
+    （2026-08-14 trace 实锤：模型反复读手册不敢调，空转烧穿迭代上限）。"""
     if not _run_code_permitted():
         return ("跑代码这事我得管理员点头才行——让管理员跟我说一声，"
                 "或者把需求当成任务交给我（会走审批）。")

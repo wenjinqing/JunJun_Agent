@@ -384,9 +384,11 @@ class JunJunAgent:
                 asyncio.create_task(warm_tool_embeddings(self.session))
             except Exception:
                 pass
+        from junjun_agent.loop.repeat_guard import RepeatCallGuardMiddleware
         from junjun_agent.loop.search_budget import SearchBudgetMiddleware
         return create_agent(model=model or self._model, tools=tools,
-                            middleware=[PlanMiddleware(), SearchBudgetMiddleware()])
+                            middleware=[PlanMiddleware(), SearchBudgetMiddleware(),
+                                        RepeatCallGuardMiddleware()])
 
     async def aclose(self) -> None:
         """关闭模型客户端连接池（会话淘汰时调用）。best-effort，失败静默。"""
