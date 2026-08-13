@@ -152,7 +152,7 @@ class _FakeClient:
 @pytest.fixture()
 def fake_sandbox(monkeypatch):
     _FakeClient.posts = []
-    # 沙箱客户端走 junjun_core.http 工厂（trust_env=False），补丁打在工厂入口
+    # 沙箱客户端走 junjun_core.http_client 工厂（trust_env=False），补丁打在工厂入口
     monkeypatch.setattr(wt, "make_async_client", lambda **kw: _FakeClient())
     return _FakeClient.posts
 

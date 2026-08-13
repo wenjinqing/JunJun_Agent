@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from junjun_core.http import make_async_client, make_client
+from junjun_core.http_client import make_async_client, make_client
 
 
 class TestTrustEnvDefault:

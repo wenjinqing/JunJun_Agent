@@ -28,7 +28,7 @@ import httpx
 from langchain_core.tools import tool
 
 from junjun_core.format import fmt_size
-from junjun_core.http import make_async_client
+from junjun_core.http_client import make_async_client
 from junjun_core.observability import get_logger
 
 logger = get_logger("plugin.workspace")

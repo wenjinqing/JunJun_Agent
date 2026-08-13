@@ -85,7 +85,7 @@ async def fetch_direct_link(share_url: str, pwd: str = "") -> dict:
     if pwd:
         params["pwd"] = pwd
     try:
-        from junjun_core.http import make_async_client
+        from junjun_core.http_client import make_async_client
         async with make_async_client(timeout=_TIMEOUT) as client:  # 本机服务，绝不走系统代理
             resp = await client.get(f"{_API_BASE}/json/parser", params=params)
         try:
