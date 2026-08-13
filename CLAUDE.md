@@ -1,6 +1,8 @@
 # JunJun_Agent 仓库守则
 
-QQ 机器人「君君」单仓 monorepo。北极星指标：像真人。
+QQ 机器人「君君」单仓 monorepo。北极星：做一个优秀的通用 agent
+（2026-08-13 用户拍板换轨——原「像真人」降为前端体验指标之一；
+QQ 是前端之一，不是全部）。
 
 ## 硬安全约束（任何任务都必须遵守）
 
@@ -17,7 +19,8 @@ QQ 机器人「君君」单仓 monorepo。北极星指标：像真人。
 ## 工作方式
 
 - **边做边 commit**，方便出错回滚；提交信息用中文、说明为什么。
-- 全量回归：`uv run python -m pytest tests/ -q`（基线 1258 绿）。
+- 全量回归：`uv run python -m pytest tests/ -q`（规模以实际输出为准，
+  2026-08-13 约 1749 条——数字会漂移，别拿旧基线当判据）。
 - 决策评测（真实 LLM，花 API 额度）：`uv run python scripts/eval_golden.py`
   ——golden case 在 `tests/eval/golden_cases.jsonl`，改 prompt/工具掩码/模型前后各跑一次对比。
 - 功能体检：`uv run python scripts/functional_check.py --pytest`。
