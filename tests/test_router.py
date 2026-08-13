@@ -58,3 +58,70 @@ class TestRouteToTask:
         assert route_to_task("帮我看看这份调研的摘要写得行不行") is False
         # 真产出诉求仍然命中
         assert route_to_task("帮我查资料整理成一份行业报告") is True
+
+
+class TestRouteWidening20260813:
+    """2026-08-13 加宽（「写一份研究笔记」漏路由——疯狂搜索事故第一环）：
+    重产出委托 / 查询×提醒链 / 文件加工链 / 发布链扩展。每条都配误判回归。"""
+
+    # ---- 命中：新信号 ----
+    def test_heavy_deliverable(self):
+        assert route_to_task("写一份研究笔记") is True
+        assert route_to_task("帮我做一份塞尔达的攻略") is True
+        assert route_to_task("今天有什么科技新闻，给我整一份简报") is True
+
+    def test_query_then_remind_chain(self):
+        assert route_to_task("查一下明天北京天气，如果下雨就提醒我带伞") is True
+        assert route_to_task("查一下下周三有什么电影上映，上映前一天提醒我买票") is True
+
+    def test_file_process_chain(self):
+        assert route_to_task("把工作区的 notes.md 转成表格存回去") is True
+        assert route_to_task("我刚发了个表格过来，帮我统计一下里面的销售额") is True
+        assert route_to_task("用工作区的数据画个趋势图存起来") is True
+
+    def test_publish_chain_widened(self):
+        """发布必须走任务通道才有人审门（对话通道直发没门）。"""
+        assert route_to_task("搜最近科技新闻写个综述发到空间") is True
+        assert route_to_task("看个 B 站热门视频，把感想发到空间") is True
+
+    def test_produce_noun_completion(self):
+        assert route_to_task("查查 2026 年有什么新出的好评游戏，给我个推荐清单") is True
+        assert route_to_task("搜一下新能源汽车的最新政策，整理要点给我") is True
+        assert route_to_task("翻翻咱们这周都聊过什么，给我个总结") is True
+
+    # ---- 误判回归：日常句子不许派单 ----
+    def test_salary_is_not_file(self):
+        """「刚发」必须配文件类名词——工资是日常不是派单。"""
+        assert route_to_task("我刚发工资了，今晚搓一顿") is False
+        assert route_to_task("我刚发工资了，帮我存起来") is False
+
+    def test_plain_reminder_stays_chat(self):
+        """单步提醒走对话通道的 set_reminder，不派任务。"""
+        assert route_to_task("提醒我明天下午三点开会") is False
+
+    def test_light_produce_stays_chat(self):
+        """轻产出（段子/主意/小作文）单轮合成足够，不派任务。"""
+        assert route_to_task("写个段子逗我开心") is False
+        assert route_to_task("帮我出个主意呗") is False
+
+    def test_single_query_stays_chat(self):
+        assert route_to_task("搜一下附近哪家火锅好吃") is False
+        assert route_to_task("看看这个视频拍得怎么样") is False
+
+    def test_question_guard_beats_produce(self):
+        """疑问句守卫优先于产出信号（「做个表格那么难吗」是吐槽）。"""
+        assert route_to_task("做个表格那么难吗") is False
+        assert route_to_task("今天有什么新闻吗") is False
+
+    def test_negation_guard_beats_chain(self):
+        assert route_to_task("帮我查一下天气，如果热就算了") is False
+
+    def test_subscription_stays_chat(self):
+        """盯梢/订阅是对话通道 subscribe_updates 的专属地盘——「盯…更新了
+        告诉我」派成一次性任务是误路由（2026-08-13 golden_cases 实锤）。"""
+        assert route_to_task("帮我盯一下UP主影视飓风，更新了第一时间告诉我") is False
+        assert route_to_task("订阅一下这个作者，出新了叫我") is False
+
+    def test_plain_summary_stays_chat(self):
+        """「总结一下聊的」是单步蒸馏（无来源动作），对话通道足够。"""
+        assert route_to_task("总结一下我们今天聊了啥") is False
