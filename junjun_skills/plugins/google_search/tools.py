@@ -27,11 +27,50 @@ def _env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
-DEFAULT_ENGINE: str = _env("GOOGLE_SEARCH_DEFAULT_ENGINE", "google")
+# 默认引擎 2026-08-13 改 duckduckgo：本机实测 google 过代理解析 0 条
+# （抓取页结构脆弱）、sogou 过滤后 0 条，ddg/bing/tavily 健康。
+# env GOOGLE_SEARCH_DEFAULT_ENGINE 仍可覆盖。
+DEFAULT_ENGINE: str = _env("GOOGLE_SEARCH_DEFAULT_ENGINE", "duckduckgo")
 DEFAULT_NUM_RESULTS: int = int(_env("GOOGLE_SEARCH_DEFAULT_NUM_RESULTS", "10"))
 
 TAVILY_API_KEY: str = _env("TAVILY_API_KEY", "")
 YOU_API_KEY: str = _env("YOU_API_KEY", "")
+
+
+def _normalize_proxy(server: str) -> str:
+    """注册表 ProxyServer 串 -> 代理 URL。
+    「127.0.0.1:7890」或分协议串「http=h:1;https=h:2」统一成 http:// URL。"""
+    server = (server or "").strip()
+    if not server:
+        return ""
+    if "=" in server:
+        parts = dict(p.split("=", 1) for p in server.split(";") if "=" in p)
+        server = (parts.get("https") or parts.get("http") or "").strip()
+    if not server:
+        return ""
+    return server if "://" in server else f"http://{server}"
+
+
+def _system_proxy() -> str:
+    """Windows 系统代理（注册表）；未启用/非 Windows 返回 ""。
+
+    2026-08-13 疯狂搜索事故环境层根因：引擎组直连 Google/DDG 全不通只剩
+    bing 兜底出垃圾——本机代理就在系统设置里，引擎却裸连。env SEARCH_PROXY
+    优先（显式覆盖），缺省回退系统代理。
+    """
+    try:
+        import winreg
+        with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") as k:
+            enabled, _ = winreg.QueryValueEx(k, "ProxyEnable")
+            server, _ = winreg.QueryValueEx(k, "ProxyServer")
+        return _normalize_proxy(server) if enabled else ""
+    except Exception:
+        return ""
+
+
+SEARCH_PROXY: str = _env("SEARCH_PROXY", "") or _system_proxy()
 
 # ---------------------------------------------------------------------------
 # Engine registry
@@ -45,7 +84,8 @@ ENGINE_MAP: Dict[str, Any] = {
     "you": YouSearchEngine,
 }
 
-ENGINE_PRIORITY: List[str] = ["google", "bing", "sogou", "duckduckgo", "tavily", "you"]
+# 优先级按本机实测健康度排（2026-08-13）：google 抓取 0 条垫底，sogou 过滤常空
+ENGINE_PRIORITY: List[str] = ["duckduckgo", "bing", "tavily", "sogou", "google", "you"]
 
 # 缺可选依赖的引擎（ImportError）：本轮会话永久跳过，不每查询空转刷告警
 _PERMANENTLY_BROKEN: set = set()
@@ -58,6 +98,10 @@ def _build_engine(name: str) -> Any:
         config["api_keys"] = [TAVILY_API_KEY]
     if name == "you" and YOU_API_KEY:
         config["api_keys"] = [YOU_API_KEY]
+    if SEARCH_PROXY:
+        # 国产引擎（bing/sogou）经规则代理（Clash 类）通常直连回源，不亏；
+        # 全局代理也能用。不设代理的引擎在这台机器上全灭（2026-08-13 实锤）。
+        config["proxy"] = SEARCH_PROXY
     return ENGINE_MAP[name](config=config)
 
 
