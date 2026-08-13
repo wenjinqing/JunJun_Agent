@@ -8,8 +8,15 @@ dependencies = [
     "numpy",
     "peewee",
     "httpx",
-    "junjun-core"
+    "junjun-core",
+    "junjun-llm",            # embedding 客户端
+    "junjun-adapter-napcat"  # voice.py 惰性 import（发语音条）
 ]
+
+# 可选：KG 图检索（PPR）。缺失/加载失败时 knowledge.py 自动降级纯
+# embedding/关键词检索——默认不装，启用：uv sync --extra kg
+[project.optional-dependencies]
+kg = ["quick-algo>=0.1.4"]
 
 [build-system]
 requires = ["hatchling"]

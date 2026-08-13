@@ -96,6 +96,26 @@ class TestKnowledgeBase:
         paras = await kb.search("五条悟", model=_FakeOpenIE())
         assert paras  # 无图也能关键词命中
 
+    def test_quick_algo_native_load_failure_degrades(self, tmp_path, monkeypatch):
+        """2026-08-13 审查 P2：原生扩展装了但加载失败（缺 DLL/架构不符）抛的是
+        OSError 而非 ImportError——只捕 ImportError 会让 KnowledgeBase 构造直接炸，
+        knowledge_skills 工具首轮调用即死。"""
+        import sys
+        import types
+        from junjun_memory import knowledge as kmod
+
+        broken = types.ModuleType("quick_algo")
+
+        def _boom(name):
+            raise OSError("DLL load failed: 模拟原生库加载失败")
+
+        broken.__getattr__ = _boom
+        monkeypatch.setitem(sys.modules, "quick_algo", broken)
+
+        assert kmod.KnowledgeBase._probe_quick_algo() is False
+        kb = kmod.KnowledgeBase(data_dir=tmp_path)   # 不炸，降级
+        assert kb._has_quick_algo is False
+
     @pytest.mark.asyncio
     async def test_skills(self, tmp_path, monkeypatch):
         from junjun_memory import knowledge as kmod

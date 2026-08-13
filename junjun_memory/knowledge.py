@@ -72,8 +72,12 @@ class KnowledgeBase:
         try:
             from quick_algo import di_graph, pagerank  # noqa: F401
             return True
-        except ImportError:
-            logger.warning("quick_algo 不可用，知识库降级 embedding/关键词检索（无 PPR）")
+        except Exception as e:
+            # 2026-08-13 审查 P2：原生扩展装了但加载失败（缺 DLL/架构不符）
+            # 抛 OSError 而非 ImportError——可选依赖的任何加载失败都必须降级，
+            # 而不是让 KnowledgeBase 构造炸掉（knowledge_skills 工具首轮即死）
+            logger.warning(f"quick_algo 不可用（{type(e).__name__}），"
+                           "知识库降级 embedding/关键词检索（无 PPR）")
             return False
 
     # ---------- 持久化 ----------
