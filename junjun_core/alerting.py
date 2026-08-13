@@ -105,7 +105,29 @@ async def daily_usage_report() -> None:
     lines = [f"· {r.request_type or '?'}：{r.n} 次，in={int(r.pt or 0):,} out={int(r.ct or 0):,}"
              for r in sorted(rows, key=lambda r: -(r.pt or 0) - (r.ct or 0))]
     total = sum(int(r.pt or 0) + int(r.ct or 0) for r in rows)
-    await _safe_notify(f"【日报】最近 24h token 用量（共 {total:,}）：\n" + "\n".join(lines))
+    tools_line = _tool_usage_line(since)
+    await _safe_notify(f"【日报】最近 24h token 用量（共 {total:,}）：\n"
+                       + "\n".join(lines) + tools_line)
+
+
+def _tool_usage_line(since: float) -> str:
+    """24h 工具调用 Top5（含失败数）——统计只入库没人看等于没统计。"""
+    try:
+        from junjun_core.database import ToolUsage
+        trows = list(ToolUsage.select(ToolUsage.tool, ToolUsage.ok)
+                     .where(ToolUsage.time >= since))
+    except Exception:
+        return ""
+    if not trows:
+        return ""
+    stats: dict = {}
+    for r in trows:
+        s = stats.setdefault(r.tool, [0, 0])
+        s[0] += 1
+        s[1] += 0 if r.ok else 1
+    top = sorted(stats.items(), key=lambda kv: -kv[1][0])[:5]
+    return "\n工具 Top5：" + "，".join(
+        f"{t}×{c}" + (f"(败{f})" if f else "") for t, (c, f) in top)
 
 
 def _reset_for_test() -> None:

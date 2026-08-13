@@ -315,10 +315,23 @@ class BlockedUser(BaseModel):
         indexes = ((("chat_id", "user_id"), True),)
 
 
+class ToolUsage(BaseModel):
+    """工具使用统计（2026-08-13 审查 P1：26 个插件零使用统计——哪些工具真有
+    人用、哪些常年吃灰/常败全靠猜，投资/裁剪/掩码排序都需要这个数据）。
+    registry 错误包装层单点挂钩；随 LLMUsage 同窗清理。"""
+    id = AutoField()
+    bot_id = CharField(default=_bot_id, index=True)
+    time = FloatField(index=True)
+    tool = CharField(index=True)
+    ok = BooleanField(default=True)
+    error_kind = CharField(default="")    # 失败类别：网络/参数/权限/限流/未知
+    chat_id = CharField(default="")
+
+
 ALL_TABLES = [Messages, Images, LLMUsage, PersonInfo, Jargon, Expression, Emoji, ReminderTasks,
               OnlineTime, Intimacy, SelfMood, DiaryEntry, Subscription, AsyncJob, SelfIdentity,
               UserSceneProfile, Intention, SkillPatch, ShortTermMemory, OutboxMessage,
-              BlockedUser]
+              BlockedUser, ToolUsage]
 
 
 def _ensure_columns(database, models=None) -> None:

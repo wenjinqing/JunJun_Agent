@@ -244,7 +244,7 @@ def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
 
         async def wrapped(*args, _orig=original, **kwargs):
             import asyncio
-            from junjun_skills import breaker, health, patches
+            from junjun_skills import breaker, health, patches, usage
             chat_id = _current_chat()
             if breaker.is_open(chat_id, name):
                 logger.warning(f"工具 {name} 连续失败熔断，本次调用被拦截")
@@ -256,16 +256,18 @@ def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
                 breaker.note_failure(chat_id, name)
                 health.record_fail(name, _classify_error(e), str(e))
                 patches.log_failure(name, _classify_error(e), str(e))
+                usage.record(name, False, _classify_error(e), chat_id)
                 return _tool_error_text(name, e)
             breaker.note_success(chat_id, name)
             health.record_ok(name)
+            usage.record(name, True, chat_id=chat_id)
             return result
         skill.coroutine = wrapped
     elif getattr(skill, "func", None) is not None:
         original_sync = skill.func
 
         def wrapped_sync(*args, _orig=original_sync, **kwargs):
-            from junjun_skills import breaker, health, patches
+            from junjun_skills import breaker, health, patches, usage
             chat_id = _current_chat()
             if breaker.is_open(chat_id, name):
                 logger.warning(f"工具 {name} 连续失败熔断，本次调用被拦截")
@@ -276,9 +278,11 @@ def _wrap_error_feedback(skill: BaseTool) -> BaseTool:
                 breaker.note_failure(chat_id, name)
                 health.record_fail(name, _classify_error(e), str(e))
                 patches.log_failure(name, _classify_error(e), str(e))
+                usage.record(name, False, _classify_error(e), chat_id)
                 return _tool_error_text(name, e)
             breaker.note_success(chat_id, name)
             health.record_ok(name)
+            usage.record(name, True, chat_id=chat_id)
             return result
         skill.func = wrapped_sync
     return skill

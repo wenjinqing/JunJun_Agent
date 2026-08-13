@@ -31,8 +31,10 @@ async def run_cleanup() -> None:
 def _do_cleanup(cutoff: float, msg_cutoff: float = 0.0) -> None:
     """实际清理（db_writer executor 线程内同步执行）。"""
     try:
-        from junjun_core.database import LLMUsage, Jargon, Messages
+        from junjun_core.database import LLMUsage, Jargon, Messages, ToolUsage
         n_usage = LLMUsage.delete().where(LLMUsage.time < cutoff).execute()
+        # 工具统计与 token 用量同窗（同属遥测数据）
+        n_usage += ToolUsage.delete().where(ToolUsage.time < cutoff).execute()
         # 低可信黑话：只出现过 1 次且 30 天没再出现的（id 无时间戳，用保守策略：
         # count==1 的行在每轮清理时衰减标记——简化为直接清 count==1 且总量超 5000 时）
         n_jargon = 0
