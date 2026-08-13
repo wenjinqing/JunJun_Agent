@@ -155,11 +155,16 @@ async def run_code(code: str, timeout: int = 30) -> str:
     timeout = max(1, min(int(timeout), 30))
     from junjun_skills.builtin.memory_skills import current_chat_id
     workdir = _safe_name(current_chat_id.get("") or "unknown")
+    import os
+    headers = {}
+    if os.environ.get("SANDBOX_TOKEN"):
+        headers["X-Sandbox-Token"] = os.environ["SANDBOX_TOKEN"]
     try:
         async with httpx.AsyncClient(timeout=timeout + 20) as client:
             resp = await client.post(f"{_sandbox_url()}/run",
                                      json={"code": code, "timeout": timeout,
-                                           "workdir": workdir})
+                                           "workdir": workdir},
+                                     headers=headers)
     except httpx.HTTPError as e:
         err = RuntimeError(f"沙箱服务不可达: {type(e).__name__}: {e}")
         err.tool_suggestion = ("沙箱服务没启动，重试无意义；向用户说明跑代码的功能暂时不可用，"

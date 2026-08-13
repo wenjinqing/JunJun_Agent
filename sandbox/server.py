@@ -21,11 +21,12 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 ROOT = Path(os.environ.get("SANDBOX_WORKSPACE_ROOT", "data/workspace")).resolve()
 IMAGE = os.environ.get("SANDBOX_IMAGE", "junjun-sandbox:latest")
+_TOKEN = os.environ.get("SANDBOX_TOKEN", "")   # 共享鉴权；空 = 不强制（仅本机回环）
 MAX_TIMEOUT = 30            # 代码执行硬上限（秒）
 GRACE = 8                   # 容器启停宽限（秒）
 MAX_CODE = 64 * 1024        # 代码体积上限
@@ -45,6 +46,16 @@ class RunReq(BaseModel):
 def _safe(s: str) -> str:
     """workdir -> 目录名片段；与插件侧 _safe_name 同一规则（清洗是幂等的）。"""
     return re.sub(r"[^A-Za-z0-9_.-]", "_", s)[:64] or "default"
+
+
+def _resolve_workdir(raw: str) -> Path:
+    """workdir 必须解析到 ROOT 之内的子目录。2026-08-13 审查 P0：_safe 放行点号，
+    ".." 原样穿过后 wd = data/——整个生产库和号池被挂进容器。resolve 后断言归属，
+    "."（=ROOT 本身，跨会话全通）同样拒。"""
+    wd = (ROOT / _safe(raw)).resolve()
+    if wd == ROOT or ROOT not in wd.parents:
+        raise ValueError(f"非法 workdir: {raw!r}")
+    return wd
 
 
 def _snapshot(wd: Path) -> dict:
@@ -101,9 +112,16 @@ async def _docker_kill(name: str) -> None:
 
 
 @app.post("/run")
-async def run(req: RunReq):
+async def run(req: RunReq, x_sandbox_token: str = Header("")):
+    # 可选共享 token：.env 设了 SANDBOX_TOKEN 就强制鉴权（本机多进程环境
+    # 「绑回环就够」的假设太脆，2026-08-13 审查）；未设置 = 仅本机开发，放行。
+    if _TOKEN and x_sandbox_token != _TOKEN:
+        raise HTTPException(401, "bad sandbox token")
+    try:
+        wd = _resolve_workdir(req.workdir)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     timeout = max(1, min(int(req.timeout), MAX_TIMEOUT))
-    wd = ROOT / _safe(req.workdir)
     wd.mkdir(parents=True, exist_ok=True)
     before = _snapshot(wd)
     name = f"jj-sandbox-{uuid.uuid4().hex[:8]}"
