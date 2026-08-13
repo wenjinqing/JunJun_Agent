@@ -55,7 +55,11 @@ env = { AMAP_MAPS_API_KEY = "${AMAP_MAPS_API_KEY}" }
 
 # ---------- 网页抓取 -> markdown（官方参考实现，免 key） ----------
 [servers.fetch]
-enable = true
+# 2026-08-14 禁用：与 workspace 插件 fetch_page 功能重复，而 mcp-server-fetch
+# 没有 SSRF 防护（fetch_page 有）——trace 0741b093 实锤模型拿 mcp_fetch 探
+# hallucinated 的 localhost:8080 端点；云主机上同打法可摸 169.254.169.254
+# 元数据。deep_research 的全文读取已改优先走 fetch_page，禁此无损。
+enable = false
 command = "uvx"
 # --with mcp==1.8.0：mcp-server-fetch 旧代码 import mcp.shared.exceptions.McpError，
 # 新版 mcp SDK 已移除，锁 1.8.0（2026-07-29 实测可用）

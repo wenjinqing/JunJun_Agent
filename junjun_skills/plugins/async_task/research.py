@@ -66,18 +66,23 @@ async def _default_search(query: str, num: int) -> list:
     return await _search_with_fallback(query, num)
 
 
-def _mcp_fetch_tool():
-    """MCP 抓取工具（名字含 fetch），没有则 None。"""
+def _fetch_tool():
+    """网页全文读取工具：优先 fetch_page（workspace 插件，自带 SSRF 防护）；
+    兜底 MCP fetch（无防护，2026-08-14 起默认禁用——模型曾拿它探 hallucinated
+    localhost 端点，云主机上可被打到 169.254.169.254 元数据）。都没有则 None。"""
     from junjun_skills.registry import get_tools
+    fallback = None
     for t in get_tools():
-        if t.name.startswith("mcp_") and "fetch" in t.name:
+        if t.name == "fetch_page":
             return t
-    return None
+        if fallback is None and t.name.startswith("mcp_") and "fetch" in t.name:
+            fallback = t
+    return fallback
 
 
 async def _default_fetch(url: str, max_chars: int) -> str:
-    """MCP 读全文；不可用/失败返回 ""（调用方降级用摘要）。"""
-    tool = _mcp_fetch_tool()
+    """读全文；不可用/失败返回 ""（调用方降级用摘要）。"""
+    tool = _fetch_tool()
     if tool is None:
         return ""
     try:

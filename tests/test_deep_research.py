@@ -83,6 +83,44 @@ class TestPlan:
         assert await research._plan("研究A", _Boom()) == ["研究A"]
 
 
+class TestFetchToolSelection:
+    """2026-08-14：fetch MCP（mcp-server-fetch 无 SSRF 防护，模型曾拿它探
+    hallucinated localhost 端点）默认禁用后，全文读取必须优先走自带
+    SSRF 防护的 fetch_page，全无时降级空串不炸流水线。"""
+
+    @staticmethod
+    def _register(name):
+        from langchain_core.tools import tool
+        from junjun_skills import registry
+
+        @tool(name)
+        def _t(x: str = "") -> str:
+            """测试工具。
+
+            Args:
+                x: 输入
+            """
+            return "ok"
+
+        registry.register(_t)
+
+    def test_prefers_fetch_page(self):
+        self._register("mcp_fetch")
+        self._register("fetch_page")
+        assert research._fetch_tool().name == "fetch_page"
+
+    def test_mcp_fetch_as_fallback(self):
+        self._register("mcp_fetch")
+        assert research._fetch_tool().name == "mcp_fetch"
+
+    @pytest.mark.asyncio
+    async def test_none_degrades_empty(self, monkeypatch):
+        import junjun_skills.registry as reg
+        monkeypatch.setattr(reg, "get_tools", lambda *a, **kw: [])
+        assert research._fetch_tool() is None
+        assert await research._default_fetch("http://example.com", 100) == ""
+
+
 class TestCollect:
     @pytest.mark.asyncio
     async def test_dedupe_by_url_and_fetch(self, env):
