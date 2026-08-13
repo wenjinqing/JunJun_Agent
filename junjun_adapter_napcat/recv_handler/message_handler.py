@@ -6,6 +6,8 @@ from maim_message import (
     UserInfo, GroupInfo, Seg, BaseMessageInfo, MessageBase, FormatInfo,
 )
 
+from junjun_core.format import fmt_size
+
 from ..config import get_config
 from ..message_sending import message_send_instance
 
@@ -110,17 +112,6 @@ async def _plain_text_of(message, group_id: str = "") -> str:
             name = await _resolve_nickname(str(d.get("qq", "")), group_id)
             parts.append(f"@{name} ")
     return "".join(parts).strip()
-
-
-def _fmt_size(n: int) -> str:
-    """文件大小人性化：1234567 -> 1.2MB。"""
-    if n <= 0:
-        return "大小未知"
-    for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024 or unit == "GB":
-            return f"{n:.1f}{unit}" if unit != "B" else f"{n}B"
-        n /= 1024
-    return f"{n}B"
 
 
 class MessageHandler:
@@ -278,7 +269,7 @@ class MessageHandler:
                 url = str(d.get("url") or "")
                 if not url:
                     url = await self._resolve_file_url(d, group_id)
-                segs.append(Seg(type="text", data=f"[文件：{name}（{_fmt_size(size)}）]"))
+                segs.append(Seg(type="text", data=f"[文件：{name}（{fmt_size(size)}）]"))
                 if url:
                     import json as _json
                     segs.append(Seg(type="file_ref", data=_json.dumps(

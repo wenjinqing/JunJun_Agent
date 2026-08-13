@@ -96,11 +96,12 @@ class TestAdapterFileSegment:
         assert not [s for s in segs if s.type == "file_ref"]
 
     def test_fmt_size(self):
-        from junjun_adapter_napcat.recv_handler.message_handler import _fmt_size
-        assert _fmt_size(0) == "大小未知"
-        assert _fmt_size(512) == "512B"
-        assert _fmt_size(2048) == "2.0KB"
-        assert _fmt_size(1_500_000) == "1.4MB"
+        from junjun_core.format import fmt_size
+        assert fmt_size(0) == "大小未知"
+        assert fmt_size(512) == "512B"
+        assert fmt_size(2048) == "2.0KB"
+        assert fmt_size(1_500_000) == "1.4MB"
+        assert fmt_size(2 * 1024**3) == "2.0GB"   # GB 档（旧 workspace 版没有）
 
 
 # ---------------------------------------------------------------- 网关：file_refs 抽取

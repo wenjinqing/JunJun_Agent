@@ -27,6 +27,7 @@ from pathlib import Path
 import httpx
 from langchain_core.tools import tool
 
+from junjun_core.format import fmt_size
 from junjun_core.http import make_async_client
 from junjun_core.observability import get_logger
 
@@ -96,14 +97,6 @@ def _resolve(user_path: str) -> Path:
     if target != base and base not in target.parents:
         raise ValueError("路径越出工作区，已拒绝")
     return target
-
-
-def _fmt_size(n: int) -> str:
-    if n < 1024:
-        return f"{n}B"
-    if n < 1024 * 1024:
-        return f"{n / 1024:.1f}KB"
-    return f"{n / 1024 / 1024:.1f}MB"
 
 
 # ---------------------------------------------------------------- run_code 门禁与预检
@@ -213,7 +206,7 @@ async def run_code(code: str, timeout: int = 30) -> str:
     files = data.get("files") or []
     if files:
         parts.append("产生的文件（已存到工作区）："
-                     + "、".join(f"{f['path']}（{_fmt_size(int(f.get('size', 0)))}）"
+                     + "、".join(f"{f['path']}（{fmt_size(int(f.get('size', 0)))}）"
                                 for f in files[:20]))
     if data.get("returncode") not in (0, None) and not out and not err_text:
         parts.append("（无输出）")
@@ -266,7 +259,7 @@ async def workspace_list(subdir: str = "") -> str:
         if p.is_dir():
             entries.append(f"{rel}/")
         else:
-            entries.append(f"{rel}（{_fmt_size(p.stat().st_size)}）")
+            entries.append(f"{rel}（{fmt_size(p.stat().st_size)}）")
         if len(entries) >= _LIST_MAX:
             entries.append(f"……（超过 {_LIST_MAX} 条，截断）")
             break
@@ -284,7 +277,7 @@ async def workspace_send(path: str) -> str:
         raise ValueError(f"工作区里没有「{path}」这个文件；先调 workspace_list 看看")
     size = target.stat().st_size
     if size > _SEND_MAX_BYTES:
-        raise ValueError(f"文件太大（{_fmt_size(size)}，上限 50MB），发不出去")
+        raise ValueError(f"文件太大（{fmt_size(size)}，上限 50MB），发不出去")
     kind, cid = _chat_target()
     if not kind:
         raise RuntimeError("拿不到当前会话，发送失败")
@@ -303,11 +296,11 @@ async def workspace_send(path: str) -> str:
         ok = await napcat_client.upload_group_file(cid, str(target), name=target.name)
         if not ok:
             raise RuntimeError("群文件上传失败（NapCat 未确认）")
-        return f"文件 {path}（{_fmt_size(size)}）已上传到群文件。"
+        return f"文件 {path}（{fmt_size(size)}）已上传到群文件。"
     ok = await napcat_client.upload_private_file(cid, str(target), name=target.name)
     if not ok:
         raise RuntimeError("私聊文件发送失败（NapCat 未确认）")
-    return f"文件 {path}（{_fmt_size(size)}）已发给对方。"
+    return f"文件 {path}（{fmt_size(size)}）已发给对方。"
 
 
 @tool
@@ -346,7 +339,7 @@ async def workspace_save_file(save_as: str = "") -> str:
         data = await _download_capped(url, _SEND_MAX_BYTES)
     except OverflowError:
         raise RuntimeError(f"文件超过 50MB 上限，存不下（声明大小 "
-                           f"{_fmt_size(int(ref.get('size') or 0))}）")
+                           f"{fmt_size(int(ref.get('size') or 0))}）")
     except httpx.HTTPError as e:
         raise RuntimeError(f"文件下载失败: {type(e).__name__}（链接可能已过期，"
                            f"让对方重发一次）") from e
@@ -354,7 +347,7 @@ async def workspace_save_file(save_as: str = "") -> str:
     target.write_bytes(data)
     logger.info(f"工作区存文件: {target} ({len(data)}B, 原名 {ref.get('name')})")
     return (f"已把「{ref.get('name')}」存到工作区：{name}"
-            f"（{_fmt_size(len(data))}）。接下来可以用 run_code 处理它。")
+            f"（{fmt_size(len(data))}）。接下来可以用 run_code 处理它。")
 
 
 async def _download_capped(url: str, cap: int) -> bytes:
