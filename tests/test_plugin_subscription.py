@@ -273,6 +273,8 @@ class TestRemoveWhere:
         ltm._index = None
         ltm._vec_map = []
         ltm._loaded = True
+        import threading
+        ltm._lock = threading.RLock()  # __new__ 绕过构造函数，共享态锁得手摆
         import asyncio
         asyncio.run(ltm.add("温衿青让君君盯着作者16689973", "qq:1:group"))
         asyncio.run(ltm.add("白菜兔今天吃了火锅", "qq:1:group"))

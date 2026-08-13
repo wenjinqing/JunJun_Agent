@@ -127,8 +127,9 @@ def register_default_tasks() -> None:
     """注册阶段 4 默认任务（幂等由 add 覆盖保证）。"""
 
     async def memory_forget():
+        # 同步全库扫描+落盘放工作线程（to_thread），别堵事件循环（2026-08-13 审查 P2）
         from junjun_memory.long_term import get_long_term_memory
-        removed = get_long_term_memory().forget()
+        removed = await asyncio.to_thread(get_long_term_memory().forget)
         if removed:
             logger.info(f"记忆遗忘任务: 清理 {removed} 条")
 
@@ -136,13 +137,13 @@ def register_default_tasks() -> None:
         """长期记忆批量落盘：add() 只打脏标记（防 O(n²) 写放大卡事件循环），
         由这里周期落盘。"""
         from junjun_memory.long_term import get_long_term_memory
-        get_long_term_memory().flush()
+        await asyncio.to_thread(get_long_term_memory().flush)
 
     async def memory_dedupe():
         """夜间整理：全局近重合并（写入期去重只吃 top-1/近窗，跨窗漏网的
         同一事实在这里归并）。阈值比写入期更严，宁漏勿错杀。"""
         from junjun_memory.long_term import get_long_term_memory
-        merged = get_long_term_memory().dedupe()
+        merged = await asyncio.to_thread(get_long_term_memory().dedupe)  # O(n²) 比对，同步重活
         if merged:
             logger.info(f"记忆夜间整理: 合并 {merged} 条近重记忆")
 

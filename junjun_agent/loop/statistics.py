@@ -2,8 +2,13 @@
 
 StatisticOutputTask：定期输出运行统计（消息量/回复量/token 用量），数据供 WebUI。
 OnlineTimeRecordTask：每分钟续 OnlineTime.end_timestamp，记录 bot 在线时段。
+
+2026-08-13 审查 P2：两个函数此前是「async 壳包纯同步 peewee」——同步查询在
+事件循环线程上跑，Messages 表一大，每 60s 一次的续期查询都会卡顿消息处理。
+同步核拆出放 asyncio.to_thread（peewee 按线程开连接 + WAL 模式，跨线程安全）。
 """
 
+import asyncio
 import time
 
 from junjun_core.observability import get_logger
@@ -14,8 +19,7 @@ _started_at = time.time()
 _online_record_id = None
 
 
-async def record_online_time() -> None:
-    """调度器任务（60s）：对齐原 OnlineTimeRecordTask——有记录则续期，无则新建。"""
+def _record_online_time_sync() -> None:
     global _online_record_id
     from junjun_core.database import OnlineTime
     now = time.time()
@@ -38,8 +42,12 @@ async def record_online_time() -> None:
         logger.warning(f"在线时长记录失败（忽略）: {e}")
 
 
-async def output_statistics() -> None:
-    """调度器任务：聚合最近 24h 数据打日志。"""
+async def record_online_time() -> None:
+    """调度器任务（60s）：对齐原 OnlineTimeRecordTask——有记录则续期，无则新建。"""
+    await asyncio.to_thread(_record_online_time_sync)
+
+
+def _output_statistics_sync() -> None:
     from junjun_core.database import Messages, LLMUsage
     from peewee import fn
 
@@ -67,3 +75,8 @@ async def output_statistics() -> None:
         )
     except Exception as e:
         logger.warning(f"统计任务失败（忽略）: {e}")
+
+
+async def output_statistics() -> None:
+    """调度器任务：聚合最近 24h 数据打日志。"""
+    await asyncio.to_thread(_output_statistics_sync)

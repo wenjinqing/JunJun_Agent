@@ -96,6 +96,30 @@ class TestLongTermMemory:
         assert all(h.chat_id == "qq:2:group" for h in hits)
 
     @pytest.mark.asyncio
+    async def test_concurrent_add_flush_dedupe_no_corruption(self, tmp_path, fake_embedding):
+        """2026-08-13 审查 P2：flush/forget/dedupe 移进 to_thread 后与事件循环上的
+        add/search 并发——RLock 必须保住 index.ntotal == len(_vec_map) 不变量，
+        且落盘结果可完整重载。"""
+        ltm = LongTermMemory(data_dir=tmp_path)
+
+        async def writer():
+            for i in range(30):
+                await ltm.add(f"并发记忆 {i} 号内容", "c1")
+
+        async def maintenance():
+            for _ in range(10):
+                await asyncio.to_thread(ltm.flush)
+                await asyncio.to_thread(ltm.dedupe, threshold=0.99)
+                await asyncio.sleep(0)
+
+        await asyncio.gather(writer(), maintenance())
+        assert ltm._index.ntotal == len(ltm._vec_map)
+        assert ltm._index.ntotal == sum(1 for it in ltm._items if it.has_vec)
+        ltm2 = LongTermMemory(data_dir=tmp_path)   # 落盘重载不炸、不变量保持
+        ltm2.load()
+        assert ltm2._index.ntotal == len(ltm2._vec_map)
+
+    @pytest.mark.asyncio
     async def test_keyword_fallback_when_embedding_down(self, tmp_path, no_embedding):
         ltm = LongTermMemory(data_dir=tmp_path)
         # embedding 不可用时 add 仍成功（纯文本条目）

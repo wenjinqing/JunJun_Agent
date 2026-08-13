@@ -8,6 +8,7 @@
 """
 
 import json
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,6 +91,11 @@ class LongTermMemory:
         self._vec_map: List[int] = []      # faiss 位置 -> _items 下标
         self._loaded = False
         self._dirty = False                # 有未落盘变更（批量落盘用）
+        # 2026-08-13 审查 P2：flush/forget/dedupe 移进 asyncio.to_thread 工作线程
+        # 后，与事件循环上的 add/search 并发——共享态（_items/_index/_vec_map/
+        # _dirty）全部走这把可重入锁（save/flush、forget/_rebuild/save 有嵌套）。
+        # embed 网络等待一律在锁外，锁内只剩内存操作+落盘。
+        self._lock = threading.RLock()
 
     # ---------- 持久化 ----------
 
@@ -113,24 +119,25 @@ class LongTermMemory:
         恢复策略：主文件损坏先回退 .bak 备份对（上一次良好落盘），
         备份也坏了才重建空库——记忆是不可再生资产，绝不一次损坏就清零。
         """
-        if self._loaded:
-            return
-        self._loaded = True
-        for meta_p, idx_p, tag in (
-            (self._meta_path(), self._index_path(), "主文件"),
-            (self._meta_path().with_suffix(".bak"), self._index_path().with_suffix(".bak"), "备份"),
-        ):
-            try:
-                if self._try_load(meta_p, idx_p):
-                    if tag == "备份":
-                        logger.warning("长期记忆主文件损坏，已从 .bak 备份恢复")
-                    return
-            except Exception as e:
-                logger.warning(f"长期记忆{tag}加载失败: {e}")
-        logger.warning("长期记忆主文件与备份均不可用，重建空库")
-        import faiss
-        self._index = faiss.IndexFlatIP(EMBED_DIM)
-        self._items, self._vec_map = [], []
+        with self._lock:
+            if self._loaded:
+                return
+            self._loaded = True
+            for meta_p, idx_p, tag in (
+                (self._meta_path(), self._index_path(), "主文件"),
+                (self._meta_path().with_suffix(".bak"), self._index_path().with_suffix(".bak"), "备份"),
+            ):
+                try:
+                    if self._try_load(meta_p, idx_p):
+                        if tag == "备份":
+                            logger.warning("长期记忆主文件损坏，已从 .bak 备份恢复")
+                        return
+                except Exception as e:
+                    logger.warning(f"长期记忆{tag}加载失败: {e}")
+            logger.warning("长期记忆主文件与备份均不可用，重建空库")
+            import faiss
+            self._index = faiss.IndexFlatIP(EMBED_DIM)
+            self._items, self._vec_map = [], []
 
     def _try_load(self, meta_p: Path, idx_p: Path) -> bool:
         """尝试从指定文件对加载。文件对不存在返回 False（静默），损坏抛异常。"""
@@ -162,26 +169,27 @@ class LongTermMemory:
         备份在替换【之后】做：崩溃发生在替换中途时，.bak 仍是上一次
         完整良好状态（若在替换前备份，备份永远落后一代，白丢一条记忆）。
         """
-        if self._index is None:
-            return
-        import faiss
-        import shutil
-        tmp_idx = self._index_path().with_suffix(".tmp")
-        tmp_meta = self._meta_path().with_suffix(".tmp")
-        faiss.write_index(self._index, str(tmp_idx))
-        tmp_meta.write_text(json.dumps({
-            "dim": EMBED_DIM, "model": self._model_tag(),
-            "items": [vars(it) for it in self._items],
-        }, ensure_ascii=False), encoding="utf-8")
-        tmp_idx.replace(self._index_path())
-        tmp_meta.replace(self._meta_path())
-        # 主文件对落盘成功 -> 同步为备份对（加载失败时的回退点）
-        for src in (self._index_path(), self._meta_path()):
-            try:
-                shutil.copy2(src, src.with_suffix(".bak"))
-            except Exception:
-                pass
-        self._dirty = False
+        with self._lock:
+            if self._index is None:
+                return
+            import faiss
+            import shutil
+            tmp_idx = self._index_path().with_suffix(".tmp")
+            tmp_meta = self._meta_path().with_suffix(".tmp")
+            faiss.write_index(self._index, str(tmp_idx))
+            tmp_meta.write_text(json.dumps({
+                "dim": EMBED_DIM, "model": self._model_tag(),
+                "items": [vars(it) for it in self._items],
+            }, ensure_ascii=False), encoding="utf-8")
+            tmp_idx.replace(self._index_path())
+            tmp_meta.replace(self._meta_path())
+            # 主文件对落盘成功 -> 同步为备份对（加载失败时的回退点）
+            for src in (self._index_path(), self._meta_path()):
+                try:
+                    shutil.copy2(src, src.with_suffix(".bak"))
+                except Exception:
+                    pass
+            self._dirty = False
 
     def flush(self) -> None:
         """有脏数据才落盘（定时任务周期调用）。
@@ -190,8 +198,9 @@ class LongTermMemory:
         循环上，条目越多越卡——O(n²) 写放大，严厉审查 P2-10）；代价是崩溃
         最多丢一个 flush 周期的记忆，可接受。
         """
-        if self._dirty:
-            self.save()
+        with self._lock:
+            if self._dirty:
+                self.save()
 
     # ---------- 写入 ----------
 
@@ -203,40 +212,41 @@ class LongTermMemory:
         if not (text or "").strip():
             return False
         self.load()
-        vec = await get_embedding_client().embed_one(text)
-        # 写入去重：同会话近义条目（向量相似 >0.92 或归一化文本相同）合并加权
-        # 而非新插——否则 LLM 每轮都能把同一事实写 N 份挤占检索 top-k
-        # （严厉审查 P2-10）。pinned 不参与合并（用户显式钉的每一条都算数）。
-        norm = " ".join(text.split())
-        for it in reversed(self._items[-200:]):
-            if it.chat_id != chat_id or it.kind == "pinned":
-                continue
-            if " ".join(it.text.split()) == norm:
-                it.weight = min(2.0, it.weight + 0.1)
-                it.timestamp = time.time()
-                self._dirty = True
-                return True
-        if vec is not None and self._vec_map:
-            v = np.array([vec], dtype="float32")
-            v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
-            scores, ids = self._index.search(v, 1)
-            if int(ids[0][0]) >= 0 and float(scores[0][0]) > 0.92:
-                dup = self._items[self._vec_map[int(ids[0][0])]]
-                if dup.chat_id == chat_id and dup.kind != "pinned":
-                    dup.weight = min(2.0, dup.weight + 0.1)
-                    dup.timestamp = time.time()
+        vec = await get_embedding_client().embed_one(text)   # 网络等待在锁外
+        with self._lock:
+            # 写入去重：同会话近义条目（向量相似 >0.92 或归一化文本相同）合并加权
+            # 而非新插——否则 LLM 每轮都能把同一事实写 N 份挤占检索 top-k
+            # （严厉审查 P2-10）。pinned 不参与合并（用户显式钉的每一条都算数）。
+            norm = " ".join(text.split())
+            for it in reversed(self._items[-200:]):
+                if it.chat_id != chat_id or it.kind == "pinned":
+                    continue
+                if " ".join(it.text.split()) == norm:
+                    it.weight = min(2.0, it.weight + 0.1)
+                    it.timestamp = time.time()
                     self._dirty = True
                     return True
-        item = MemoryItem(text=text, chat_id=chat_id, timestamp=time.time(),
-                          weight=weight, kind=kind, has_vec=vec is not None)
-        self._items.append(item)
-        if vec is not None:
-            v = np.array([vec], dtype="float32")
-            v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
-            self._index.add(v)
-            self._vec_map.append(len(self._items) - 1)
-        self._dirty = True   # 批量落盘：flush() 周期写，不再每次全量重写
-        return True
+            if vec is not None and self._vec_map:
+                v = np.array([vec], dtype="float32")
+                v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
+                scores, ids = self._index.search(v, 1)
+                if int(ids[0][0]) >= 0 and float(scores[0][0]) > 0.92:
+                    dup = self._items[self._vec_map[int(ids[0][0])]]
+                    if dup.chat_id == chat_id and dup.kind != "pinned":
+                        dup.weight = min(2.0, dup.weight + 0.1)
+                        dup.timestamp = time.time()
+                        self._dirty = True
+                        return True
+            item = MemoryItem(text=text, chat_id=chat_id, timestamp=time.time(),
+                              weight=weight, kind=kind, has_vec=vec is not None)
+            self._items.append(item)
+            if vec is not None:
+                v = np.array([vec], dtype="float32")
+                v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
+                self._index.add(v)
+                self._vec_map.append(len(self._items) - 1)
+            self._dirty = True   # 批量落盘：flush() 周期写，不再每次全量重写
+            return True
 
     # ---------- 检索 ----------
 
@@ -253,43 +263,44 @@ class LongTermMemory:
         if not self._items:
             return []
         vec = await get_embedding_client().embed_one(query) if self._vec_map else None
-        if vec is None:
-            out = self._keyword_search(query, top_k=top_k, chat_id=chat_id)
-        else:
-            v = np.array([vec], dtype="float32")
-            v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
-            k = min(top_k * 4, self._index.ntotal)
-            scores, ids = self._index.search(v, k)
-            # 复合打分：相关性 × 重要性（时效衰减后）——weight 不再只是遗忘
-            # 参数，用户标重要的事召回概率就该更高（严厉审查 P2-10）
-            min_score = _recall_min_score()
-            cands = []
-            for score, pos in zip(scores[0], ids[0], strict=False):
-                if pos < 0 or score < min_score:
-                    continue
-                item = self._items[self._vec_map[int(pos)]]
-                if not _chat_allowed(item.chat_id, chat_id):
-                    continue
-                w_norm = min(_effective_weight(item), 2.0) / 2.0   # 0..1
-                cands.append((float(score) * (0.7 + 0.3 * w_norm), item))
-            cands.sort(key=lambda x: -x[0])
-            out = [it for _, it in cands[:top_k]]
-            # 纯文本条目关键词补充（向量检索覆盖不到它们）
-            if len(out) < top_k:
-                plain = [it for it in self._keyword_search(query, top_k=top_k, chat_id=chat_id)
-                         if not it.has_vec and it not in out]
-                out.extend(plain[:top_k - len(out)])
+        with self._lock:
+            if vec is None:
+                out = self._keyword_search(query, top_k=top_k, chat_id=chat_id)
+            else:
+                v = np.array([vec], dtype="float32")
+                v /= (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
+                k = min(top_k * 4, self._index.ntotal)
+                scores, ids = self._index.search(v, k)
+                # 复合打分：相关性 × 重要性（时效衰减后）——weight 不再只是遗忘
+                # 参数，用户标重要的事召回概率就该更高（严厉审查 P2-10）
+                min_score = _recall_min_score()
+                cands = []
+                for score, pos in zip(scores[0], ids[0], strict=False):
+                    if pos < 0 or score < min_score:
+                        continue
+                    item = self._items[self._vec_map[int(pos)]]
+                    if not _chat_allowed(item.chat_id, chat_id):
+                        continue
+                    w_norm = min(_effective_weight(item), 2.0) / 2.0   # 0..1
+                    cands.append((float(score) * (0.7 + 0.3 * w_norm), item))
+                cands.sort(key=lambda x: -x[0])
+                out = [it for _, it in cands[:top_k]]
+                # 纯文本条目关键词补充（向量检索覆盖不到它们）
+                if len(out) < top_k:
+                    plain = [it for it in self._keyword_search(query, top_k=top_k, chat_id=chat_id)
+                             if not it.has_vec and it not in out]
+                    out.extend(plain[:top_k - len(out)])
 
-        if spread is None:
-            spread = bool(_graph_cfg().get("enable", True))
-        if spread and out:
-            out = self._spread_related(out, chat_id=chat_id)
-        # 检索即复习：被召回的条目权重微涨（对抗时效衰减，常用的记得牢）
-        for it in out:
-            it.weight = min(2.0, it.weight + 0.05)
-        if out:
-            self._dirty = True
-        return out
+            if spread is None:
+                spread = bool(_graph_cfg().get("enable", True))
+            if spread and out:
+                out = self._spread_related(out, chat_id=chat_id)
+            # 检索即复习：被召回的条目权重微涨（对抗时效衰减，常用的记得牢）
+            for it in out:
+                it.weight = min(2.0, it.weight + 0.05)
+            if out:
+                self._dirty = True
+            return out
 
     def _spread_related(self, seeds: List[MemoryItem], *,
                         chat_id) -> List[MemoryItem]:
@@ -347,40 +358,42 @@ class LongTermMemory:
         max_items 默认读 [memory] ltm_max_items（5000）。
         """
         self.load()
-        if not self._items:
-            return 0
-        import faiss
-        if max_items is None:
-            try:
-                from junjun_core.config import get_global_config
-                max_items = int(get_global_config().raw.get("memory", {}).get("ltm_max_items", 5000))
-            except Exception:
-                max_items = 5000
-        cutoff = time.time() - max_age_days * 86400
-        keep_ids = [i for i, it in enumerate(self._items)
-                    if not (it.timestamp < cutoff and _effective_weight(it) < min_weight)]
-        if len(keep_ids) > max_items:
-            ranked = sorted(keep_ids, key=lambda i: (_effective_weight(self._items[i]),
-                                                     self._items[i].timestamp))
-            drop = set(ranked[:len(keep_ids) - max_items])
-            keep_ids = [i for i in keep_ids if i not in drop]
-        removed = len(self._items) - len(keep_ids)
-        if not removed:
-            return 0
-        self._rebuild(keep_ids)
-        logger.info(f"遗忘 {removed} 条记忆，索引已重建（{len(keep_ids)} 条保留）")
-        return removed
+        with self._lock:
+            if not self._items:
+                return 0
+            import faiss
+            if max_items is None:
+                try:
+                    from junjun_core.config import get_global_config
+                    max_items = int(get_global_config().raw.get("memory", {}).get("ltm_max_items", 5000))
+                except Exception:
+                    max_items = 5000
+            cutoff = time.time() - max_age_days * 86400
+            keep_ids = [i for i, it in enumerate(self._items)
+                        if not (it.timestamp < cutoff and _effective_weight(it) < min_weight)]
+            if len(keep_ids) > max_items:
+                ranked = sorted(keep_ids, key=lambda i: (_effective_weight(self._items[i]),
+                                                         self._items[i].timestamp))
+                drop = set(ranked[:len(keep_ids) - max_items])
+                keep_ids = [i for i in keep_ids if i not in drop]
+            removed = len(self._items) - len(keep_ids)
+            if not removed:
+                return 0
+            self._rebuild(keep_ids)
+            logger.info(f"遗忘 {removed} 条记忆，索引已重建（{len(keep_ids)} 条保留）")
+            return removed
 
     def remove_where(self, pred) -> int:
         """按谓词删除记忆并重建索引（如 /forget 关键词清理）。返回删除数。"""
         self.load()
-        keep_ids = [i for i, it in enumerate(self._items) if not pred(it)]
-        removed = len(self._items) - len(keep_ids)
-        if not removed:
-            return 0
-        self._rebuild(keep_ids)
-        logger.info(f"按条件删除 {removed} 条记忆（{len(keep_ids)} 条保留）")
-        return removed
+        with self._lock:
+            keep_ids = [i for i, it in enumerate(self._items) if not pred(it)]
+            removed = len(self._items) - len(keep_ids)
+            if not removed:
+                return 0
+            self._rebuild(keep_ids)
+            logger.info(f"按条件删除 {removed} 条记忆（{len(keep_ids)} 条保留）")
+            return removed
 
     def dedupe(self, *, threshold: Optional[float] = None) -> int:
         """全局近重合并（夜间整理）。返回合并掉的条目数。
@@ -393,63 +406,67 @@ class LongTermMemory:
         - 保留方取权重 max+0.1（封顶 2.0）、时间戳取新，文本留先见的一条
         """
         self.load()
-        if threshold is None:
-            try:
-                from junjun_core.config import get_global_config
-                threshold = float(get_global_config().raw.get("memory", {})
-                                  .get("dedupe_threshold", 0.95))
-            except Exception:
-                threshold = 0.95
-        drop: set = set()
-        # 向量条目：全库近邻合并
-        for pos, item_idx in enumerate(self._vec_map):
-            if item_idx in drop:
-                continue
-            cur = self._items[item_idx]
-            if cur.kind == "pinned":
-                continue
-            v = self._index.reconstruct(pos).reshape(1, -1)
-            scores, ids = self._index.search(v, 6)
-            for score, npos in zip(scores[0], ids[0], strict=False):
-                npos = int(npos)
-                if npos < 0 or npos == pos or float(score) < threshold:
+        with self._lock:
+            # 全库逐条近邻扫描持锁（faiss 读写不可跨线程并发）；每日一次，
+            # 最坏秒级停顿——原来整个跑在事件循环上更糟（2026-08-13 审查 P2）
+            if threshold is None:
+                try:
+                    from junjun_core.config import get_global_config
+                    threshold = float(get_global_config().raw.get("memory", {})
+                                      .get("dedupe_threshold", 0.95))
+                except Exception:
+                    threshold = 0.95
+            drop: set = set()
+            # 向量条目：全库近邻合并
+            for pos, item_idx in enumerate(self._vec_map):
+                if item_idx in drop:
                     continue
-                nidx = self._vec_map[npos]
-                if nidx in drop:
+                cur = self._items[item_idx]
+                if cur.kind == "pinned":
                     continue
-                nit = self._items[nidx]
-                if nit.chat_id != cur.chat_id or nit.kind == "pinned":
+                v = self._index.reconstruct(pos).reshape(1, -1)
+                scores, ids = self._index.search(v, 6)
+                for score, npos in zip(scores[0], ids[0], strict=False):
+                    npos = int(npos)
+                    if npos < 0 or npos == pos or float(score) < threshold:
+                        continue
+                    nidx = self._vec_map[npos]
+                    if nidx in drop:
+                        continue
+                    nit = self._items[nidx]
+                    if nit.chat_id != cur.chat_id or nit.kind == "pinned":
+                        continue
+                    cur.weight = min(2.0, max(cur.weight, nit.weight) + 0.1)
+                    cur.timestamp = max(cur.timestamp, nit.timestamp)
+                    drop.add(nidx)
+            # 纯文本条目（embedding 不可用期写入的）：归一化全文精确合并
+            seen: dict = {}
+            for i, it in enumerate(self._items):
+                if i in drop or it.has_vec or it.kind == "pinned":
                     continue
-                cur.weight = min(2.0, max(cur.weight, nit.weight) + 0.1)
-                cur.timestamp = max(cur.timestamp, nit.timestamp)
-                drop.add(nidx)
-        # 纯文本条目（embedding 不可用期写入的）：归一化全文精确合并
-        seen: dict = {}
-        for i, it in enumerate(self._items):
-            if i in drop or it.has_vec or it.kind == "pinned":
-                continue
-            key = (it.chat_id, " ".join(it.text.split()))
-            if key in seen:
-                cur = self._items[seen[key]]
-                cur.weight = min(2.0, max(cur.weight, it.weight) + 0.1)
-                cur.timestamp = max(cur.timestamp, it.timestamp)
-                drop.add(i)
-            else:
-                seen[key] = i
-        if not drop:
-            return 0
-        self._rebuild([i for i in range(len(self._items)) if i not in drop])
-        logger.info(f"夜间整理合并 {len(drop)} 条近重记忆（阈值 {threshold}，"
-                    f"{len(self._items)} 条保留）")
-        return len(drop)
+                key = (it.chat_id, " ".join(it.text.split()))
+                if key in seen:
+                    cur = self._items[seen[key]]
+                    cur.weight = min(2.0, max(cur.weight, it.weight) + 0.1)
+                    cur.timestamp = max(cur.timestamp, it.timestamp)
+                    drop.add(i)
+                else:
+                    seen[key] = i
+            if not drop:
+                return 0
+            self._rebuild([i for i in range(len(self._items)) if i not in drop])
+            logger.info(f"夜间整理合并 {len(drop)} 条近重记忆（阈值 {threshold}，"
+                        f"{len(self._items)} 条保留）")
+            return len(drop)
 
 
     def pinned(self, chat_id: str, *, limit: int = 50) -> List[MemoryItem]:
         """用户钉住的记忆（/记住、pin_memory，kind="pinned"）：每轮优先注入，
         不占语义召回额度（P6-2 用户可控记忆）。"""
         self.load()
-        out = [it for it in self._items if it.kind == "pinned" and it.chat_id == chat_id]
-        return out[-limit:]
+        with self._lock:
+            out = [it for it in self._items if it.kind == "pinned" and it.chat_id == chat_id]
+            return out[-limit:]
 
     def _rebuild(self, keep_ids: list) -> None:
         """按保留下标重建 items + faiss 索引并落盘。向量条目从旧索引 reconstruct。"""
