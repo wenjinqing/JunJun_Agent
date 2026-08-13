@@ -27,6 +27,7 @@ from pathlib import Path
 import httpx
 from langchain_core.tools import tool
 
+from junjun_core.http import make_async_client
 from junjun_core.observability import get_logger
 
 logger = get_logger("plugin.workspace")
@@ -184,7 +185,7 @@ async def run_code(code: str, timeout: int = 30) -> str:
     if os.environ.get("SANDBOX_TOKEN"):
         headers["X-Sandbox-Token"] = os.environ["SANDBOX_TOKEN"]
     try:
-        async with httpx.AsyncClient(timeout=timeout + 20) as client:
+        async with make_async_client(timeout=timeout + 20) as client:  # 沙箱是本机服务，绝不走系统代理
             resp = await client.post(f"{_sandbox_url()}/run",
                                      json={"code": code, "timeout": timeout,
                                            "workdir": workdir},
@@ -363,7 +364,7 @@ async def _download_capped(url: str, cap: int) -> bytes:
     from urllib.parse import urljoin
     chunks, total = [], 0
     current = url
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with make_async_client(timeout=60.0) as client:  # QQ 文件服务器：国内直连，不走系统代理
         for _ in range(5):
             bad = await _ssrf_check_async(current)
             if bad:
@@ -472,7 +473,10 @@ async def _fetch_bytes(url: str) -> tuple:
     from urllib.parse import urljoin
     chunks, total = [], 0
     current = url
-    async with httpx.AsyncClient(timeout=20.0, headers={"User-Agent": _UA}) as client:
+    # 公网任意 URL（fetch_page）：显式 trust_env=True 穿系统代理——用户分享的
+    # 链接可能是 GFW 封锁站点；本机 Clash 规则代理国内直连不亏。
+    async with httpx.AsyncClient(timeout=20.0, headers={"User-Agent": _UA},
+                                 trust_env=True) as client:
         for _ in range(5):
             bad = await _ssrf_check_async(current)
             if bad:

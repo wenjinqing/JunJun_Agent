@@ -102,7 +102,8 @@ async def synthesize_aiping(text: str) -> bytes | None:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        from junjun_core.http import make_async_client
+        async with make_async_client(timeout=_TIMEOUT) as client:
             resp = await client.post(f"{base.rstrip('/')}/audio/speech",
                                      json=payload, headers=headers)
         if resp.status_code != 200:
@@ -169,7 +170,8 @@ async def synthesize_siliconflow(text: str) -> bytes | None:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        from junjun_core.http import make_async_client
+        async with make_async_client(timeout=_TIMEOUT) as client:
             resp = await client.post(f"{base.rstrip('/')}/audio/speech",
                                      json=payload, headers=headers)
         if resp.status_code != 200:
@@ -216,7 +218,8 @@ async def synthesize_gsv2p(text: str, *, emotion_zh: str = "默认") -> bytes | 
                "Content-Type": "application/json"}
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        from junjun_core.http import make_async_client
+        async with make_async_client(timeout=_TIMEOUT) as client:
             resp = await client.post(url, json=payload, headers=headers)
         if resp.status_code != 200:
             logger.warning(f"tts GSV2P 失败: HTTP {resp.status_code} {resp.text[:200]}")
@@ -260,7 +263,8 @@ async def synthesize_sovits(text: str) -> bytes | None:
     }
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        from junjun_core.http import make_async_client
+        async with make_async_client(timeout=_TIMEOUT) as client:
             resp = await client.post(f"{base.rstrip('/')}/tts", json=payload)
         if resp.status_code != 200:
             logger.warning(f"tts GPT-SoVITS 失败: HTTP {resp.status_code} {resp.text[:200]}")
