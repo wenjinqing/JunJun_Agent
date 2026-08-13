@@ -970,6 +970,7 @@ async def send_feed_tool(content: str, with_image: bool = False) -> str:
     content 就是说说正文（口语自然、可适当颜文字，不要 @ 和引号包裹）。
     空间不支持语音和视频，不要承诺发语音说说；with_image=True 会根据正文自动生成
     一张 AI 配图一起发（较慢，适合风景/心情/二次元主题）。
+    说说是公开发布：非管理员让你发会被拒并提示走审批，照实转达即可。
 
     Args:
         content: 说说正文（100 字内效果最好）
@@ -977,6 +978,20 @@ async def send_feed_tool(content: str, with_image: bool = False) -> str:
     """
     if not (_switch("enable") and _switch("send_enable")):
         return "QQ空间发说说功能没开（config junzone enable/send_enable）。"
+    # 发布门禁（2026-08-13 审查 P1）：说说是对好友可见的公开发布，此前任何
+    # 群友一句话就能让 bot 发任意内容（钓鱼/引战=账号风控风险）。对齐
+    # run_code：管理员直发；非管理员只有内核人审批准的步骤放行。
+    from junjun_core.security import current_user_id, is_admin, is_admin_privileged
+    if not (is_admin_privileged() or is_admin(current_user_id.get())):
+        try:
+            from junjun_agent.task_kernel.executor import kernel_step_approved
+            allowed = kernel_step_approved()
+        except Exception:
+            allowed = False
+        if not allowed:
+            logger.info(f"send_feed 非管理员未批准拦截: uid={current_user_id.get()}")
+            return ("发说说是公开发布，得我管理员点头才行——让管理员跟我说一声，"
+                    "或者把需求当成任务交给我（会走审批）。")
     content = (content or "").strip()
     if not content:
         return "说说正文是空的，没发。"

@@ -9,7 +9,8 @@ from junjun_skills.plugins.junzone import tools as mz
 
 @pytest.fixture
 def _env(monkeypatch, tmp_path):
-    """隔离数据目录 + 固定配置 + 假 cookie。"""
+    """隔离数据目录 + 固定配置 + 假 cookie + 管理员身份（send_feed 有发布门禁，
+    2026-08-13 审查 P1：非管理员调用会被拦——本夹具测功能路径所以给管理员）。"""
     monkeypatch.setattr(mz, "DATA_DIR", tmp_path)
     monkeypatch.setattr(mz, "_cfg", lambda: {
         "enable": True, "send_enable": True, "read_enable": True,
@@ -23,7 +24,11 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setattr(mz, "_bot_uin", lambda: "123456")
     cookies = {"skey": "s", "p_skey": "p"}
     monkeypatch.setattr(mz, "ensure_cookies", _async(cookies))
-    return cookies
+    monkeypatch.setenv("ADMIN_QQ", "99999")
+    from junjun_core import security
+    security.set_caller("99999", at_bot=True, is_group=False)
+    yield cookies
+    security.set_caller("", at_bot=False, is_group=False)
 
 
 def _async(ret):
@@ -627,3 +632,51 @@ class TestFrameCallbackParse:
 
         monkeypatch.setattr(mz.httpx, "AsyncClient", _Client)
         assert await mz.reply_comment(_env, "123456", "FID", "某人", "收到") is True
+
+
+# ---------------- 发布门禁（2026-08-13 审查 P1） ----------------
+
+class TestSendFeedGate:
+    """说说是公开发布：非管理员对话通道直调必须拦；内核人审批准步放行。"""
+
+    @pytest.mark.asyncio
+    async def test_non_admin_blocked(self, _env, monkeypatch):
+        from junjun_core import security
+        security.set_caller("12345", at_bot=True, is_group=True)  # 普通群友
+        published = []
+        monkeypatch.setattr(mz, "publish_feed",
+                            lambda *a, **kw: published.append(1) or _async("T")())
+        out = await mz.send_feed_tool.ainvoke({"content": "钓鱼内容"})
+        assert "管理员" in out and not published
+
+    @pytest.mark.asyncio
+    async def test_kernel_approved_step_allowed(self, _env, monkeypatch):
+        from junjun_core import security
+        from junjun_agent.task_kernel import executor
+        security.set_caller("12345", at_bot=False, is_group=True)  # 非管理员
+        published = []
+
+        async def _publish(cookies, uin, content, images=None):
+            published.append(content)
+            return "TID"
+
+        monkeypatch.setattr(mz, "publish_feed", _publish)
+        token = executor._kernel_step_approved.set(True)   # 模拟已批准步骤
+        try:
+            out = await mz.send_feed_tool.ainvoke({"content": "任务产出"})
+        finally:
+            executor._kernel_step_approved.reset(token)
+        assert "发出去了" in out and published == ["任务产出"]
+
+    @pytest.mark.asyncio
+    async def test_admin_direct_allowed(self, _env, monkeypatch):
+        # _env 已置管理员身份（99999 私聊 privileged）——直发不拦
+        published = []
+
+        async def _publish(cookies, uin, content, images=None):
+            published.append(content)
+            return "TID"
+
+        monkeypatch.setattr(mz, "publish_feed", _publish)
+        out = await mz.send_feed_tool.ainvoke({"content": "管理员的话"})
+        assert "发出去了" in out and published == ["管理员的话"]
