@@ -134,3 +134,69 @@ class TestPokeThrottle:
             await nh.notice_handler.handle_notice(_poke())
         assert env.sent == []
         assert len(env.nc_calls) == 3
+
+
+class TestPokeStickerReply:
+    """2026-08-13 用户裁决：群戳回敬发库存表情包，不再发内置小黄豆 emoji。"""
+
+    @pytest.mark.asyncio
+    async def test_sticker_branch_sends_image_not_face(self, env, tmp_path,
+                                                       monkeypatch):
+        sticker = tmp_path / "abc.jpg"
+        sticker.write_bytes(b"\xff\xd8\xff")  # 内容不验，存在即可（不真发）
+        monkeypatch.setattr(nh, "_pick_sticker", lambda: sticker)
+        monkeypatch.setattr(nh.random, "random", lambda: 0.9)  # 表情包优先
+        await nh.notice_handler.handle_notice(_poke())
+        assert len(env.nc_calls) == 1
+        action, params = env.nc_calls[0]
+        assert action == "send_group_msg"
+        seg = params["message"][0]
+        assert seg["type"] == "image"
+        assert seg["data"]["file"].startswith("file:///")  # NapCat 同机直读
+        assert "face" not in str(env.nc_calls)
+
+    @pytest.mark.asyncio
+    async def test_empty_library_falls_back_to_poke(self, env, monkeypatch):
+        """表情包库空：兜底反戳，不许退回发小黄豆。"""
+        monkeypatch.setattr(nh, "_pick_sticker", lambda: None)
+        monkeypatch.setattr(nh.random, "random", lambda: 0.9)  # 表情包优先但库空
+        await nh.notice_handler.handle_notice(_poke())
+        assert env.nc_calls[0][0] in ("send_poke", "send_group_poke")
+        assert "face" not in str(env.nc_calls)
+
+    @pytest.mark.asyncio
+    async def test_poke_failure_falls_back_to_sticker(self, env, tmp_path,
+                                                      monkeypatch):
+        """反戳失败（NapCat 拒绝）兜底到表情包——原 face 兜底位的替身。"""
+        sticker = tmp_path / "abc.png"
+        sticker.write_bytes(b"\x89PNG\r\n\x1a\n")
+        monkeypatch.setattr(nh, "_pick_sticker", lambda: sticker)
+        monkeypatch.setattr(nh.random, "random", lambda: 0.1)  # 反戳优先
+
+        class _PokeFailNC:
+            async def send_message_to_napcat(self, action, params):
+                env.nc_calls.append((action, params))
+                if "poke" in action:
+                    return {"status": "failed", "wording": "戳不了"}
+                return {"status": "ok"}
+
+        monkeypatch.setattr(
+            "junjun_adapter_napcat.send_handler.nc_sending.nc_message_sender",
+            _PokeFailNC())
+        await nh.notice_handler.handle_notice(_poke())
+        actions = [a for a, _ in env.nc_calls]
+        assert actions == ["send_poke", "send_group_poke", "send_group_msg"]
+        assert env.nc_calls[-1][1]["message"][0]["type"] == "image"
+        assert "face" not in str(env.nc_calls)
+
+    def test_pick_sticker_filters_exts(self, tmp_path, monkeypatch):
+        (tmp_path / "a.jpg").write_bytes(b"x")
+        (tmp_path / "b.txt").write_text("not image")
+        monkeypatch.setattr(nh, "_EMOJI_REG_DIR", tmp_path)
+        for _ in range(20):
+            p = nh._pick_sticker()
+            assert p is not None and p.suffix == ".jpg"
+
+    def test_pick_sticker_missing_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(nh, "_EMOJI_REG_DIR", tmp_path / "nonexistent")
+        assert nh._pick_sticker() is None

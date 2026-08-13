@@ -2,8 +2,9 @@
 
 群聊（2026-08-13 用户裁决）：戳一戳一律【不进决策链】——每条戳都过 LLM
 token 消耗巨大，群里还有别的 bot 时会互戳滚雪球。同一人在同群每天前
-poke_group_daily_replies 次（默认 3）直接廉价回敬：反戳回去或发个内置
-表情（各半随机），adapter 本地直发 NapCat，0 token；当日额度用完直接无视。
+poke_group_daily_replies 次（默认 3）直接廉价回敬：反戳回去或发张库存
+表情包（各半随机，2026-08-13 起不再发内置小黄豆），adapter 本地直发
+NapCat，0 token；当日额度用完直接无视。
 
 私聊维持原样：合成一条 addressed 文本消息进正常决策链（L1 @ 旁路必回）——
 量小，且私聊戳是亲昵行为，值得 persona 认真回应。
@@ -18,6 +19,7 @@ poke_group_daily_replies 次（默认 3）直接廉价回敬：反戳回去或�
 
 import random
 import time
+from pathlib import Path
 
 from maim_message import (
     UserInfo, Seg, BaseMessageInfo, MessageBase, FormatInfo,
@@ -37,8 +39,22 @@ _group_daily: dict = {}
 _POKE_TEXT = "（戳了戳你）"
 _POKE_ESCALATE_TEXT = "（连续戳了你好几下）"
 
-# QQ 内置小黄豆（得意/害羞/微笑）——adapter 本地可发，不依赖 bot 核心的表情库
-_FACE_POOL = ("4", "6", "14")
+# 戳一戳回敬用的表情包库存（2026-08-13 用户裁决：回敬发库存表情包，
+# 不再发 QQ 内置小黄豆 emoji）。与 bot 核心 express.emoji 的注册池同一目录；
+# adapter 是独立进程，不碰 peewee/DB（守则：生产库只读走 ro 连接），
+# 直接扫目录随机抽一张，0 token 语义不变。
+_EMOJI_REG_DIR = Path(__file__).resolve().parents[2] / "data" / "emoji_registed"
+_STICKER_EXTS = (".jpg", ".jpeg", ".gif", ".png", ".webp")
+
+
+def _pick_sticker() -> "Path | None":
+    """注册池随机抽一张表情包；目录空/不存在返回 None（调用方兜底反戳）。"""
+    try:
+        files = [p for p in _EMOJI_REG_DIR.iterdir()
+                 if p.suffix.lower() in _STICKER_EXTS]
+    except OSError:
+        return None
+    return random.choice(files) if files else None
 
 
 def _poke_cfg() -> tuple:
@@ -141,36 +157,55 @@ class NoticeHandler:
         _group_daily[key] = (d, n + 1)
         return True
 
-    @staticmethod
-    async def _cheap_reply(user_id: str, group_id: str) -> None:
-        """反戳回去（新旧 action 兜底）或发个内置表情——adapter 本地直发 NapCat。"""
+    @classmethod
+    async def _poke_back(cls, user_id: str, group_id: str) -> bool:
+        """反戳回去（新旧 action 兜底）。True=成功。"""
         from ..send_handler.nc_sending import nc_message_sender
-        if random.random() < 0.5:
-            for action, params in (
-                    ("send_poke", {"user_id": int(user_id), "group_id": int(group_id)}),
-                    ("send_group_poke", {"group_id": int(group_id),
-                                         "user_id": int(user_id)})):
-                try:
-                    resp = await nc_message_sender.send_message_to_napcat(action, params)
-                except Exception as e:
-                    logger.warning(f"戳一戳回敬异常 [{action}]: {e}")
-                    continue
-                if resp.get("status") == "ok":
-                    logger.info(f"戳一戳已回敬 [{action} user={user_id} group={group_id}]")
-                    return
-                logger.warning(f"戳一戳回敬 [{action}] 失败: {resp}")
-        face = random.choice(_FACE_POOL)
+        for action, params in (
+                ("send_poke", {"user_id": int(user_id), "group_id": int(group_id)}),
+                ("send_group_poke", {"group_id": int(group_id),
+                                     "user_id": int(user_id)})):
+            try:
+                resp = await nc_message_sender.send_message_to_napcat(action, params)
+            except Exception as e:
+                logger.warning(f"戳一戳回敬异常 [{action}]: {e}")
+                continue
+            if resp.get("status") == "ok":
+                logger.info(f"戳一戳已回敬 [{action} user={user_id} group={group_id}]")
+                return True
+            logger.warning(f"戳一戳回敬 [{action}] 失败: {resp}")
+        return False
+
+    @classmethod
+    async def _send_sticker(cls, user_id: str, group_id: str) -> bool:
+        """发张库存表情包（本地 file:// URI，NapCat 同机直读）。True=成功。"""
+        sticker = _pick_sticker()
+        if sticker is None:
+            return False
+        from ..send_handler.nc_sending import nc_message_sender
         try:
             resp = await nc_message_sender.send_message_to_napcat(
                 "send_group_msg",
                 {"group_id": int(group_id),
-                 "message": [{"type": "face", "data": {"id": face}}]})
-            if resp.get("status") == "ok":
-                logger.info(f"戳一戳回表情 [face={face} user={user_id} group={group_id}]")
-            else:
-                logger.warning(f"戳一戳回表情失败: {resp}")
+                 "message": [{"type": "image",
+                              "data": {"file": sticker.as_uri()}}]})
         except Exception as e:
-            logger.warning(f"戳一戳回表情异常: {e}")
+            logger.warning(f"戳一戳回表情包异常: {e}")
+            return False
+        if resp.get("status") == "ok":
+            logger.info(f"戳一戳回表情包 [{sticker.name} user={user_id} group={group_id}]")
+            return True
+        logger.warning(f"戳一戳回表情包失败: {resp}")
+        return False
+
+    @classmethod
+    async def _cheap_reply(cls, user_id: str, group_id: str) -> None:
+        """廉价回敬：反戳 / 库存表情包各半随机，首选失败兜底另一种——
+        adapter 本地直发 NapCat，0 token。都失败就静默（下次再戳再说）。"""
+        first, second = (cls._poke_back, cls._send_sticker) \
+            if random.random() < 0.5 else (cls._send_sticker, cls._poke_back)
+        if not await first(user_id, group_id):
+            await second(user_id, group_id)
 
     @staticmethod
     def _throttle(user_id: str, group_id) -> "str | None":

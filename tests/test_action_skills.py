@@ -319,8 +319,10 @@ class TestNoticePoke:
         assert len(nc_calls) == 1
         action, params = nc_calls[0]
         assert action in ("send_poke", "send_group_msg")
-        if action == "send_group_msg":             # 表情路径：内置小黄豆
-            assert params["message"][0]["type"] == "face"
+        if action == "send_group_msg":             # 表情包路径（2026-08-13 起不再是小黄豆）
+            seg = params["message"][0]
+            assert seg["type"] == "image"
+            assert seg["data"]["file"].startswith("file:///")
         else:                                      # 反戳路径：目标正确
             assert params["user_id"] == 12345 and params["group_id"] == 999
 
