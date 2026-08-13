@@ -307,7 +307,12 @@ class TestWorkspaceSaveFile:
         import httpx
         from junjun_skills.plugins.workspace import tools as wt
 
+        async def _no_ssrf(url):
+            return ""
+        monkeypatch.setattr(wt, "_ssrf_check_async", _no_ssrf)
+
         class _Resp:
+            status_code = 200
             headers = {"content-length": str(60 * 1024 * 1024)}
             def raise_for_status(self):
                 pass

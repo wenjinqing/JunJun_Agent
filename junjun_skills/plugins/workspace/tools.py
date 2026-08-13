@@ -333,20 +333,35 @@ async def workspace_save_file(save_as: str = "") -> str:
 
 
 async def _download_capped(url: str, cap: int) -> bytes:
-    """流式下载，超 cap 立即中止抛 OverflowError（不读完，防拖死连接）。"""
+    """流式下载，超 cap 立即中止抛 OverflowError（不读完，防拖死连接）。
+    手工跟随重定向 + 每跳 SSRF 检查：URL 信任链是 NapCat 解析的 QQ 文件
+    服务器，但中间跳转可能打回环/内网（2026-08-13 审查 P2-7）。"""
+    from urllib.parse import urljoin
     chunks, total = [], 0
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        async with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            length = int(resp.headers.get("content-length") or 0)
-            if length > cap:
-                raise OverflowError(url)
-            async for chunk in resp.aiter_bytes(65536):
-                total += len(chunk)
-                if total > cap:
+    current = url
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for _ in range(5):
+            bad = await _ssrf_check_async(current)
+            if bad:
+                raise RuntimeError(f"文件地址不可访问：{bad}")
+            async with client.stream("GET", current) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    loc = resp.headers.get("location") or ""
+                    if not loc:
+                        raise RuntimeError(f"HTTP {resp.status_code} 但没有跳转地址")
+                    current = urljoin(current, loc)
+                    continue
+                resp.raise_for_status()
+                length = int(resp.headers.get("content-length") or 0)
+                if length > cap:
                     raise OverflowError(url)
-                chunks.append(chunk)
-    return b"".join(chunks)
+                async for chunk in resp.aiter_bytes(65536):
+                    total += len(chunk)
+                    if total > cap:
+                        raise OverflowError(url)
+                    chunks.append(chunk)
+                return b"".join(chunks)
+    raise RuntimeError("重定向超过 5 次，放弃")
 
 
 def _chat_target() -> tuple:
@@ -426,19 +441,34 @@ async def _ssrf_check_async(url: str) -> str:
 
 
 async def _fetch_bytes(url: str) -> tuple:
-    """流式下载，10MB 封顶。返回 (bytes, content_type)。"""
+    """流式下载，10MB 封顶。返回 (bytes, content_type)。
+    手工跟随重定向：每一跳重跑 SSRF 检查（2026-08-13 审查 P1 实锤——
+    follow_redirects=True 时公网 URL 302 到 127.0.0.1/169.254.169.254
+    就绕过了只对原始 URL 做的检查）。"""
+    from urllib.parse import urljoin
     chunks, total = [], 0
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
-                                 headers={"User-Agent": _UA}) as client:
-        async with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            ctype = resp.headers.get("content-type", "").lower()
-            async for chunk in resp.aiter_bytes(65536):
-                chunks.append(chunk)
-                total += len(chunk)
-                if total > _FETCH_MAX_BYTES:
-                    break
-    return b"".join(chunks), ctype
+    current = url
+    async with httpx.AsyncClient(timeout=20.0, headers={"User-Agent": _UA}) as client:
+        for _ in range(5):
+            bad = await _ssrf_check_async(current)
+            if bad:
+                raise RuntimeError(f"重定向目标不可访问：{bad}")
+            async with client.stream("GET", current) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    loc = resp.headers.get("location") or ""
+                    if not loc:
+                        raise RuntimeError(f"HTTP {resp.status_code} 但没有跳转地址")
+                    current = urljoin(current, loc)
+                    continue
+                resp.raise_for_status()
+                ctype = resp.headers.get("content-type", "").lower()
+                async for chunk in resp.aiter_bytes(65536):
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total > _FETCH_MAX_BYTES:
+                        break
+                return b"".join(chunks), ctype
+    raise RuntimeError("重定向超过 5 次，放弃")
 
 
 def _html_to_text(raw: bytes) -> tuple:

@@ -413,6 +413,86 @@ class TestFetchPageSsrf:
         r = await wt.fetch_page.ainvoke({"url": "http://127.0.0.1/secret"})
         assert "抓不了" in r
 
+    @pytest.mark.asyncio
+    async def test_redirect_to_loopback_blocked(self, monkeypatch):
+        """SSRF 绕过回归（2026-08-13 审查 P1 实锤）：公网 URL 302 到回环——
+        follow_redirects=True 时代必漏，手工逐跳检查后必须拦。"""
+        class _Resp:
+            status_code = 302
+            headers = {"location": "http://127.0.0.1:8100/health"}
+            def raise_for_status(self):
+                pass
+            async def aiter_bytes(self, n):
+                yield b""
+
+        class _StreamCtx:
+            async def __aenter__(self):
+                return _Resp()
+            async def __aexit__(self, *a):
+                return False
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            def stream(self, method, url):
+                return _StreamCtx()
+
+        async def _pass_public(url):
+            # 模拟真实检查：公网放行，回环拦截
+            return "" if "example.com" in url else "这个地址不能访问（内网/保留地址）"
+        monkeypatch.setattr(wt, "_ssrf_check_async", _pass_public)
+        monkeypatch.setattr(wt.httpx, "AsyncClient", _Client)
+        with pytest.raises(RuntimeError, match="重定向目标不可访问"):
+            await wt._fetch_bytes("http://example.com/start")
+
+    @pytest.mark.asyncio
+    async def test_redirect_to_public_followed(self, monkeypatch):
+        """不误伤：正常短链跳转到公网地址要继续跟（t.cn 类短链全靠跳转）。"""
+        hops = []
+
+        class _Resp:
+            def __init__(self, url):
+                self.status_code = 302 if "short" in url else 200
+                self.headers = ({"location": "https://example.com/final"}
+                                if self.status_code == 302
+                                else {"content-type": "text/html"})
+            def raise_for_status(self):
+                pass
+            async def aiter_bytes(self, n):
+                yield b"<html><body>ok</body></html>"
+
+        class _StreamCtx:
+            def __init__(self, url):
+                self._url = url
+            async def __aenter__(self):
+                return _Resp(self._url)
+            async def __aexit__(self, *a):
+                return False
+
+        class _Client:
+            def __init__(self, **kw):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *a):
+                return False
+            def stream(self, method, url):
+                hops.append(url)
+                return _StreamCtx(url)
+
+        monkeypatch.setattr(wt, "_ssrf_check_async", lambda url: self._async_noop())
+        monkeypatch.setattr(wt.httpx, "AsyncClient", _Client)
+        raw, ctype = await wt._fetch_bytes("http://short.cn/x")
+        assert hops == ["http://short.cn/x", "https://example.com/final"]
+        assert b"ok" in raw
+
+    async def _async_noop(self=None):
+        return ""
+
 
 # ---------------------------------------------------------------- 插件 anatomy
 
