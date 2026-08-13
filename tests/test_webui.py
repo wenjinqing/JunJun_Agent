@@ -1,10 +1,23 @@
 """阶段 7 单测：WebUI API（TestClient）+ DB 清理。"""
 
 import time
+import tomllib
 
 import pytest
 from peewee import SqliteDatabase
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config_persist(monkeypatch, tmp_path):
+    """persist_bot_config 默认写 config/bot_config.toml（生产配置！）——
+    2026-08-13 实锤：test_hot_change_applies_to_memory 把测试值 66 写进了
+    真实 max_context_size。隔离到 tmp 并放一个真 toml，写回路径照常走通。"""
+    import junjun_core.config.config as cfg_mod
+    cfg_file = tmp_path / "bot_config.toml"
+    cfg_file.write_text("[plugins]\ndisabled = []\n", encoding="utf-8")
+    monkeypatch.setattr(cfg_mod, "CONFIG_DIR", tmp_path)
+    return cfg_file
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +79,77 @@ class TestConfigAPI:
     def test_non_whitelist_key_rejected(self, auth_client):
         r = auth_client.post("/api/config", json={"gateway": {"port": 1}})
         assert r.status_code == 400
+
+
+class TestPluginTogglePersist:
+    """2026-08-13 审查 P2：WebUI 插件开关此前只改内存，重启即丢——
+    插件级开关默认写回 bot_config.toml [plugins].disabled。"""
+
+    @staticmethod
+    def _register_fake_plugin():
+        from langchain_core.tools import tool
+        from junjun_skills import registry
+
+        @tool
+        def fake_plug_tool(x: str) -> str:
+            """测试插件工具。
+
+            Args:
+                x: 输入
+            """
+            return x
+
+        registry.register(fake_plug_tool, plugin="fakeplug")
+
+    def test_disable_persists_to_toml(self, auth_client, _fake_bot_config,
+                                      _isolate_config_persist):
+        from junjun_skills import registry
+        self._register_fake_plugin()
+        r = auth_client.post("/api/plugins/fakeplug", json={"enabled": False})
+        assert r.status_code == 200 and r.json()["persisted"] is True
+        assert not registry.is_plugin_enabled("fakeplug")
+        doc = tomllib.loads(_isolate_config_persist.read_text(encoding="utf-8"))
+        assert doc["plugins"]["disabled"] == ["fakeplug"]
+
+    def test_enable_removes_from_toml(self, auth_client, _fake_bot_config,
+                                      _isolate_config_persist):
+        from junjun_skills import registry
+        self._register_fake_plugin()
+        auth_client.post("/api/plugins/fakeplug", json={"enabled": False})
+        r = auth_client.post("/api/plugins/fakeplug", json={"enabled": True})
+        assert r.json()["persisted"] is True
+        assert registry.is_plugin_enabled("fakeplug")
+        doc = tomllib.loads(_isolate_config_persist.read_text(encoding="utf-8"))
+        assert doc["plugins"]["disabled"] == []
+
+    def test_skill_toggle_not_persisted(self, auth_client, _fake_bot_config,
+                                        _isolate_config_persist):
+        """skill 级开关无配置归宿，只改运行时——不许乱写 [plugins].disabled。"""
+        self._register_fake_plugin()
+        r = auth_client.post("/api/plugins/fake_plug_tool", json={"enabled": False})
+        assert r.status_code == 200 and r.json()["persisted"] is False
+        doc = tomllib.loads(_isolate_config_persist.read_text(encoding="utf-8"))
+        assert doc["plugins"]["disabled"] == []
+
+    def test_persist_false_skips_write(self, auth_client, _fake_bot_config,
+                                       _isolate_config_persist):
+        from junjun_skills import registry
+        self._register_fake_plugin()
+        r = auth_client.post("/api/plugins/fakeplug",
+                             json={"enabled": False, "persist": False})
+        assert r.json()["persisted"] is False
+        assert not registry.is_plugin_enabled("fakeplug")   # 运行时生效
+        doc = tomllib.loads(_isolate_config_persist.read_text(encoding="utf-8"))
+        assert doc["plugins"]["disabled"] == []             # 文件不动
+
+    def test_existing_disabled_union_kept(self, auth_client, _fake_bot_config,
+                                          _isolate_config_persist):
+        """配置里原就禁用的插件（从未加载、不在运行时集）不能被一次 toggle 抹掉。"""
+        _fake_bot_config.raw["plugins"] = {"disabled": ["otherplug"]}
+        self._register_fake_plugin()
+        auth_client.post("/api/plugins/fakeplug", json={"enabled": False})
+        doc = tomllib.loads(_isolate_config_persist.read_text(encoding="utf-8"))
+        assert doc["plugins"]["disabled"] == ["fakeplug", "otherplug"]
 
 
 class TestStatsSessions:

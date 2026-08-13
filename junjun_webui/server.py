@@ -229,11 +229,22 @@ def list_plugins():
 
 @app.post("/api/plugins/{name}", dependencies=[Depends(_check_auth)])
 def toggle_plugin(name: str, payload: dict):
+    """开关 skill/插件。插件级开关默认写回 bot_config.toml [plugins].disabled
+    （payload 带 "persist": false 只改运行时）；skill 级无配置归宿，仅运行时生效。"""
     from junjun_skills import registry
     enabled = bool(payload.get("enabled", True))
+    persist = bool(payload.get("persist", True))
     if not registry.set_enabled(name, enabled):
         raise HTTPException(404, f"skill 不存在: {name}")
-    return {"name": name, "enabled": enabled}
+    persisted = False
+    if persist and registry.is_plugin(name):
+        from junjun_skills.plugin_loader import persist_plugin_toggle
+        try:
+            persist_plugin_toggle(name, enabled)
+            persisted = True
+        except Exception as e:
+            logger.warning(f"插件开关写回 toml 失败（内存已生效，重启后丢失）: {e}")
+    return {"name": name, "enabled": enabled, "persisted": persisted}
 
 
 # ---------- 会话调试 ----------

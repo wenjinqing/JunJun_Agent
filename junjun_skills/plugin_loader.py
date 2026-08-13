@@ -4,7 +4,7 @@
 - 依赖探测失败禁用该插件 WARN 不崩启动
 - available_for: 会话白名单（chat_id 列表；空=全会话）
 - bot_config.toml [plugins].disabled：持久禁用列表（跳过 import，
-  工具/命令/拦截器全部不注册；WebUI 运行时禁用不持久，配置层兜底）
+  工具/命令/拦截器全部不注册；WebUI 插件开关默认写回此列表）
 """
 
 import importlib
@@ -24,6 +24,26 @@ def _disabled_plugins() -> set:
         return set(get_global_config().raw.get("plugins", {}).get("disabled", []) or [])
     except Exception:
         return set()
+
+
+def persist_plugin_toggle(name: str, enabled: bool) -> None:
+    """插件开关写回 bot_config.toml [plugins].disabled（配置即现状）。
+
+    运行时禁用集并进来一起写：本轮之前 WebUI 里关掉的插件，不能在下一次
+    toggle 时莫名「复活」。配置里原就禁用的插件从未加载（不在运行时集），
+    靠并集保住。
+    """
+    from junjun_core.config import get_global_config, persist_bot_config
+    from junjun_skills import registry
+    raw = get_global_config().raw
+    disabled = set(raw.get("plugins", {}).get("disabled", []) or [])
+    disabled |= registry._plugin_disabled
+    if enabled:
+        disabled.discard(name)
+    else:
+        disabled.add(name)
+    raw.setdefault("plugins", {})["disabled"] = sorted(disabled)
+    persist_bot_config([("plugins", "disabled")])
 
 
 def load_plugins() -> int:

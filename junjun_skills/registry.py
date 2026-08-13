@@ -317,6 +317,11 @@ def is_plugin_enabled(name: str) -> bool:
     return name not in _plugin_disabled
 
 
+def is_plugin(name: str) -> bool:
+    """name 是否是已加载插件名（区别于单个 skill 名；WebUI 持久化判定用）。"""
+    return name in _skill_plugin.values()
+
+
 def list_skills() -> List[dict]:
     """插件管理用：全部 skill 及启用状态。"""
     return [{"name": n, "description": (s.description or "")[:80],
