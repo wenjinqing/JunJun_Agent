@@ -214,3 +214,43 @@ class TestProcessorGate:
         session.agent = _FakeAgent()
         await proc_mod.junjun_processor(session, self._meta(user_id="111"))
         assert len(dispatched) == 1
+
+
+class TestAdminGateHint:
+    """2026-08-14 实锤：管理员本人在群里忘 @bot 裸发 /屏蔽 被拒，
+    一脸懵「为什么我不是管理员」——上报私聊里点破原因；非管理员
+    的上报保持原口径（不向无关人暴露激活机制）。"""
+
+    def _meta(self, user_id):
+        return InboundMeta(text="/屏蔽 12345", user_id=user_id, nickname="温某",
+                           group_id="999", message_id="m1", at_bot=False,
+                           is_self=False)
+
+    async def _dispatch_capture(self, monkeypatch, user_id):
+        from junjun_agent import commands as cmd_mod
+        from junjun_core import security
+        reports = []
+        monkeypatch.setattr(security, "report_violation",
+                            lambda *a: reports.append(a))
+
+        async def _noop_reply(self, *a, **kw):
+            return None
+        monkeypatch.setattr(cmd_mod.CommandContext, "reply", _noop_reply)
+        # 权限位未激活（群里没 @bot）——由 processor 的 set_caller 语义决定
+        security.admin_privileged.set(False)
+        session = ChatSession("qq:999:group", "qq", group_id="999")
+        handled = await cmd_mod.dispatch(session, self._meta(user_id))
+        return handled, reports
+
+    @pytest.mark.asyncio
+    async def test_admin_without_at_gets_hint(self, monkeypatch):
+        handled, reports = await self._dispatch_capture(monkeypatch, "999")
+        assert handled is True
+        assert reports and "@我" in reports[0][4]      # detail 带激活提示
+
+    @pytest.mark.asyncio
+    async def test_non_admin_report_has_no_hint(self, monkeypatch):
+        """误判回归：普通群友的上报不暴露权限激活机制。"""
+        handled, reports = await self._dispatch_capture(monkeypatch, "12345")
+        assert handled is True
+        assert reports and "@我" not in reports[0][4]

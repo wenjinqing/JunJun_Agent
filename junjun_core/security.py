@@ -103,10 +103,13 @@ def report_violation(kind: str, user_id: str, nickname: str, chat_id: str, detai
         f"越权尝试 [{kind}] user={user_id}({nickname}) chat={chat_id}: {detail[:120]}"
     )
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(notify_admin(
-            f"⚠️ 越权提醒：{nickname or '?'}(QQ {user_id or '?'}) 在 {chat_id} "
-            f"试图{kind}：{detail[:100]}\n已自动拒绝。"
-        ))
+        asyncio.get_running_loop()
     except RuntimeError:
-        pass  # 无事件循环（单测同步上下文）——日志已记录
+        return  # 无事件循环（单测同步上下文）——日志已记录
+    # 强引用后台任务：裸 create_task 会被 GC 在任意 await 点收走，
+    # 上报静默蒸发（2026-08-13 任务内核蒸发实锤的同类）
+    from junjun_core.bg_tasks import fire_and_forget
+    fire_and_forget(notify_admin(
+        f"⚠️ 越权提醒：{nickname or '?'}(QQ {user_id or '?'}) 在 {chat_id} "
+        f"试图{kind}：{detail[:100]}\n已自动拒绝。"
+    ), name="report-violation")

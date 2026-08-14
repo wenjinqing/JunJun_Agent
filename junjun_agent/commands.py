@@ -177,10 +177,15 @@ async def dispatch(session, meta) -> bool:
         return False
 
     if cmd.admin_only:
-        from junjun_core.security import is_admin_privileged, report_violation
+        from junjun_core.security import is_admin, is_admin_privileged, report_violation
         if not is_admin_privileged():
+            # 管理员本人在群里裸发命令（忘 @bot）时，私聊上报里点破原因——
+            # 群里回复口径不变（不向群暴露谁是管理员），私聊给解法
+            # （2026-08-14 实锤：管理员本人被拒后一脸懵「为什么我不是管理员」）
+            hint = ("（你是管理员，但群里要 @我 发命令才激活权限；私聊直接发也行）"
+                    if is_admin(meta.user_id) else "")
             report_violation(f"管理员命令 /{cmd.name}", meta.user_id or "",
-                             meta.nickname, session.chat_id, text[:60])
+                             meta.nickname, session.chat_id, text[:60] + hint)
             ctx = CommandContext(session=session, meta=meta, args=args)
             await ctx.reply("这个命令只有管理员能用哦（已通知管理员）。")
             return True
