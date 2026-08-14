@@ -55,6 +55,46 @@ class TestTeeStream:
         t.write("不该炸\n")       # 静默降级
         t.flush()
 
+    def test_rotation_failure_keeps_logging(self, tee, monkeypatch):
+        """轮转 rename 失败（句柄被占用）后必须继续写盘——2026-08-14 实锤隐患：
+        旧实现先 close 再 rename，rename 一炸文件句柄永久关闭，进程日志静默停更。"""
+        from pathlib import Path
+
+        t, path = tee
+        monkeypatch.setattr(lg, "_MAX_BYTES", 50)
+        orig_rename = Path.rename
+
+        def boom(self, target):
+            if self == path:
+                raise PermissionError("模拟被占用")
+            return orig_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", boom)
+        t.write("x" * 60 + "\n")          # 触发轮转，rename 炸
+        t.write("轮转失败后还活着\n")
+        content = path.read_text(encoding="utf-8")
+        assert "轮转失败后还活着" in content   # 保底重开，继续追加
+        assert not t._f.closed
+
+
+class TestLazyBootstrap:
+    def test_get_logger_lazy_bootstrap_does_not_steal_file(self, monkeypatch, tmp_path):
+        """import 期 get_logger 只许控制台兜底，不许占 bot.log——2026-08-14 实锤：
+        run_adapter 的 initialize_logging("adapter") 被 import 链抢先懒初始化
+        顶成 no-op，adapter 日志全天写进 bot.log、adapter.log 停更。"""
+        monkeypatch.setattr(lg, "_initialized", False)
+        monkeypatch.setattr(lg, "_bootstrapped", False)
+        monkeypatch.setattr(lg, "_LOG_DIR", tmp_path)
+        lg.get_logger("t.lazy").info("控制台兜底行")   # 模拟 import 期事故场景
+        assert not list(tmp_path.glob("*.log"))        # 不占任何日志文件
+        lg.initialize_logging("INFO", log_name="adapter")   # 入口显式初始化仍生效
+        assert lg._initialized
+        lg.get_logger("t.after").info("落盘行")
+        assert "落盘行" in (tmp_path / "adapter.log").read_text(encoding="utf-8")
+        # 恢复供后续测试
+        monkeypatch.setattr(lg, "_initialized", False)
+        lg.initialize_logging("INFO", log_name="bot")
+
 
 class TestInitialize:
     def test_log_name_none_skips_file(self, monkeypatch, tmp_path):
