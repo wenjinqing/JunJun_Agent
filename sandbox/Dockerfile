@@ -23,10 +23,21 @@ RUN apt-get update \
 # Docker Desktop/Windows 的 bind mount 无此问题）
 RUN useradd --create-home --uid 10001 sandbox
 
-# matplotlib 默认启用中文字体（生成的图表代码不用自己设 font.family）
-RUN mkdir -p /home/sandbox/.config/matplotlib \
- && echo "font.family: Noto Sans CJK SC" > /home/sandbox/.config/matplotlib/matplotlibrc \
- && chown -R sandbox:sandbox /home/sandbox/.config
+# matplotlib 默认启用中文字体（生成的图表代码不用自己设 font.family）。
+# 三个坑全踩过（2026-08-14 实锤）：
+# 1) rc 写 ~/.config 依赖 HOME，docker --user 运行 HOME 不可靠，根本没被读到；
+#    包内 mpl-data/matplotlibrc 是兜底候选，永远被找到。
+# 2) DejaVu 在前指望逐字形回退——mpl 3.11 实际不回退，CJK 照样豆腐；
+#    Noto 必须第一（它自带拉丁/数字字形，整图统一无回退依赖）。
+# 3) 出厂 rc 里这些键是【未注释】的模板行，追加会产生 duplicate key 警告，
+#    必须 sed 原位替换；grep 断言防 rc 模板漂移时静默失效。
+RUN MPLRC=$(python -c "import matplotlib, os; print(os.path.join(os.path.dirname(matplotlib.__file__), 'mpl-data', 'matplotlibrc'))") \
+ && sed -i \
+      -e 's/^#\?font\.family\s*:.*/font.family: sans-serif/' \
+      -e 's/^#\?font\.sans-serif\s*:.*/font.sans-serif: Noto Sans CJK SC, DejaVu Sans, sans-serif/' \
+      -e 's/^#\?axes\.unicode_minus\s*:.*/axes.unicode_minus: False/' \
+      "$MPLRC" \
+ && grep -q "^font\.sans-serif: Noto Sans CJK SC" "$MPLRC"
 
 USER sandbox
 WORKDIR /workspace

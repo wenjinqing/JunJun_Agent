@@ -13,7 +13,7 @@ when: 需要真算数、处理文件、画数据图表、做词云/二维码/Wor
 | 想做的事 | 怎么做 |
 |---|---|
 | 算账/统计/数据处理（csv/excel） | run_code 跑 pandas，结果是算出来的不是估的 |
-| 数据图表（趋势/占比/对比） | run_code 用 matplotlib/seaborn 存 png |
+| 数据图表（趋势/占比/对比） | run_code 用 matplotlib/seaborn 存 png（中文字体沙箱已内置，直接写中文标题标签就行，不用设字体） |
 | 中文词云 | run_code 用 jieba 分词 + wordcloud 出图 |
 | Word 报告 | run_code 用 python-docx 存 docx |
 | 读 PDF / 产 PDF | pdfplumber 读、reportlab 产 |
@@ -51,6 +51,10 @@ when: 需要真算数、处理文件、画数据图表、做词云/二维码/Wor
   拿到，workspace_write 喂给代码。
 - 单次最长 30 秒，别写死循环；文件只在 /workspace 读写。
 - 代码里不许 import os/sys/subprocess（预检会拦；文件操作用 open/pathlib 就行）。
+- 词云例外：wordcloud 不吃 matplotlib 的全局字体，font_path 必须传
+  "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"，不然中文全是方框。
+- seaborn 别调 set_theme/set()——它会把字体重置回无 CJK 的默认列表，
+  中文又变方框；默认主题出图完全够看。
 - 跑代码有自动门禁，不用预先请示、不用等谁点头——**直接调 run_code**：
   管理员直跑；没权限时工具会自己返回明确指引，照实转告就行。
 - **别光读手册不动手**：读完就按手册调工具。手册说的工具若不在当前
