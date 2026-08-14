@@ -118,6 +118,116 @@ class TestParsePlan:
         assert p.steps[0].done_criteria == ""
 
 
+class TestParsePlanAsyncGuard:
+    """异步接单工具的依赖步骤硬剔除（2026-08-14 生产实锤：deep_research→
+    llm_synthesize 两步计划，合成步拿着接单回执凭空写报告先发群，82 秒后
+    后台真报告又到，群里双份内容打架）。"""
+
+    _ASYNC = frozenset({"deep_research"})
+
+    def _parse(self, steps, **kw):
+        return parse_plan({"steps": steps}, goal="g", chat_id="c", user_id="u",
+                          async_actions=self._ASYNC, **kw)
+
+    def test_async_dependent_dropped(self):
+        p = self._parse([
+            {"id": "s1", "action": "deep_research", "desc": "调研"},
+            {"id": "s2", "action": SYNTH_ACTION, "desc": "写报告",
+             "depends_on": ["s1"]},
+        ], valid_actions={"deep_research"})
+        assert [s.id for s in p.steps] == ["s1"]
+
+    def test_async_ref_in_args_dropped(self):
+        """不声明 depends_on、只在 args_hint 里 $引用 的一样剔。"""
+        p = self._parse([
+            {"id": "s1", "action": "deep_research", "desc": "调研"},
+            {"id": "s2", "action": SYNTH_ACTION, "desc": "写",
+             "args_hint": {"topic": "$s1 的材料"}},
+        ], valid_actions={"deep_research"})
+        assert [s.id for s in p.steps] == ["s1"]
+
+    def test_async_transitive_dropped(self):
+        p = self._parse([
+            {"id": "s1", "action": "deep_research", "desc": "调研"},
+            {"id": "s2", "action": SYNTH_ACTION, "desc": "写", "depends_on": ["s1"]},
+            {"id": "s3", "action": "send_message", "desc": "转达",
+             "depends_on": ["s2"]},
+        ], valid_actions={"deep_research", "send_message"})
+        assert [s.id for s in p.steps] == ["s1"]
+
+    def test_independent_step_kept(self):
+        """误判方向：与异步步骤无依赖的独立步骤不许误剔。"""
+        p = self._parse([
+            {"id": "s1", "action": "deep_research", "desc": "调研"},
+            {"id": "s2", "action": "set_reminder", "desc": "顺便设个提醒"},
+        ], valid_actions={"deep_research", "set_reminder"})
+        assert [s.id for s in p.steps] == ["s1", "s2"]
+
+    def test_sync_chain_untouched(self):
+        """误判方向：普通同步工具链（搜索→汇总）不受异步守卫影响。"""
+        p = self._parse([
+            {"id": "s1", "action": "web_search", "desc": "搜"},
+            {"id": "s2", "action": SYNTH_ACTION, "desc": "汇总",
+             "depends_on": ["s1"], "args_hint": {"q": "$s1"}},
+        ], valid_actions={"web_search"})
+        assert [s.id for s in p.steps] == ["s1", "s2"]
+
+    def test_no_async_actions_backcompat(self):
+        """不传 async_actions 维持旧行为（依赖保留）。"""
+        p = parse_plan({"steps": [
+            {"id": "s1", "action": "deep_research", "desc": "调研"},
+            {"id": "s2", "action": SYNTH_ACTION, "desc": "写",
+             "depends_on": ["s1"]},
+        ]}, goal="g", chat_id="c", user_id="u", valid_actions={"deep_research"})
+        assert [s.id for s in p.steps] == ["s1", "s2"]
+
+
+class TestAsyncJobTagContract:
+    """tags 字面量契约：插件侧打标与内核侧识别必须同字（跨包没法共享常量，
+    用测试钉死）。"""
+
+    def test_plugin_tools_carry_tag(self):
+        from junjun_agent.task_kernel.plan import ASYNC_JOB_TAG
+        from junjun_skills.plugins.async_task import tools as at
+        from junjun_skills.plugins.bilibili import tools as bt
+        for t in (at.deep_research, at.run_background_task, bt.watch_video):
+            assert ASYNC_JOB_TAG in (getattr(t, "tags", None) or []), t.name
+
+    def test_catalog_marks_async(self, monkeypatch):
+        from junjun_agent.task_kernel import planner
+        import junjun_skills.registry as reg
+        sync_tool = _StubTool("web_search", lambda a: "x")
+        async_tool = _StubTool("deep_research", lambda a: "x")
+        async_tool.tags = ["async_job"]
+        monkeypatch.setattr(reg, "get_tools", lambda: [sync_tool, async_tool])
+        cat = planner._tool_catalog()
+        async_line = [l for l in cat.splitlines() if "deep_research" in l][0]
+        sync_line = [l for l in cat.splitlines() if "web_search" in l][0]
+        assert "［异步接单" in async_line
+        assert "［异步接单" not in sync_line
+
+
+class TestReportRemembered:
+    @pytest.mark.asyncio
+    async def test_final_report_remembered(self, harness, monkeypatch):
+        """终态汇报必须 remember=True（2026-08-14 实锤：发到群里的调研报告
+        既没落库也没进短期记忆，bot 被追问「报告呢」只能装傻——P1-6 同类）。
+        async_jobs 汇报路径本就 remember=True，内核这条是漏开的孤岛。"""
+        import junjun_agent.outbound as outbound
+        cap = {}
+
+        async def _cap(chat_id, segments, *, source="", remember=True):
+            cap["remember"] = remember
+            return True
+
+        monkeypatch.setattr(outbound, "send_proactive", _cap)
+        plan = TaskPlan(goal="调研", chat_id="qq:g1:group", state="done",
+                        steps=[Step(id="s1", action="a", desc="d",
+                                    status="done", result="成果")])
+        await executor.kernel._report(plan)
+        assert cap.get("remember") is True
+
+
 # ---------- 执行循环 ----------
 
 class TestRunLoop:

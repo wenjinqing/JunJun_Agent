@@ -700,6 +700,11 @@ def watch_video(url: str) -> str:
 
 TOOLS = [bilibili_summary, watch_video]
 
+# 异步接单工具标记（与 async_task 插件同一契约，见 plan.ASYNC_JOB_TAG）：
+# watch_video 只返回接单回执，观后感由后台任务做完自己汇报——规划器据此
+# 硬剔除依赖它的后续步骤，不许拿排回执去「写观后感」。
+watch_video.tags = ["async_job"]
+
 
 from junjun_skills.plugins.bilibili import watch as _watch_mod  # noqa: E402
 

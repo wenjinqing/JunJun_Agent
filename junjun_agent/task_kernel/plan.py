@@ -9,6 +9,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from junjun_core.observability import get_logger
+
+logger = get_logger("task_kernel.plan")
+
 # 步骤动作白名单外的特殊动作：LLM 直接合成文本（不调用工具）
 SYNTH_ACTION = "llm_synthesize"
 
@@ -17,6 +21,13 @@ SYNTH_ACTION = "llm_synthesize"
 # 是软约束，代码侧这是硬约束，execute 两处都过它）。
 # workspace_send（Phase 2）：把工作区文件发到聊天，同属发布类。
 SIDE_EFFECT_ACTIONS = frozenset({"ai_draw", "unified_tts", "send_feed", "workspace_send"})
+
+# 异步接单工具的 tool.tags 标记：这类工具（deep_research/run_background_task/
+# watch_video）只同步返回「已接单」回执，真正的成果由后台任务自己做、做完
+# 自己直接汇报——回执不是材料。后续步骤若依赖它，只能拿着回执编空话
+# （2026-08-14 生产实锤：deep_research→llm_synthesize 两步计划，群里先收到
+# 一份没有材料的鼠标「报告」，82 秒后后台真报告又到，双份内容打架）。
+ASYNC_JOB_TAG = "async_job"
 
 _VERIFY_KINDS = ("tool_ok", "schema", "llm_judge", "human", "none")
 
@@ -120,11 +131,14 @@ def merge_revisal(plan: TaskPlan, revisal) -> None:
 
 
 def parse_plan(payload: dict, *, goal: str, chat_id: str, user_id: str,
-               valid_actions: set, max_steps: int = 6) -> Optional[TaskPlan]:
+               valid_actions: set, max_steps: int = 6,
+               async_actions: frozenset = frozenset()) -> Optional[TaskPlan]:
     """规划器 JSON 产出 -> TaskPlan；非法步骤丢弃，全废则 None（回退对话通道）。
 
     防御点：LLM 会编不存在的工具、会漏 depends_on、verify 会乱写——
     全部在入口清洗，执行器只面对合法计划。
+    async_actions：异步接单工具名集合（tool.tags 带 ASYNC_JOB_TAG）——依赖
+    它们的步骤会被硬剔除（回执不是材料，见 ASYNC_JOB_TAG 注释）。
     """
     raw_steps = payload.get("steps")
     if not isinstance(raw_steps, list) or not raw_steps:
@@ -152,6 +166,43 @@ def parse_plan(payload: dict, *, goal: str, chat_id: str, user_id: str,
             depends_on=deps, verify=verify,
             done_criteria=str(rs.get("done_criteria") or "")[:160],
         ))
+    steps = _drop_async_dependents(steps, async_actions, goal)
     if not steps:
         return None
     return TaskPlan(goal=goal[:200], chat_id=chat_id, user_id=user_id, steps=steps)
+
+
+def _drop_async_dependents(steps: List[Step], async_actions: frozenset,
+                           goal: str) -> List[Step]:
+    """剔除（传递）依赖异步接单步骤的步骤——它们拿到的只是回执，只能编空话。
+
+    depends_on 指向和 args_hint 里「$步骤id」引用两种形式都认。异步步骤
+    本身保留（它就该是收尾步骤）；无依赖关系的后续独立步骤不受影响。
+    """
+    if not async_actions:
+        return steps
+    async_ids = {s.id for s in steps if s.action in async_actions}
+    if not async_ids:
+        return steps
+
+    def refs_async(s: Step) -> bool:
+        return any(isinstance(v, str) and any(f"${a}" in v for a in async_ids)
+                   for v in s.args_hint.values())
+
+    dropped: set = set()
+    changed = True
+    while changed:  # 传递闭包：依赖被剔步骤的步骤也要剔
+        changed = False
+        for s in steps:
+            if s.id in async_ids or s.id in dropped:
+                continue
+            if refs_async(s) or any(d in async_ids or d in dropped
+                                    for d in s.depends_on):
+                dropped.add(s.id)
+                changed = True
+    if not dropped:
+        return steps
+    logger.warning(
+        f"剔除 {len(dropped)} 个依赖异步接单步骤的步骤（回执不是材料）: "
+        f"{sorted(dropped)} goal={goal[:40]}")
+    return [s for s in steps if s.id not in dropped]

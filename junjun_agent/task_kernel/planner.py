@@ -8,7 +8,7 @@ import json
 import re
 
 from junjun_core.observability import get_logger
-from junjun_agent.task_kernel.plan import TaskPlan, parse_plan
+from junjun_agent.task_kernel.plan import ASYNC_JOB_TAG, TaskPlan, parse_plan
 
 logger = get_logger("task_kernel.planner")
 
@@ -26,6 +26,7 @@ _PLANNER_PROMPT = """你是任务规划器。把用户的委托拆成可执行�
 1. 最多 {max_steps} 步，能少不多；每步一句话说清要做什么（desc）。
 2. 步骤间有先后依赖就写 depends_on（只允许依赖前面的步骤）；无依赖的步骤会并行。
 3. 画图/语音这类成品工具（ai_draw、unified_tts 等）只能放最后一步——它们是即交即走的。发说说/发空间类需求直接一步 send_feed（它内部自带配图能力），不要拆 ai_draw→send_feed 两步（会画两张图）。
+   标［异步接单］的工具（deep_research、run_background_task、watch_video）同样只能放最后一步：它返回的只是接单回执，真正的成果由后台任务自己做、做完自己直接发给对方——它之后不要再排任何步骤，尤其不要排 llm_synthesize 去「写报告/汇总」（没有材料只能编空话）；调研/出报告类需求整体就是一步 deep_research。
 4. verify 填验证方式：tool_ok（工具不报错即可，默认）/ llm_judge（步骤产出本身就是可判质量的文本，如报告、笔记、感想）/ none / human（发空间、订阅推送这类对外发布动作——必须等管理员批准才执行）。
    注意：工具返回的多是确认语或原始素材，不含个人创作——「写得好不好、有没有感受」这类判断对象应该是 llm_synthesize 步骤；给工具步骤配 llm_judge 等于逼它返回它生产不了的东西，必死。
 5. args_hint 必须严格按工具签名给参数：参数名照抄签名（必填的一个都不许漏），值给具体内容或「$步骤id」引用前序产出。拿不准可选参数就省略。
@@ -83,13 +84,27 @@ def _schema_brief(t) -> str:
 
 
 def _tool_catalog() -> str:
-    """给规划器的工具清单（名字 + 参数签名摘要 + 一句描述）；熔断降级的工具不出列。"""
+    """给规划器的工具清单（名字 + 参数签名摘要 + 一句描述）；熔断降级的工具不出列。
+
+    异步接单工具的前置标记必须在截断之前——desc 只取首行 60 字，而
+    deep_research 的「后台执行完成后主动汇报」写在 docstring 第二行，
+    2026-08-14 生产实锤：规划器看不到异步属性，把它当同步材料源排进链路。
+    """
     from junjun_skills.registry import get_tools
     lines = []
     for t in get_tools():
         desc = (t.description or "").strip().split("\n")[0][:60]
-        lines.append(f"- {t.name}{_schema_brief(t)}: {desc}")
+        mark = ("［异步接单：只回接单回执，成果由后台自己做并直接汇报］"
+                if ASYNC_JOB_TAG in (getattr(t, "tags", None) or []) else "")
+        lines.append(f"- {t.name}{_schema_brief(t)}: {mark}{desc}")
     return "\n".join(lines)
+
+
+def _async_actions() -> frozenset:
+    """当前注册的异步接单工具名集合（tool.tags 带 ASYNC_JOB_TAG）。"""
+    from junjun_skills.registry import get_tools
+    return frozenset(t.name for t in get_tools()
+                     if ASYNC_JOB_TAG in (getattr(t, "tags", None) or []))
 
 
 _PLANNER_MAX_TOKENS = 8192
@@ -122,7 +137,8 @@ async def make_plan(goal: str, *, chat_id: str, user_id: str,
         payload = _extract_json(str(resp.content))
         if payload:
             plan = parse_plan(payload, goal=goal, chat_id=chat_id, user_id=user_id,
-                              valid_actions=valid, max_steps=max_steps)
+                              valid_actions=valid, max_steps=max_steps,
+                              async_actions=_async_actions())
             if plan is not None:
                 return plan
         if attempt == 1:
@@ -151,6 +167,8 @@ _REVISER_PROMPT = """你是任务规划器。一个执行中的计划有步骤�
    你只列了修正步骤的话，没列的原步骤会被当「确认放弃」处理。确认不再需要的步骤，
    显式写进 "drop": ["原步骤id"]。
 5. 验收失败（验收不通过）的修法是换验证方式或换成 llm_synthesize 重写，不是换参数重试。
+6. ［异步接单］工具（deep_research、run_background_task、watch_video）只能放最后一步：
+   它返回的是接单回执不是材料，成果由后台自己做并直接汇报——别在它后面排汇总/写报告步骤。
 
 输出格式（照这个写，别自造字段名）：
 {{"steps": [{{"id": "r1", "action": "工具名", "desc": "做什么", "args_hint": {{}}, "depends_on": [], "verify": "tool_ok", "done_criteria": "凭什么算完成"}}], "drop": []}}"""
@@ -195,7 +213,8 @@ async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
     valid = {t.name for t in get_tools()}
     done_ids = {s.id for s in plan.steps if s.status == "done"}
     revised = parse_plan(payload, goal=plan.goal, chat_id=plan.chat_id,
-                         user_id=plan.user_id, valid_actions=valid)
+                         user_id=plan.user_id, valid_actions=valid,
+                         async_actions=_async_actions())
     if revised is None:
         return None
     # 依赖修正：引用已完成步骤的依赖保留，其余依赖只认新步骤内部

@@ -189,6 +189,13 @@ def cancel_background_task(job_id: str) -> str:
 
 TOOLS = [deep_research, run_background_task, list_background_tasks, cancel_background_task]
 
+# 异步接单工具标记（TaskKernel 规划器按它识别「返回的是回执不是材料」，
+# 硬剔除依赖它们的后续步骤——2026-08-14 生产实锤：deep_research→llm_synthesize
+# 链路让群里先收到一份凭空写的报告，82 秒后后台真报告又到）。字面量与
+# junjun_agent.task_kernel.plan.ASYNC_JOB_TAG 同步，改动需双边一起。
+for _t in (deep_research, run_background_task):
+    _t.tags = ["async_job"]
+
 
 # ---------------------------------------------------------------- 命令
 

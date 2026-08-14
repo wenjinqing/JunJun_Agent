@@ -482,9 +482,13 @@ class TaskKernel:
                 f"\n（{plan.verify_skipped} 步的验收环节没跑通，按产出直接算通过）"
         said = ""
         if text:
+            # remember=True：终态汇报必须回填记忆+落库——2026-08-14 实锤：
+            # 群里发出去的调研报告 bot 自己记不住，被追问「报告呢」只能装傻
+            # （与 2026-08-04 P1-6 副作用失忆同类；async_jobs 汇报路径本就
+            # remember=True，此处是一开始漏开的孤岛）。
             sent = await send_proactive(
                 plan.chat_id, [ReplySegment(type="text", data=text)],
-                source="task_kernel", remember=False)
+                source="task_kernel", remember=True)
             said = text if sent else ""
         if plan.state in ("done", "failed"):
             detail = (f"{len(done)}/{len(plan.steps)} 步完成"
