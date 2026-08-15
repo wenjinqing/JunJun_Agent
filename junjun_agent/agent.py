@@ -287,26 +287,28 @@ def _apply_context_budget(
         ))
 
     kept, metrics = budget.build_messages(blocks)
-    # 组装 messages
+    # 组装 messages（前缀缓存纪律 2026-08-15：system 段只放稳定内容，
+    # now/reaction/情绪/记忆等随轮变化的进 <state> 尾区，聊天记录与
+    # 最新消息锚点在 system 之后的消息流里，变化全部后置）
     messages: list = []
     system_parts = []
     dynamic_parts = []
     bg_block = None
     latest_block = None
+    addressed_note = ""
     for b in kept:
         if b.name == "system":
             system_parts.append(b.content)
-        elif b.name == "examples":
-            # 示例集紧跟核心段（预算吃紧时它已被驱逐，走不到这里）
-            system_parts.append(b.content)
-        elif b.name in ("mood", "memory", "relation", "health"):
+        elif b.name in ("now", "reaction", "mood", "memory", "relation", "health"):
             dynamic_parts.append(b.content)
         elif b.name == "background":
             bg_block = b.content
         elif b.name == "latest":
             latest_block = b.content
         elif b.name == "addressed":
-            system_parts.append(b.content)
+            # @你/直呼名字 的必回提示并入最新消息锚点（消息流末端），
+            # 不再进 system 前缀——它在不在随消息翻转，进前缀必穿缓存
+            addressed_note = b.content
     system_text = "\n\n".join(system_parts)
     if dynamic_parts:
         state_body = "\n\n".join(dynamic_parts)  # Py<3.12：f-string 表达式不能含反斜杠
@@ -323,12 +325,17 @@ def _apply_context_budget(
             else:
                 bg_msgs.insert(0, HumanMessage(content="[群聊背景，仅供参考]"))
             messages.extend(bg_msgs)
+    if addressed_note:
+        addressed_note = f"※{addressed_note}"
     if latest_block:
-        messages.append(HumanMessage(content=latest_block))
+        messages.append(HumanMessage(
+            content=latest_block + (f"\n{addressed_note}" if addressed_note else "")))
     elif latest_text:
         # latest_msg 为空也要有「你要回复的消息」锚点（旧路径行为对齐）——
         # 内容与背景末行重复可接受，锚点缺位会让弱模型失去回复目标
-        messages.append(HumanMessage(content=f"[你要回复的消息]\n{latest_text}"))
+        messages.append(HumanMessage(
+            content=f"[你要回复的消息]\n{latest_text}"
+                    + (f"\n{addressed_note}" if addressed_note else "")))
 
     return messages, system_text, metrics
 

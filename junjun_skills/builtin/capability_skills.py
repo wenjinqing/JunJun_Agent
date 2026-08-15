@@ -1,9 +1,84 @@
 """能力查询 skill：get_capabilities（对齐原 capabilities 插件语义）。
-用户身份解析 skill：find_user_id（昵称 -> QQ 号，关系/画像类工具的前置）。"""
+用户身份解析 skill：find_user_id（昵称 -> QQ 号，关系/画像类工具的前置）。
+自我介绍 skill：introduce_self（身份+能力分类+技术栈的策展简介，2026-08-15）。"""
 
 from langchain_core.tools import tool
 
 from junjun_skills.builtin.memory_skills import current_chat_id
+
+
+# introduce_self 的能力分类映射：只列对用户可说的插件（键=插件目录名）。
+# 不在表里的插件不出现——内部 loop 件（topic_finder）、敏感件（netdisk）、
+# 未启用件自动隐身；新插件要进简介就在这加一行。
+_INTRO_CATEGORIES = {
+    "google_search": "联网搜索（网页/图片）",
+    "async_task": "深度调研与后台长任务",
+    "bilibili": "B 站视频（总结/看片讲内容）",
+    "douyin": "抖音视频解析",
+    "ai_draw": "AI 画图",
+    "tts": "语音合成",
+    "ja_tts": "日语语音",
+    "music": "点歌放歌",
+    "pixiv": "P 站搜图与画师订阅",
+    "subscription": "订阅盯梢（作者/UP 主更新提醒）",
+    "daily_report": "热点日报",
+    "weekly_report": "每周周报",
+    "news": "新闻速览",
+    "workspace": "工作区（收发文件/读写/跑代码/处理表格图表）",
+    "junzone": "QQ 空间（发说说/刷好友动态）",
+    "fun_texts": "群娱乐（美文/整活文案）",
+    "jrys": "今日运势",
+    "wife": "群老婆抽签",
+    "chat_screenshot": "聊天记录截图",
+    "cross_scene": "跨群围观",
+    "intimacy": "亲密度",
+    "emoji_manage": "表情包收藏管理",
+    "image_viewer": "识图（看图说话）",
+}
+
+# 技术栈策展文案：组件级，不含版本号/端点/供应商细节/路径（说了也没用，
+# 还白送攻击面）。要改就改这里，别让模型现场编。
+_INTRO_TECH = (
+    "技术栈：Python 写的；QQ 接入走 NapCat（OneBot 协议）；"
+    "大脑是几家国产大模型按活儿分工（聊天/规划/识图各走各的槽位）；"
+    "记忆存在本地 SQLite；复杂任务用 LangGraph 编排成步骤图执行；"
+    "跑代码有独立的 Docker 沙箱（隔离、无网络）。"
+)
+
+
+@tool
+def introduce_self() -> str:
+    """自我介绍。对方问「你是谁」「你是什么做的/什么模型」「你会什么（要简介不要
+    逐条清单）」「介绍下你自己」「你的技术栈」时使用。返回身份速写+能力分类概览+
+    技术栈，用你自己的口气自然转述，别照念。
+    区别于 get_capabilities（那是逐条列工具的完整清单）——本工具是给陌生人
+    的第一印象简介。内容已过安全筛：不含密钥/QQ 号/内部路径/供应商细节，
+    直接说出去不泄密。"""
+    from junjun_core.config import get_global_config
+    from junjun_skills.registry import list_skills
+
+    cfg = get_global_config()
+    nickname = cfg.bot.nickname
+    from junjun_agent.persona import persona_brief
+
+    # 启用的插件 -> 分类标签（按 _INTRO_CATEGORIES 表序输出，稳定可读）
+    enabled = {}
+    for s in list_skills():
+        if s["enabled"] and s["plugin"] != "builtin":
+            enabled[s["plugin"]] = enabled.get(s["plugin"], 0) + 1
+    caps = [label for name, label in _INTRO_CATEGORIES.items() if enabled.get(name)]
+    n_tools = sum(1 for s in list_skills() if s["enabled"])
+
+    lines = [
+        f"我是{nickname}——{persona_brief()}",
+        f"本体是个跑在服务器上的 AI 程序（被问起就大方承认），目前挂着 {n_tools} 件工具。",
+        "平时能干的：" + "、".join(caps) + "。"
+        if caps else "",
+        "内置基本功：设提醒、记事回忆、查天气、翻聊天记录、发表情。",
+        _INTRO_TECH,
+        "想看逐条的完整能力清单就调 get_capabilities。",
+    ]
+    return "\n".join(l for l in lines if l)
 
 
 @tool

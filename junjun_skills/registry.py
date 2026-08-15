@@ -648,7 +648,9 @@ def load_builtin() -> None:
     from junjun_skills.builtin.action_skills import (
         send_message, send_poke, get_weather, query_chat_history, peek_group_chat,
     )
-    from junjun_skills.builtin.capability_skills import get_capabilities, find_user_id
+    from junjun_skills.builtin.capability_skills import (
+        find_user_id, get_capabilities, introduce_self,
+    )
     from junjun_skills.builtin.skill_guide import use_skill
 
     register(get_time)
@@ -673,6 +675,7 @@ def load_builtin() -> None:
     # 跨群围观：私聊限定（A 群的事不在 B 群说，群聊场景直接不绑这个工具）
     register(peek_group_chat, available_for=lambda s: not s.is_group)
     register(get_capabilities)
+    register(introduce_self)
     register(find_user_id)
     register(use_skill)
     logger.info(f"内置 skill 已加载: {[t.name for t in get_tools()]}")

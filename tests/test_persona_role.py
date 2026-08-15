@@ -1,82 +1,113 @@
-"""persona 角色组装测试：设定卡 + 示例集拼接（自设形态）。
+"""persona 角色组装测试。
 
-2026-08-04 起 behavior_examples 从「整体替换 personality」改为「拼接」：
-设定卡给「你是谁」，示例集给「说话长什么样」。
+2026-08-15 通用 agent 转向瘦身（用户拍板「保留基本角色特征，不全删」）：
+- _role_persona 只剩一句话速写（persona_brief 同源），整卡/示例集不再每轮注入
+- 前缀缓存纪律：当前时间/keyword 命中/必回提示全部后置出核心段，
+  核心段跨轮字节级稳定
 """
 
 import junjun_agent.persona as persona
 
 
 class TestRolePersona:
-    def test_examples_concatenated_after_personality(self):
-        p = {"personality": "你是君君。", "behavior_examples": "被夸→「才没有」"}
-        role = persona._role_persona(p, "君君")
-        assert "你是君君。" in role          # 设定卡保留
-        assert "被夸→「才没有」" in role      # 示例集拼在后面
-        assert role.index("你是君君。") < role.index("被夸→「才没有」")
-        assert "不要照抄原句" in role         # 防复读标注
+    def test_role_is_brief_with_nickname(self):
+        # conftest 假配置 personality 首行「你是君君，测试人设。」
+        assert persona._role_persona("君君") == "你是君君。你是君君，测试人设。"
 
-    def test_no_examples_falls_back_to_personality(self):
-        p = {"personality": "你是君君。"}
-        assert persona._role_persona(p, "君君") == "你是君君。"
+    def test_full_card_not_injected(self, monkeypatch):
+        """设定卡第二行起不进 role——瘦身的核心证据。"""
+        from junjun_core.config import get_global_config
+        p = get_global_config().raw.setdefault("personality", {})
+        monkeypatch.setitem(p, "personality", "你是君君。\n傲娇，爱说杂鱼。")
+        monkeypatch.setitem(p, "persona_brief", "")
+        role = persona._role_persona("君君")
+        assert "你是君君。" in role          # 速写（首行回退）在
+        assert "杂鱼" not in role            # 整卡其余部分不注入
 
-    def test_empty_personality_defaults(self):
-        assert persona._role_persona({}, "君君") == "你是君君。"
-
-    def test_blank_examples_treated_as_absent(self):
-        p = {"personality": "你是君君。", "behavior_examples": "   "}
-        assert persona._role_persona(p, "君君") == "你是君君。"
-
-
-class TestExamplesEvictableBlock:
-    """2026-08-11 token 优化 P0：示例集从必需 role 块拆成独立动态块
-    （priority 2），预算吃紧时先于情绪/记忆块被驱逐；legacy 路径拼回
-    核心段之后，「设定卡 + 示例集」相邻语义不变。"""
-
-    def _with_examples(self, monkeypatch):
+    def test_examples_never_injected(self, monkeypatch):
+        """behavior_examples 不再进任何 prompt 路径（2026-08-15 瘦身）。"""
         from junjun_core.config import get_global_config
         p = get_global_config().raw.setdefault("personality", {})
         monkeypatch.setitem(p, "behavior_examples", "被夸→「才没有」")
-
-    def test_examples_not_in_core_role(self, monkeypatch):
-        self._with_examples(monkeypatch)
         core, dynamic = persona.build_prompt_blocks(is_group=True, latest_text="在吗")
-        role_part = core.split("<scene>")[0]
-        assert "被夸→「才没有」" not in role_part  # 示例集不在必需块里
-        ex = [b for b in dynamic if b["name"] == "examples"]
-        assert ex and "被夸→「才没有」" in ex[0]["content"]
-        assert ex[0]["priority"] == 2 and ex[0]["required"] is False
+        assert "被夸→「才没有」" not in core
+        assert not any(b["name"] == "examples" for b in dynamic)
+        prompt = persona.build_system_prompt(is_group=True, latest_text="在吗")
+        assert "被夸→「才没有」" not in prompt
 
-    def test_legacy_prompt_keeps_examples_adjacent(self, monkeypatch):
-        """非预算路径：示例集拼回核心段之后、<state> 之前。"""
-        self._with_examples(monkeypatch)
-        prompt = persona.build_system_prompt(
-            is_group=True, latest_text="在吗", mood_block="心情：不错")
-        assert "被夸→「才没有」" in prompt
-        assert prompt.index("被夸→「才没有」") < prompt.index("<state>")
 
-    def test_budget_path_evicts_examples_first(self, monkeypatch):
-        """预算吃紧：examples 先于 mood/memory 被驱逐；预算宽松则回 system。"""
-        self._with_examples(monkeypatch)
-        from junjun_agent.agent import _apply_context_budget
-        # 宽松：示例集保留且进 system 段（不在 <state>）
-        msgs, sys_text, metrics = _apply_context_budget(
-            is_group=True, latest_text="在吗", mood_block="心情：不错",
-            memory_block="", relation_block="", background="「甲」: 在吗",
-            latest_msg="「甲」: 在吗", addressed=True)
-        assert "被夸→「才没有」" in sys_text
-        # 吃紧：预算压到必需块都放不下，所有可选块（含 examples）必被驱逐
-        import junjun_agent.agent as agent_mod
+class TestCachePrefixStability:
+    """前缀缓存纪律（2026-08-15 用户要求：重复内容前置、变化内容后置）。"""
+
+    @staticmethod
+    def _freeze_time(monkeypatch, text):
+        class _I:
+            def strftime(self, fmt): return text
+
+        class _DT:
+            @staticmethod
+            def now(): return _I()
+
+        monkeypatch.setattr(persona, "datetime", _DT)
+
+    def test_core_stable_across_minutes(self, monkeypatch):
+        """分钟推进，核心段必须字节级不变；时间只许在 now 动态块里。"""
+        self._freeze_time(monkeypatch, "2026-08-15 10:00 Saturday")
+        core1, dyn1 = persona.build_prompt_blocks(is_group=True, latest_text="在吗")
+        self._freeze_time(monkeypatch, "2026-08-15 10:01 Saturday")
+        core2, dyn2 = persona.build_prompt_blocks(is_group=True, latest_text="在吗")
+        assert core1 == core2, "时间变化打穿了核心段前缀"
+        assert "当前时间" not in core1
+        now1 = [b for b in dyn1 if b["name"] == "now"]
+        now2 = [b for b in dyn2 if b["name"] == "now"]
+        assert now1 and now2 and now1[0]["content"] != now2[0]["content"]
+        assert now1[0]["required"] is True
+
+    def test_reaction_hit_does_not_touch_core(self, monkeypatch):
+        """keyword_reaction 命中与否，核心段字节级一致（命中走 reaction 动态块）。"""
         from junjun_core.config import get_global_config
-        monkeypatch.setitem(get_global_config().raw, "context_budget",
-                            {"enable": True, "max_total_tokens": 800,
-                             "reserve_tokens": 100})
-        msgs2, sys_text2, metrics2 = _apply_context_budget(
+        monkeypatch.setitem(get_global_config().raw, "keyword_reaction",
+                            {"keyword_rules": [{"keywords": ["机器人"],
+                                                "reaction": "被问是不是机器人"}]})
+        core_hit, dyn_hit = persona.build_prompt_blocks(
+            is_group=True, latest_text="你是不是机器人啊")
+        core_miss, dyn_miss = persona.build_prompt_blocks(
+            is_group=True, latest_text="在吗")
+        # 核心段只允许差在「当前时间」上——冻结时间后必须完全一致
+        import re
+        strip_now = lambda s: re.sub(r"当前时间：[^\n<]*", "", s)
+        assert strip_now(core_hit) == strip_now(core_miss)
+        assert "机器人" not in core_hit
+        r = [b for b in dyn_hit if b["name"] == "reaction"]
+        assert r and "被问是不是机器人" in r[0]["content"]
+        assert not any(b["name"] == "reaction" for b in dyn_miss)
+
+    def test_legacy_prompt_time_after_rules(self):
+        """非预算路径：当前时间在 <rules> 之后的 <state> 区。"""
+        prompt = persona.build_system_prompt(is_group=True, latest_text="在吗")
+        assert prompt.index("当前时间") > prompt.index("</rules>")
+
+    def test_budget_path_addressed_in_latest_anchor(self):
+        """必回提示并入最新消息锚点，不进 system 前缀（随消息翻转必穿缓存）。"""
+        from junjun_agent.agent import _apply_context_budget
+        msgs, sys_text, _ = _apply_context_budget(
+            is_group=True, latest_text="在吗", mood_block="", memory_block="",
+            relation_block="", background="「甲」: 在吗",
+            latest_msg="「甲」: 君君在吗", addressed=True)
+        assert "必须正面回应" not in sys_text
+        last = msgs[-1]
+        assert "你要回复的消息" in last.content and "必须正面回应" in last.content
+
+    def test_budget_path_state_blocks_present(self):
+        """预算路径：now/reaction 进 <state> 尾区，不被装配吞掉。"""
+        from junjun_agent.agent import _apply_context_budget
+        msgs, sys_text, _ = _apply_context_budget(
             is_group=True, latest_text="在吗", mood_block="心情：不错",
-            memory_block="", relation_block="", background="「甲」: 在吗",
-            latest_msg="「甲」: 在吗", addressed=True)
-        assert "examples" in metrics2["evicted_names"]
-        assert "被夸→「才没有」" not in sys_text2
+            memory_block="", relation_block="", background="",
+            latest_msg="「甲」: 在吗", addressed=False)
+        assert "当前时间" in sys_text
+        assert sys_text.index("当前时间") > sys_text.index("</rules>")
+        assert "心情：不错" in sys_text
 
 
 class TestInterruptPhrasesClean:

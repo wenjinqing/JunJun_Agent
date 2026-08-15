@@ -60,20 +60,15 @@ def match_keyword_rules(text: str) -> List[str]:
     return hits
 
 
-def _role_persona(p: dict, nickname: str) -> str:
-    """人设 = 设定卡（personality）+ 示例集（behavior_examples，可选，拼接）。
+def _role_persona(nickname: str) -> str:
+    """人设 = 一句话速写（2026-08-15 通用 agent 转向瘦身）。
 
-    2026-08-04 起改为拼接（原来是 examples 整体替换 personality）：
-    设定卡给「你是谁」，示例集给「说话长什么样」，自设 = 两者合体。
-    示例必须由人设作者自己写，而且要多而杂——prompt 里每个具体句子都会
-    被模型当口头禅复读（「杂鱼」事件：全人设只有一个具体骂词，傲娇词表
-    坍缩成一个词）。示例集靠数量与反差让模型学到分布，而非背下单句。
+    用户拍板：保留基本角色特征（速写+说话方式+兴趣），不再每轮注入整张
+    设定卡与示例集——「全删太死板一股 AI 味，但几百 tok 的演出台本也不必
+    每轮烧」。速写与单发调用同源（persona_brief()：persona_brief 配置 >
+    设定卡首行 > 中性兜底），全场景声口一致；behavior_examples 不再注入。
     """
-    base = p.get("personality", f"你是{nickname}。")
-    examples = (p.get("behavior_examples") or "").strip()
-    if examples:
-        return f"{base}\n\n【你说话的样子（示例集：感受分布，不要照抄原句）】\n{examples}"
-    return base
+    return f"你是{nickname}。{persona_brief()}"
 
 
 def _build_core_parts(
@@ -94,7 +89,9 @@ def _build_core_parts(
     nickname = nickname or cfg.bot.nickname
     now = datetime.now().strftime("%Y-%m-%d %H:%M %A")
 
-    # 场景框架（群聊 vs 私聊的核心差异：群聊要强调「很多人说话，你只回最后一条」）
+    # 场景框架（群聊 vs 私聊的核心差异：群聊要强调「很多人说话，你只回最后一条」）。
+    # 注意：scene 里不放时间——前缀缓存纪律（2026-08-15）：分钟级时间戳长在
+    # 稳定前缀中间会每分钟把整段缓存打穿，时间挪进动态块（见下方 now 块）。
     if is_group:
         scene = (
             "QQ 群聊，很多人在同时说话。消息格式「昵称」: 内容（「」里是群名片），"
@@ -104,20 +101,15 @@ def _build_core_parts(
     else:
         scene = "QQ 私聊，一对一。对方说的话都是对你说的，直接回应。"
 
-    # 示例集不进 role（2026-08-11 token 优化 P0）：role 是必需块永不驱逐，
-    # 示例集（~460 tok）拆成独立动态块（priority 2），预算吃紧时先于情绪/
-    # 记忆块被驱逐——设定卡保「你是谁」，示例集只是「说话长什么样」的加分项。
-    # 非预算路径由 build_system_prompt 拼回核心段之后，位置语义不变。
-    role = _role_persona({**p, "behavior_examples": ""}, nickname)
-    examples = (p.get("behavior_examples") or "").strip()
-    if examples:
-        dynamic_blocks: list[dict] = [{
-            "name": "examples",
-            "content": f"【你说话的样子（示例集：感受分布，不要照抄原句）】\n{examples}",
-            "priority": 2, "required": False,
-        }]
-    else:
-        dynamic_blocks = []
+    role = _role_persona(nickname)
+    # 动态块（前缀缓存纪律：随轮变化的内容一律不进核心段，全部走这里）：
+    # now 每分钟变——必需但不许回核心段（2026-08-15 用户要求：重复内容前置、
+    # 变化内容后置，提高上下文缓存命中率）。
+    dynamic_blocks: list[dict] = [{
+        "name": "now",
+        "content": f"当前时间：{now}",
+        "priority": 1, "required": True,
+    }]
     if p.get("reply_style"):
         role += f"\n说话方式：{p.get('reply_style', '')}"
     if p.get("interest"):
@@ -137,7 +129,7 @@ def _build_core_parts(
 
     core_parts = [
         f"<role>\n{role}\n</role>",
-        f"<scene>\n{scene}\n当前时间：{now}\n</scene>",
+        f"<scene>\n{scene}\n</scene>",
     ]
 
     # 技能包索引（md skills，2026-08-04）：只放目录不占每轮 context，
@@ -152,9 +144,9 @@ def _build_core_parts(
     return core_parts, dynamic_blocks
 
 
-def _build_rules(reaction_text: str = "", *, is_group: bool = True) -> str:
-    """规则层（正面约束，一句话）。"""
-    # 规则层（正面约束，一句话）
+def _build_rules(*, is_group: bool = True) -> str:
+    """规则层（正面约束）。必须字节级稳定——前缀缓存纪律（2026-08-15）：
+    命中文本等随轮变化的内容不许混进来（走 reaction 动态块）。"""
     rules = [
         # 真人感锚（2026-08-03）：放最前，定调整条规则的语气——
         # 针对的是「每条都演人设」的循环病，不是压制辣味
@@ -211,8 +203,6 @@ def _build_rules(reaction_text: str = "", *, is_group: bool = True) -> str:
         "上下文提示有图片/语音/视频「还在看（后台解析中）」时：先自然地说你在看，看完主动补一句；"
         "绝不要说「看不到」「没收到」。",
     ]
-    if reaction_text:
-        rules.append(reaction_text)
     return f"<rules>\n{' '.join(rules)}\n</rules>"
 
 
@@ -258,7 +248,17 @@ def build_prompt_blocks(
 
     # rules 是稳定必需段；admin 安全段不在这里——它必须在最终 prompt 的
     # 最后一块（见 build_admin_block docstring），由组装方收尾时追加
-    core_parts.append(_build_rules(reaction_text, is_group=is_group))
+    core_parts.append(_build_rules(is_group=is_group))
+
+    # keyword_reaction 命中：从 rules 稳定段挪到动态块（2026-08-15 前缀缓存
+    # 纪律——命中与否随消息翻转，混在 rules 里会把整段核心前缀缓存打穿）
+    reactions = match_keyword_rules(latest_text) if latest_text else []
+    if reactions:
+        dynamic_blocks.append({
+            "name": "reaction",
+            "content": f"特别注意：{'；'.join(reactions)}",
+            "priority": 2, "required": False,
+        })
 
     # 动态块：按重要性分配优先级（数字越小越重要）
     if mood_block:
@@ -303,18 +303,18 @@ def build_system_prompt(
 ) -> str:
     """向后兼容：直接拼接完整 system prompt（不做预算驱逐）。
 
-    examples 动态块拼回核心段之后（与预算路径 kept 顺序一致）：
-    「设定卡 + 示例集」相邻的语义不变。
+    动态块（now/reaction/情绪/记忆等）统一进 <state> 段，置于核心段之后、
+    安全锚点之前——稳定前缀（role/scene/skills/rules）字节级稳定吃前缀
+    缓存，变化内容全部后置（2026-08-15 用户要求）。
     """
     core_text, dynamic_blocks = build_prompt_blocks(
         is_group=is_group, nickname=nickname, latest_text=latest_text,
         mood_block=mood_block, memory_block=memory_block, relation_block=relation_block,
     )
-    examples = [b["content"] for b in dynamic_blocks if b["name"] == "examples"]
-    others = [b for b in dynamic_blocks if b["name"] != "examples"]
-    parts = [core_text, *examples]
+    others = [b["content"] for b in dynamic_blocks]
+    parts = [core_text]
     if others:
-        state_body = "\n\n".join(b["content"] for b in others)
+        state_body = "\n\n".join(others)
         parts.append(f"<state>\n{state_body}\n</state>")
     # 安全锚点收尾：永远在最后（近因位置，防注入不被动态块压过）
     parts.append(build_admin_block())
