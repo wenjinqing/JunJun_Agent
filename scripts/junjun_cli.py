@@ -79,13 +79,15 @@ def patch_surface(sink: CliSink) -> None:
 
 
 def capture_terminal(kernel, sink: CliSink) -> None:
-    """终态信号：_report 是双引擎（legacy/langgraph）唯一的共同终态必经点。"""
+    """终态信号：_report 是双引擎（legacy/langgraph）唯一的共同终态必经点。
+    completed 必须在原汇报【之后】落信号——先落的话 CLI 在汇报合成（LLM
+    调用）途中就退出，终态汇报永远打不出来（2026-08-15 冒烟实锤）。"""
     orig_report = kernel._report
 
     async def _capture(plan):
+        await orig_report(plan)
         if plan.chat_id == CLI_CHAT_ID:
             sink.completed[plan.plan_id] = plan
-        await orig_report(plan)
 
     kernel._report = _capture
 
