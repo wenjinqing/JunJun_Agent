@@ -181,6 +181,10 @@ def _make_stub_tools(real_tools: list, called: list, stub_overrides: dict,
             description=t.description or "",
             args_schema=getattr(t, "args_schema", None),
             coroutine=_stub,
+            # tags 必须照抄（async_job 标记）：2026-08-15 复跑实锤——不抄则
+            # 规划器看不到［异步接单］标记、parse_plan 的异步依赖剔除也对桩
+            # 失效，评测的规划路径与生产不一致（漂成两套语义）。
+            tags=list(getattr(t, "tags", None) or []),
         ))
     if not stubs:
         raise RuntimeError("桩工具列表为空——real_tools 必须在补丁 get_tools 前抓取")
@@ -350,8 +354,12 @@ async def _run_positive(kernel, runner, usage: _Usage, called: list, case: dict)
         from junjun_agent.router import route_to_task
         routed = route_to_task(case["input"], chat_id=chat_id)
         try:
+            # user_id 给一个确定的非管理员假 QQ：规划器提示里有具体号码可填
+            # （2026-08-15：DS 规划器填不出 user_id 会把 set_reminder 整步丢掉），
+            # 非管理员身份同时保住 run_code 人审门的 case 语义。
             ack = await asyncio.wait_for(
-                kernel.try_submit(case["input"], chat_id=chat_id),
+                kernel.try_submit(case["input"], chat_id=chat_id,
+                                  user_id="10000"),
                 timeout=120)
         except asyncio.TimeoutError:
             return {"id": case["id"], "pass": False, "reason": "TIMEOUT(120s) 规划调用"}

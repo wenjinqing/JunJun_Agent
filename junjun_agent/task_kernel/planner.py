@@ -8,7 +8,9 @@ import json
 import re
 
 from junjun_core.observability import get_logger
-from junjun_agent.task_kernel.plan import ASYNC_JOB_TAG, TaskPlan, parse_plan
+from junjun_agent.task_kernel.plan import (
+    ASYNC_JOB_TAG, SYNTH_ACTION, TaskPlan, parse_plan,
+)
 
 logger = get_logger("task_kernel.planner")
 
@@ -18,6 +20,7 @@ _ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
 _PLANNER_PROMPT = """你是任务规划器。把用户的委托拆成可执行的步骤图，输出纯 JSON（不要任何其他文字）。
 
 用户委托：{goal}
+下单人 QQ：{user_id}（工具签名要 user_id 参数时填它——除非委托里明确指了别人；不许因为填不出就丢掉整步）
 
 可用工具（action 只能从这里选，或用 "llm_synthesize" 表示直接文本合成；括号里是参数签名，? 结尾=可选）：
 {tool_list}
@@ -130,7 +133,8 @@ async def make_plan(goal: str, *, chat_id: str, user_id: str,
     from junjun_skills.registry import get_tools
     valid = {t.name for t in get_tools()}
     prompt = _PLANNER_PROMPT.format(goal=goal, tool_list=_tool_catalog(),
-                                    max_steps=max_steps)
+                                    max_steps=max_steps,
+                                    user_id=user_id or "未知（评测/缺上下文，填 auto 占位）")
     for attempt in (1, 2):
         resp = await _bound(model).ainvoke([HumanMessage(content=prompt)],
                                            config={"callbacks": callbacks or []})
@@ -152,6 +156,7 @@ async def make_plan(goal: str, *, chat_id: str, user_id: str,
 _REVISER_PROMPT = """你是任务规划器。一个执行中的计划有步骤失败了，给出修正后的【剩余】步骤（纯 JSON，不要任何其他文字）。
 
 任务目标：{goal}
+下单人 QQ：{user_id}（要 user_id 参数的步骤填它，除非委托明确指了别人）
 失败的步骤：{failed_desc}
 失败原因：{error}
 已完成的步骤及产出：
@@ -202,6 +207,7 @@ async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
     ) or "（无）"
     prompt = _REVISER_PROMPT.format(
         goal=plan.goal, failed_desc=failed_step_desc, error=error[:200],
+        user_id=plan.user_id or "未知（填 auto 占位）",
         done_digest=done_digest, pending_digest=pending_digest)
     resp = await _bound(model).ainvoke([HumanMessage(content=prompt)],
                                        config={"callbacks": callbacks or []})
@@ -217,8 +223,27 @@ async def revise_remaining(plan: TaskPlan, failed_step_desc: str, error: str,
                          async_actions=_async_actions())
     if revised is None:
         return None
-    # 依赖修正：引用已完成步骤的依赖保留，其余依赖只认新步骤内部
+    # 依赖修正：parse_plan 只认新计划内部的前向 id，指向已完成步骤的依赖在
+    # 入口就被剥掉了——从原始 payload 收回 reviser 的真实声明，已完成/新步骤
+    # 内的才保留（此前 done_ids 分支是死代码，重规划的合成步骤一直拿不到材料，
+    # 2026-08-15 eval research-video-notes 实锤）。
+    raw_deps = {str(rs.get("id") or ""): [str(d) for d in (rs.get("depends_on") or [])]
+                for rs in payload.get("steps", []) if isinstance(rs, dict)}
     new_ids = {s.id for s in revised.steps}
     for s in revised.steps:
-        s.depends_on = [d for d in s.depends_on if d in done_ids or d in new_ids]
+        s.depends_on = [d for d in raw_deps.get(s.id, s.depends_on)
+                        if d in done_ids or d in new_ids]
+    # 合成步骤材料兜底（2026-08-15 eval research-video-notes 实锤）：重规划
+    # 产出的 llm_synthesize 若依赖被上面剥光（模型指向了失败/不存在的步骤），
+    # 就在零材料下合成——要么编造要么摆烂「我没收到材料」，验收还容易漏过。
+    # 合成步骤的材料只能来自已完成产出，剥光即断供：自动挂到所有带产出的
+    # 已完成步骤。只兜合成步骤——工具步骤无依赖是正常形态，不许挂。
+    done_with_result = [s.id for s in plan.steps
+                        if s.status == "done" and s.result]
+    if done_with_result:
+        for s in revised.steps:
+            if s.action == SYNTH_ACTION and not s.depends_on:
+                s.depends_on = list(done_with_result)
+                logger.info(f"重规划合成步骤 {s.id} 依赖被剥光，"
+                            f"自动挂接已完成产出 {done_with_result}")
     return Revisal(revised.steps, drop)

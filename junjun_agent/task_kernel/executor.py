@@ -393,6 +393,21 @@ class TaskKernel:
                 ref = v[1:]
                 if ref in done:
                     args[k] = done[ref]
+        # 身份参数兜底（2026-08-15 eval 实锤）：规划器看不到下单上下文，
+        # user_id 必填参数只能瞎编，DS 规划器干脆把 set_reminder 整步丢掉
+        # （chain-weather-remind 连挂两轮）。非数字占位值（auto/对方/空）
+        # 一律换成本单发起者；数字 QQ 保留——戳别人/改别人资料是合法的
+        # 定向用法，不许误伤。
+        if plan.user_id:
+            fields = getattr(getattr(tool, "args_schema", None),
+                             "model_fields", {}) or {}
+            if "user_id" in fields:
+                v = str(args.get("user_id", "") or "")
+                if not v.isdigit():
+                    if v:
+                        logger.info(f"步骤 {step.id} user_id 占位值「{v[:20]}」"
+                                    f"换成本单发起者")
+                    args["user_id"] = plan.user_id
         if not args:
             args = self._default_args(tool, plan, step)
         out = await tool.ainvoke(args)

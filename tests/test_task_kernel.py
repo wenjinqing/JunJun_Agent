@@ -24,10 +24,12 @@ class _FakeModel:
 
 
 class _StubTool:
-    def __init__(self, name, fn):
+    def __init__(self, name, fn, schema=None):
         self.name = name
         self.description = f"{name} 桩"
         self._fn = fn
+        if schema is not None:
+            self.args_schema = schema
 
     async def ainvoke(self, args):
         return self._fn(args)
@@ -229,6 +231,81 @@ class TestReportRemembered:
 
 
 # ---------- 执行循环 ----------
+
+class TestUserIdSafetyNet:
+    """身份参数兜底（2026-08-15 eval chain-weather-remind 实锤）：规划器看不到
+    下单上下文，user_id 必填参数只能瞎编或丢整步。非数字占位值换成发起者；
+    数字 QQ 保留（戳别人/改别人资料是合法定向用法，不许误伤）。"""
+
+    @staticmethod
+    def _schema():
+        from pydantic import BaseModel
+
+        class _S(BaseModel):
+            content: str
+            user_id: str
+
+        return _S
+
+    @staticmethod
+    def _mk(plan_user_id, arg_user_id, **kw):
+        got = {}
+        schema = TestUserIdSafetyNet._schema()
+        tool = _StubTool("set_reminder",
+                         lambda a: got.update(a) or "ok", schema=schema)
+        plan = TaskPlan(goal="提醒", chat_id="qq:u1:private",
+                        user_id=plan_user_id,
+                        steps=[Step(id="s1", action="set_reminder", desc="设提醒",
+                                    args_hint={"content": "带伞",
+                                               "user_id": arg_user_id})])
+        return plan, got, tool
+
+    @pytest.mark.asyncio
+    async def test_placeholder_replaced(self, harness, monkeypatch):
+        plan, got, tool = self._mk("3155572670", "auto")
+        _bind_tools(monkeypatch, [tool])
+        await executor.kernel._call_tool(plan, plan.steps[0])
+        assert got["user_id"] == "3155572670"
+
+    @pytest.mark.asyncio
+    async def test_empty_filled(self, harness, monkeypatch):
+        plan, got, tool = self._mk("3155572670", "")
+        _bind_tools(monkeypatch, [tool])
+        await executor.kernel._call_tool(plan, plan.steps[0])
+        assert got["user_id"] == "3155572670"
+
+    @pytest.mark.asyncio
+    async def test_real_qq_kept(self, harness, monkeypatch):
+        """数字 QQ 是合法定向（帮我戳张三）——不得被发起者覆盖（误判回归）。"""
+        plan, got, tool = self._mk("3155572670", "2485424686")
+        _bind_tools(monkeypatch, [tool])
+        await executor.kernel._call_tool(plan, plan.steps[0])
+        assert got["user_id"] == "2485424686"
+
+    @pytest.mark.asyncio
+    async def test_no_plan_user_untouched(self, harness, monkeypatch):
+        plan, got, tool = self._mk("", "auto")
+        _bind_tools(monkeypatch, [tool])
+        await executor.kernel._call_tool(plan, plan.steps[0])
+        assert got["user_id"] == "auto"   # 发起者未知：不编不盖，原样放行
+
+    @pytest.mark.asyncio
+    async def test_tool_without_user_id_untouched(self, harness, monkeypatch):
+        from pydantic import BaseModel
+
+        class _S(BaseModel):
+            q: str
+
+        got = {}
+        tool = _StubTool("web_search", lambda a: got.update(a) or "ok",
+                         schema=_S)
+        plan = TaskPlan(goal="g", chat_id="qq:u2:private", user_id="3155572670",
+                        steps=[Step(id="s1", action="web_search", desc="搜",
+                                    args_hint={"q": "x"})])
+        _bind_tools(monkeypatch, [tool])
+        await executor.kernel._call_tool(plan, plan.steps[0])
+        assert got == {"q": "x"}   # 无 user_id 字段的工具不许被塞参数
+
 
 class TestRunLoop:
     @pytest.mark.asyncio
@@ -697,6 +774,62 @@ class TestPlannerBits:
         rev = await planner.revise_remaining(plan, "败了", "err", model=_M())
         assert rev is not None and rev.drop == ["s3"]
         assert [s.id for s in rev.steps] == ["r1"]
+
+    @pytest.mark.asyncio
+    async def test_revise_synth_material_backstop(self, monkeypatch):
+        """重规划产出的 llm_synthesize 依赖被剥光时自动挂接已完成产出
+        （2026-08-15 eval research-video-notes 实锤：reviser 把合成步骤依赖
+        指向失败步骤 s2，剥离后零材料合成，摆烂输出「我没收到材料」）。"""
+        from junjun_agent.task_kernel import planner
+
+        class _M:
+            async def ainvoke(self, msgs, config=None):
+                return AIMessage(content=(
+                    '{"steps": [{"id": "r1", "action": "llm_synthesize",'
+                    ' "desc": "整理笔记", "depends_on": ["s2"]}]}'))  # s2 是失败步骤
+
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "")])
+        plan = TaskPlan(goal="g", chat_id="c", steps=[
+            Step(id="s1", action="web_search", desc="搜", status="done", result="素材"),
+            Step(id="s2", action="web_search", desc="败", status="failed"),
+        ])
+        rev = await planner.revise_remaining(plan, "败了", "err", model=_M())
+        assert rev.steps[0].depends_on == ["s1"], "合成步骤断供必须自动挂已完成产出"
+
+    @pytest.mark.asyncio
+    async def test_revise_tool_step_no_backstop(self, monkeypatch):
+        """误判回归：非合成步骤无依赖是正常形态，不许被挂依赖。"""
+        from junjun_agent.task_kernel import planner
+
+        class _M:
+            async def ainvoke(self, msgs, config=None):
+                return AIMessage(content=(
+                    '{"steps": [{"id": "r1", "action": "web_search", "desc": "重搜",'
+                    ' "depends_on": ["s9"]}]}'))   # s9 不存在 -> 剥光
+
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "")])
+        plan = TaskPlan(goal="g", chat_id="c", steps=[
+            Step(id="s1", action="web_search", desc="搜", status="done", result="素材")])
+        rev = await planner.revise_remaining(plan, "败了", "err", model=_M())
+        assert rev.steps[0].depends_on == [], "工具步骤不许被自动挂依赖"
+
+    @pytest.mark.asyncio
+    async def test_revise_synth_valid_dep_kept(self, monkeypatch):
+        """误判回归：合成步骤自己指对了已完成步骤，原样保留不被改写。"""
+        from junjun_agent.task_kernel import planner
+
+        class _M:
+            async def ainvoke(self, msgs, config=None):
+                return AIMessage(content=(
+                    '{"steps": [{"id": "r1", "action": "llm_synthesize",'
+                    ' "desc": "整理", "depends_on": ["s1"]}]}'))
+
+        _bind_tools(monkeypatch, [_StubTool("web_search", lambda a: "")])
+        plan = TaskPlan(goal="g", chat_id="c", steps=[
+            Step(id="s1", action="web_search", desc="搜", status="done", result="素材"),
+            Step(id="s2", action="web_search", desc="搜2", status="done", result="素材2")])
+        rev = await planner.revise_remaining(plan, "败了", "err", model=_M())
+        assert rev.steps[0].depends_on == ["s1"]
 
     def test_planner_prompt_scopes_llm_judge(self):
         """规划提示必须把 llm_judge 限在文本产出步骤——工具步骤配 llm_judge
