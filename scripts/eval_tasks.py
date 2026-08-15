@@ -82,6 +82,10 @@ _STUB_RETURNS = {
     "get_weather": "北京 明天 晴，25~33℃，微风。",
     "set_reminder": "提醒已设置成功，到点会叫你。",
     "query_chat_history": "近期聊天：讨论了 AI 平台选型、小主机装机、周末安排。",
+    # recall_memory 同为检索类：默认桩「操作成功。」对它等于无内容——合成步骤
+    # 拿到空材料只能摆烂「无法还原真实讨论」（2026-08-15 chain-history-summary
+    # 实锤，规划器选 recall_memory 路径时 case 级 stub 够不着）
+    "recall_memory": "记忆检索结果：近期讨论过 AI 平台选型对比、小主机装机计划、固态电池产业调研。",
     "bilibili_summary": "视频内容摘要：该讲座讲解了主题的三个要点：背景、现状、展望……",
     "watch_video": "已仔细观看：视频讲解了三个要点……观后感：内容扎实。",
     "ai_draw": "图片已生成并发送给对方。",
