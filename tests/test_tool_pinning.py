@@ -223,3 +223,39 @@ class TestPeriodicPushIntent20260815:
                      "今天好累", "明天早上吃什么好呢", "早上好"):
             names = registry._intent_mounted(text)
             assert "set_reminder" not in names, text
+
+
+class TestIdentityIntent20260815:
+    """2026-08-15（生产实锤）：「你是谁/你基于什么模型」零意图命中——
+    introduce_self 不在 CORE、无组无钉词，被掩码裁掉后模型凭印象编出
+    「混元大模型」+「框架细节不清楚」。身份组整组挂载给事实锚；
+    primary=None 只挂不追问（群里「你是谁」可能是群友问新人，追问=抢答）。"""
+
+    def test_identity_questions_mount_intro(self):
+        for text in ("你是谁啊", "介绍一下你自己", "你是什么模型",
+                     "谁开发的你", "你的技术栈是啥", "你会什么", "有什么功能",
+                     "君君你都会什么呀", "你都会些啥", "你能干啥"):
+            names = registry._intent_mounted(text)
+            assert "introduce_self" in names, text
+            assert "get_capabilities" in names, text
+
+    def test_daily_sentences_no_misfire(self):
+        """误判回归：日常句/技术讨论句不挂身份组（挂载虽无追问，也别白绑）。"""
+        for text in ("你是做什么工作的", "我是谁我在哪", "你有什么事吗",
+                     "这个模型效果不错", "今晚吃啥", "他每天都在群里吹牛"):
+            names = registry._intent_mounted(text)
+            assert "introduce_self" not in names, text
+
+    def test_no_primary_no_forced_nudge(self):
+        """身份组 primary 必须为 None：「你是谁」可能是群友互问，
+        追问会逼着 bot 抢答自我介绍。"""
+        for kws, _group, primary in registry.intent_groups():
+            if "你是谁" in kws:
+                assert primary is None
+                return
+        raise AssertionError("身份意图组不存在")
+
+    def test_topic_keywords_pin_intro(self):
+        """embedding 降级路径：钉词兜底也能钉住 introduce_self。"""
+        t = _named_tool("introduce_self")
+        assert t in registry._pinned_by_keywords([t], "你是什么模型")

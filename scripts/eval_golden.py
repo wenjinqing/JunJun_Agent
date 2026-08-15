@@ -78,6 +78,25 @@ _STUB_RETURNS = {
 }
 _DEFAULT_STUB_RETURN = "（桩）操作成功。"
 
+# introduce_self 桩：必须与生产输出同构（速写+能力概览+技术栈段）。技术栈段
+# 直接引生产文案单一数据源，防桩与生产漂移——占位「操作成功」桩会让模型
+# 如实说「系统没把底细递给我」，回复内容断言永远挂（2026-08-15
+# identity-who-are-you 实锤：桩 sabotage 了 case，同 list_reminders 格式教训）
+try:
+    from junjun_skills.builtin.capability_skills import _INTRO_TECH
+except Exception:
+    _INTRO_TECH = ("技术栈：Python 写的；agent 决策内核跑在 LangChain + LangGraph 上；"
+                   "对话大脑主力是 DeepSeek 系列国产大模型。")
+_STUB_RETURNS["introduce_self"] = (
+    "我是君君——群里的猫娘学姐：从容温柔，会笑着调侃人。\n"
+    "本体是个跑在服务器上的 AI 程序（被问起就大方承认），目前挂着 60 件工具。\n"
+    "平时能干的：联网搜索、深度调研与后台长任务、B 站视频、AI 画图、语音合成、"
+    "点歌放歌、工作区（收发文件/跑代码）、QQ 空间发说说、新闻速览。\n"
+    "内置基本功：设提醒、记事回忆、查天气、翻聊天记录、发表情。\n"
+    + _INTRO_TECH + "\n"
+    "想看逐条的完整能力清单就调 get_capabilities。"
+)
+
 
 def _make_stub_tools():
     """真实工具 schema + 记录桩执行体。返回 (stub_tools, called_list)。"""
