@@ -85,8 +85,8 @@ _DEFAULT_STUB_RETURN = "（桩）操作成功。"
 try:
     from junjun_skills.builtin.capability_skills import _INTRO_TECH
 except Exception:
-    _INTRO_TECH = ("技术栈：Python 写的；agent 决策内核跑在 LangChain + LangGraph 上；"
-                   "对话大脑主力是 DeepSeek 系列国产大模型。")
+    _INTRO_TECH = ("技术栈与架构：Python 写的；决策内核跑在 LangChain + LangGraph 上；"
+                   "具体模型型号不公开。")
 _STUB_RETURNS["introduce_self"] = (
     "我是君君——群里的猫娘学姐：从容温柔，会笑着调侃人。\n"
     "本体是个跑在服务器上的 AI 程序（被问起就大方承认），目前挂着 60 件工具。\n"

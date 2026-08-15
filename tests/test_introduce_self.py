@@ -34,19 +34,19 @@ class TestIntroduceSelf:
         assert "工作区" in out
         assert "设提醒" in out                          # 内置基本功
         assert "技术栈" in out and "Python" in out
-        # 公开事实必须写准（2026-08-15 生产实锤：不写准模型现场编「混元」）
+        # 架构是介绍重点（2026-08-15 用户拍板：型号不对外，讲架构与功能）
         assert "LangChain" in out and "LangGraph" in out
-        assert "DeepSeek" in out
+        assert "Docker" in out
         assert "get_capabilities" in out                # 指向完整清单
 
     def test_privacy_negative_assertions(self, monkeypatch):
-        """泄露面：密钥/QQ/内网/路径/敏感插件名/接入平台名永远不得出现。"""
+        """泄露面：密钥/QQ/内网/路径/敏感插件名/接入平台名/模型型号永远不得出现。"""
         import junjun_skills.registry as reg
         monkeypatch.setattr(reg, "list_skills", lambda: _fake_skills())
         out = cap.introduce_self.invoke({})
         for bad in ("sk-", "http", "127.0.0.1", "localhost", "F:\\", "C:\\",
                     "netdisk", "topic_finder", "vrchat", "ADMIN_QQ",
-                    "AI Ping", "混元"):  # 混元=纯幻觉型号，永不出现
+                    "AI Ping", "DeepSeek", "混元"):  # 型号不公开（用户拍板）；混元=纯幻觉
             assert bad not in out, f"简介泄露了「{bad}」"
 
     def test_unknown_plugin_invisible(self, monkeypatch):
