@@ -355,7 +355,12 @@ _INTENT_GROUPS = [
      ("unsubscribe", "list_subscriptions"), "unsubscribe"),
     (("盯", "订阅", "更新了告诉", "出新了告诉", "出新叫我"),
      ("subscribe_updates", "list_subscriptions"), "subscribe_updates"),
-    (("提醒我", "记得提醒", "到点叫", "到时候叫"),
+    (("提醒我", "记得提醒", "到点叫", "到时候叫",
+      # 周期推送句式：「以后每天早上给我推科技新闻」——不含「提醒」二字但
+      # 本质是周期提醒（2026-08-15 eval daily-tech-news 实锤：意图组够不着，
+      # set_reminder 被掩码裁掉，模型空口「没这个功能」）。词形必须带
+      # 「给我」锚点防误伤日常句（「他每天早上都来」不是请求）。
+      "每天早上给我", "每天晚上给我", "每天给我推", "定时给我"),
      ("set_reminder", "list_reminders", "cancel_reminder_task"), "set_reminder"),
     # 调研/报告类必须派后台深度研究（当场埋头做会堵会话队列几十秒，对方干等）
     (("调研", "深研", "深度研究", "研究报告", "整理一份报告"),

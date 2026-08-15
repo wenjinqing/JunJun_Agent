@@ -203,3 +203,23 @@ class TestCodeLabPinning20260814:
                      "这个沙盒游戏不错", "查一下天气"):
             names = registry._intent_mounted(text)
             assert "run_code" not in names, text
+
+
+class TestPeriodicPushIntent20260815:
+    """2026-08-15（eval daily-tech-news 实锤）：「以后每天早上给我推科技新闻」
+    式周期推送零命中——不含「提醒」二字，set_reminder 被掩码裁掉，模型空口
+    「没这个功能」。词形带「给我」锚点防日常句误伤。"""
+
+    def test_periodic_push_mounts_reminder_group(self):
+        for text in ("以后每天早上给我推一下当天的科技新闻",
+                     "每天晚上给我讲个睡前故事",
+                     "每天给我推送群活跃总结"):
+            names = registry._intent_mounted(text)
+            assert "set_reminder" in names, text
+
+    def test_daily_sentences_no_misfire(self):
+        """误判回归：含「每天早/晚」但不是请求的日常句不挂提醒组。"""
+        for text in ("他每天早上都来得很早", "我每天晚上都熬夜",
+                     "今天好累", "明天早上吃什么好呢", "早上好"):
+            names = registry._intent_mounted(text)
+            assert "set_reminder" not in names, text
