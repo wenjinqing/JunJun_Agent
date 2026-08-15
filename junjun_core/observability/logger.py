@@ -108,7 +108,10 @@ def _configure(level: str, factory) -> None:
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+            # TimeStamper 默认 utc=True——日志一直是 UTC，比北京时间慢 8h
+            # （2026-08-15 实锤：adapter 写 12:26 的事 NapCat 写 20:26，排查
+            # 误以为 NapCat 快了 8h）。与看门狗/NapCat 日志对齐本机时间。
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
             structlog.dev.ConsoleRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
