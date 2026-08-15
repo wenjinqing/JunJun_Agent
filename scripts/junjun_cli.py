@@ -33,13 +33,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv
-load_dotenv(ROOT / ".env", override=True)
-
-try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-except Exception:
-    pass
+# 注意：load_dotenv 不许在 import 期跑——pytest 收编本模块时 override=True 会把
+# 真 .env 注进测试进程，「无密钥降级」类测试全线假败 + 真网络调用把套件拖慢
+# 7 倍（2026-08-15 实锤）。环境装配只走 _main。
 
 CLI_CHAT_ID = "cli:local:private"
 
@@ -150,6 +146,13 @@ async def run_order(text: str, *, user_id: str, timeout: float) -> int:
 
 
 async def _main(args) -> int:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env", override=True)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     from junjun_core import get_global_config, initialize_logging
     initialize_logging("INFO", log_name="cli")   # 独立文件，不碰 bot/adapter.log
     nickname = get_global_config().bot.nickname
