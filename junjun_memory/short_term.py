@@ -46,6 +46,45 @@ def _sanitize_text(text: str) -> str:
     return (text or "").replace("\r", " ").replace("\n", " ⏎ ")
 
 
+# ---------- 滚动摘要（2026-08-16，DSH 压缩思想移植） ----------
+# 滑出窗口的内容不直接蒸发：攒够阈值让 utils 槽模型压成一段「前情摘要」，
+# 渲染时置顶。窗口继续滑，摘要滚动合并（旧摘要+新滑出块 -> 新摘要）。
+# 摘要有损（细节丢）但保住话题脉络；细节检索走长期记忆/DB 召回。
+# 摘要只驻内存：重启后 entries 从 SQLite 恢复、摘要清空，退化为现状，可接受。
+_SUMMARY_MIN_CHARS = 2000     # 待压材料攒够这么多字才烧一次 utils（摊薄成本）
+_SUMMARY_MAX_CHARS = 400      # 摘要上限（渲染置顶，太长又变新包袱）
+_SUMMARY_RETRY_COOLDOWN = 120.0   # 摘要失败后冷却（秒）——LLM 挂时防每条消息都重试
+_PENDING_MAX_LINES = 200      # 待压队列上限：持续失败时丢最旧的（真丢失仅限此情形）
+
+_SUMMARY_PROMPT = (
+    "把这段群聊记录并入「前情摘要」，输出一段不超过 {max_chars} 字的新摘要。"
+    "保留：话题脉络、谁在参与什么、结论/约定/待办；丢掉寒暄与语气词。"
+    "只输出摘要正文，不要解释，不要分点。\n\n"
+    "旧摘要（可能为空）：{old}\n\n刚滑出窗口的记录：\n{chunk}"
+)
+
+
+def _summary_cfg() -> tuple:
+    """([memory] rolling_summary, min_chars, max_chars)。配置坏了按默认。"""
+    try:
+        from junjun_core.config import get_global_config
+        mem = get_global_config().raw.get("memory", {}) or {}
+        return (bool(mem.get("rolling_summary", True)),
+                int(mem.get("rolling_summary_min_chars", _SUMMARY_MIN_CHARS)),
+                int(mem.get("rolling_summary_max_chars", _SUMMARY_MAX_CHARS)))
+    except Exception:
+        return True, _SUMMARY_MIN_CHARS, _SUMMARY_MAX_CHARS
+
+
+def _sanitize_summary(text: str) -> str:
+    """摘要防伪：内容源自群友发言，「」/【最新】/管理员标记一律剥掉——
+    否则一句伪造的「(管理员) 说过 xxx」会随摘要置顶进每一轮 context。"""
+    t = text or ""
+    for token in _FORGE_TOKENS:
+        t = t.replace(token, "")
+    return _sanitize_text(t).strip()
+
+
 @dataclass
 class MemoryEntry:
     role: str  # "user" / "bot"
@@ -99,11 +138,15 @@ class ShortTermMemory:
     entries: List[MemoryEntry] = field(default_factory=list)
     chat_id: str = ""           # 会话键；空时不持久化
     persist: bool = False       # 是否写入 SQLite
+    rolling_summary: str = ""   # 滑出窗口内容的滚动摘要（渲染置顶；仅内存，重启清空）
 
     def __post_init__(self):
         self._last_save = 0.0
         self._flush_scheduled = False
         self._save_lock = threading.Lock()
+        self._pending_compress: List[str] = []   # 已滑出、待摘要的行
+        self._compressing = False                # 摘要任务在途标记（防重入）
+        self._compress_fail_ts = 0.0             # 摘要失败冷却起点
         if self.persist and self.chat_id:
             self._load()
 
@@ -185,7 +228,82 @@ class ShortTermMemory:
 
     def _trim(self) -> None:
         if len(self.entries) > self.max_size:
+            dropped = self.entries[:-self.max_size]
             self.entries = self.entries[-self.max_size:]
+            self._note_dropped(dropped)
+
+    def _note_dropped(self, dropped: List[MemoryEntry]) -> None:
+        """滑出窗口的行攒进待压队列，够阈值且没在途/冷却时起火后台摘要。
+
+        后台任务走 fire_and_forget（强引用，裸 create_task 会被 GC 收走——
+        2026-08-13 生产实锤）。无运行中事件循环（同步上下文，如测试/CLI）
+        不起任务，材料留在队列里等下次触发，不丢。
+        """
+        enabled, min_chars, _max_chars = _summary_cfg()
+        if not enabled or not dropped:
+            return
+        for e in dropped:
+            name = "你" if e.role == "bot" else (e.nickname or e.user_id or "群友")
+            self._pending_compress.append(f"{name}: {e.text}")
+        if len(self._pending_compress) > _PENDING_MAX_LINES:
+            overflow = len(self._pending_compress) - _PENDING_MAX_LINES
+            self._pending_compress = self._pending_compress[overflow:]
+            logger.warning(f"[{self.chat_id or '?'}] 待压摘要队列超限，"
+                           f"最旧 {overflow} 行丢弃（摘要持续失败？）")
+        if self._compressing:
+            return
+        if sum(len(x) for x in self._pending_compress) < min_chars:
+            return
+        if time.time() - self._compress_fail_ts < _SUMMARY_RETRY_COOLDOWN:
+            return
+        try:
+            import asyncio
+            asyncio.get_running_loop()
+        except Exception:
+            return          # 同步上下文起不了后台任务，攒着等下次
+        try:
+            from junjun_core.bg_tasks import fire_and_forget
+            self._compressing = True
+            coro = self._compress_pending()
+            try:
+                fire_and_forget(coro, name=f"stm-summary:{self.chat_id or '?'}")
+            except Exception:
+                coro.close()    # 未接管的协程显式关闭，防 never-awaited 警告
+                raise
+        except Exception:
+            self._compressing = False
+
+    async def _compress_pending(self) -> None:
+        """待压队列 + 旧摘要 -> utils 槽模型滚动合并成新摘要。
+
+        失败不丢料：队列塞回去等冷却后再试（材料在，脉络就有救）。
+        """
+        _enabled, _min_chars, max_chars = _summary_cfg()
+        chunk_lines = self._pending_compress
+        self._pending_compress = []
+        try:
+            from langchain_core.messages import HumanMessage
+            from junjun_llm import get_chat_model
+            model = get_chat_model("utils")
+            resp = await model.ainvoke([HumanMessage(content=_SUMMARY_PROMPT.format(
+                max_chars=max_chars,
+                old=self.rolling_summary or "（空）",
+                chunk="\n".join(chunk_lines)))])
+            text = str(getattr(resp, "content", "") or "").strip()
+            if not text:
+                raise ValueError("模型返回空摘要")
+            self.rolling_summary = text[:max_chars * 2]  # 硬上限防模型超写
+            logger.info(f"[{self.chat_id or '?'}] 滚动摘要更新 "
+                        f"（吞 {len(chunk_lines)} 行，摘要 {len(text)} 字）")
+        except Exception as e:
+            self._compress_fail_ts = time.time()
+            # 材料塞回队首（新滑出的已在队尾），下次触发重试
+            self._pending_compress = (chunk_lines + self._pending_compress)[
+                -_PENDING_MAX_LINES:]
+            logger.warning(f"[{self.chat_id or '?'}] 滚动摘要失败（材料保留待重试）: "
+                           f"{type(e).__name__}: {e}")
+        finally:
+            self._compressing = False
 
     def render(self, limit: Optional[int] = None, *, mark_latest: bool = False,
                include_bot: bool = True, for_security: bool = False,
@@ -288,6 +406,11 @@ class ShortTermMemory:
                 lines.append(f"{prefix}{mark}: {_sanitize_text(e.text)}")
         if pruned:
             logger.debug(f"[{self.chat_id or '?'}] 背景裁剪 {pruned} 行超龄语气词")
+        # 滚动摘要置顶：滑出窗口的话题脉络以一段「前情摘要」留在上下文里。
+        # 括号+「摘要」明示这是压缩过的背景，不是某条具体消息
+        summary = _sanitize_summary(self.rolling_summary)
+        if summary:
+            lines.insert(0, f"（更早前聊过·摘要：{summary}）")
         return "\n".join(lines)
 
     def last_user_entry(self) -> Optional[MemoryEntry]:

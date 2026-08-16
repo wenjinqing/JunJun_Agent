@@ -117,6 +117,10 @@ filler_ttl_seconds = 300       # 语气词保鲜期（秒）：超期才裁；@�
 recall_max_per_hour = 5        # 语义召回「你忽然想起」注入限流（每会话每小时，0=不限）
 pinned_max_per_chat = 20       # /记住、pin_memory 钉住记忆每会话上限（每轮全量注入，防稀释）
 persist_short_term = false     # 短期记忆落 SQLite，重启后可恢复最近上下文（Phase 2；灰度默认关，观察期先关）
+rolling_summary = true         # 滚动摘要：滑出窗口的聊天记录攒批压成「前情摘要」置顶渲染（DSH 压缩移植；
+                               # 摘要有损但保话题脉络，细节检索走长期记忆/DB）。失败自动重试，材料不丢。
+rolling_summary_min_chars = 2000  # 待压材料攒够这么多字才烧一次 utils 槽（摊薄成本）
+rolling_summary_max_chars = 400   # 摘要长度上限（置顶渲染，太长又成新包袱）
 
 # ---------- 轻量规划循环（多步任务清单） ----------
 [plan]
@@ -454,6 +458,10 @@ repeat_call_limit = 3  # 复读熔断：同（工具,参数）每轮最多执行
                       # 上次结果要求立刻推进——防「反复翻手册/调心情却不动手」的空转
                       # （2026-08-14 trace 实锤：use_skill×3+manage_mood×2 交替撞穿上限，
                       # run_code 一次没真调）。0=关闭。
+tool_result_compress = true   # 工具结果压缩（DSH 移植）：超长产出只留头尾预览进上下文，
+                              # 全文存会话工作区 artifacts/，模型要全文自己调 workspace_read 读。
+                              # 只挂主对话循环；TaskKernel 大产出走材料库，不经此压缩。
+tool_result_inline_chars = 4000  # 超过这么多字才压缩（短结果原样，行为不变）
 complexity_routing = false  # 双腿路由（P2）：纯闲聊轮走 agent_light 轻腿（***REMOVED***）省 token；
                            # 判 light 条件全命中才放行（短消息/无强意图/无媒体/非管理员），拿不准一律强链。
                            # 意图补救轮自动升级回强链。开启前建议先跑 eval A/B 对比人格质量

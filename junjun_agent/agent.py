@@ -6,6 +6,7 @@ system prompt 每轮动态构建（时间/keyword_reaction/情绪/记忆块都�
 决策语义：reply -> 文本输出；no_reply -> do_not_reply 工具置沉默。
 """
 
+import hashlib
 import time
 from typing import Optional
 
@@ -392,10 +393,15 @@ class JunJunAgent:
             except Exception:
                 pass
         from junjun_agent.loop.repeat_guard import RepeatCallGuardMiddleware
+        from junjun_agent.loop.result_compress import ToolResultCompressMiddleware
         from junjun_agent.loop.search_budget import SearchBudgetMiddleware
         return create_agent(model=model or self._model, tools=tools,
                             middleware=[PlanMiddleware(), SearchBudgetMiddleware(),
-                                        RepeatCallGuardMiddleware()])
+                                        RepeatCallGuardMiddleware(),
+                                        # 结果压缩放最内层：只加工真工具产出，
+                                        # 刹车/熔断的短路文本不过它手
+                                        ToolResultCompressMiddleware(
+                                            self.session.chat_id)])
 
     async def aclose(self) -> None:
         """关闭模型客户端连接池（会话淘汰时调用）。best-effort，失败静默。"""
@@ -554,6 +560,9 @@ class JunJunAgent:
                     plan_token = set_plan(plan_steps)
         # 多步任务加迭代预算：每步可能 1-2 次工具调用
         eff_iter = max_iter + len(plan_steps or [])
+        # 轨迹记「模型看到了什么」（DSH「model-visible ⟺ logged」对齐用）：
+        # 入参消息数在 ainvoke 前定格——后面 messages 会被结果列表覆盖
+        n_input_messages = len(messages)
 
         agent = self._build_agent(allow_silence=not addressed, model=round_model)  # 每轮重建：工具掩码按当前话题实时生效；必回场景摘除沉默工具
         try:
@@ -807,10 +816,16 @@ class JunJunAgent:
         # 轨迹：决策轮结局（轨迹日志是观测件，emit 自带 try 不炸主流程）
         try:
             from junjun_core.observability import trajectory
+            sys_text = final_system or ""
             trajectory.emit("agent_round", self.session.chat_id,
                             trace_id=trace_id, tier=tier,
                             tools=",".join(sorted(_called_tool_names(messages))),
                             reply_len=len(text or ""), silent=not text,
+                            prompt_chars=len(sys_text),
+                            prompt_hash=(hashlib.sha1(
+                                sys_text.encode("utf-8", "ignore"))
+                                .hexdigest()[:12] if sys_text else ""),
+                            n_messages=n_input_messages,
                             duration_s=round(time.time() - t0, 1))
         except Exception:
             pass

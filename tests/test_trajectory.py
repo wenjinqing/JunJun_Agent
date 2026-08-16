@@ -56,3 +56,41 @@ class TestEmit:
         trajectory.emit("inbound", "c1", text="长" * 800)
         (rec,) = _read_lines(_tmp_traj)
         assert len(rec["text"]) < 600 and rec["text"].endswith("…")
+
+
+class TestAgentRoundObservability:
+    """agent_round 轨迹记「模型看到了什么」（2026-08-16，DSH
+    「model-visible ⟺ logged」不变量对齐）：prompt 字符数/哈希/入参消息数。
+    事后排查「模型为什么这么说」时，先核对它当时看到的输入规模与版本。
+    """
+
+    @pytest.mark.asyncio
+    async def test_emit_includes_what_model_saw(self, monkeypatch):
+        import junjun_agent.agent as agent_mod
+        from junjun_core.gateway.session_manager import ChatSession
+        from junjun_core.observability import trajectory as traj_mod
+        from junjun_memory.short_term import ShortTermMemory
+        from langchain_core.messages import AIMessage
+
+        emitted = []
+        monkeypatch.setattr(traj_mod, "emit",
+                            lambda kind, chat_id, **kw: emitted.append((kind, kw)))
+
+        class _Scripted:
+            async def ainvoke(self, params, config=None):
+                return {"messages": [AIMessage(content="收到")]}
+
+        monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
+                            lambda self, full=False, **_kw: _Scripted())
+        session = ChatSession("qq:1:private", "qq", user_id="1")
+        session.memory = ShortTermMemory()
+        agent = agent_mod.JunJunAgent(session, model=object())
+        out = await agent.process("甲: @君君 你好", addressed=True)
+        assert out == "收到"
+        rounds = [kw for kind, kw in emitted if kind == "agent_round"]
+        assert len(rounds) == 1
+        kw = rounds[0]
+        assert kw["prompt_chars"] > 0                 # system prompt 真实字符数
+        assert len(kw["prompt_hash"]) == 12           # sha1 截断指纹
+        assert kw["n_messages"] >= 2                  # system + human 至少两条
+        assert kw["silent"] is False and kw["reply_len"] == 2
