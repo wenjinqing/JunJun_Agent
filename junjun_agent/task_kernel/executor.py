@@ -367,7 +367,12 @@ class TaskKernel:
                 step.error = f"{type(e).__name__}: {e}"
             if ok:
                 step.status = "done"
-                step.result = result[:500]
+                # 大产出全文进材料库，上下文只留摘要+指针（PTC「中间数据
+                # 不进城」移植）；短产出原样 inline。此前全文直接丢弃，
+                # 合成/汇报只能拿 500 字残桩（materials.py 头注释）。
+                from junjun_agent.task_kernel import materials
+                step.result, step.material_id = materials.store_result(
+                    plan.plan_id, step.id, result)
                 logger.info(f"步骤 {step.id} 完成: {step.desc[:40]}")
             else:
                 step.status = "failed"
@@ -435,11 +440,27 @@ class TaskKernel:
         return {}
 
     async def _synthesize(self, plan: TaskPlan, step: Step) -> str:
-        """llm_synthesize：纯文本合成步骤（调研报告、笔记汇总）。"""
+        """llm_synthesize：纯文本合成步骤（调研报告、笔记汇总）。
+
+        材料按需读回全文（材料库，单项/总量双预算）——此前只有 500 字
+        残桩可写，报告内容饥荒；预算防超长材料烧穿合成上下文。
+        """
         from junjun_llm import get_chat_model
         from langchain_core.messages import HumanMessage
-        deps = "\n".join(f"【{s.desc}】\n{s.result}" for s in plan.steps
-                         if s.id in step.depends_on and s.result)
+        from junjun_agent.task_kernel import materials
+        per_cap, total_cap = materials.synth_budget()
+        chunks, used = [], 0
+        for s in plan.steps:
+            if s.id not in step.depends_on or not s.result:
+                continue
+            text = materials.material_text(s, per_cap)
+            if used + len(text) > total_cap:
+                text = text[:max(0, total_cap - used)]
+            if not text:
+                break
+            chunks.append(f"【{s.desc}】\n{text}")
+            used += len(text)
+        deps = "\n".join(chunks)
         prompt = (f"任务目标：{plan.goal}\n\n前序步骤产出：\n{deps or '（无）'}\n\n"
                   f"当前步骤：{step.desc}\n\n直接产出这一步的成果内容。")
         model = get_chat_model("thinker")  # 步骤合成（报告/汇总）：开思考提质
@@ -519,8 +540,12 @@ class TaskKernel:
         from langchain_core.messages import HumanMessage
         nickname = get_global_config().bot.nickname
         lines = plan.summary_lines()
-        results = "\n".join(f"【{s.desc}】{s.result[:300]}" for s in plan.steps
-                            if s.status == "done" and s.result)
+        # 汇报要「给货」：有材料的步骤读材料全文（单项预算），不拿摘要充数
+        from junjun_agent.task_kernel import materials
+        per_cap = materials.report_budget()
+        results = "\n".join(
+            f"【{s.desc}】{materials.material_text(s, per_cap)[:per_cap]}"
+            for s in plan.steps if s.status == "done" and s.result)
         if plan.state == "done":
             ask = f"任务已全部完成，把最终成果汇报给对方（成果内容为主，别只报喜不给货）。"
         else:

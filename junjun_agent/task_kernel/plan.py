@@ -45,7 +45,10 @@ class Step:
     # verify 原逻辑推断（向后兼容）。
     done_criteria: str = ""
     status: str = "pending"          # pending/running/done/failed/skipped
-    result: str = ""                 # 产出摘要（大产出的全文不落这里）
+    result: str = ""                 # 产出摘要（大产出全文落材料库，见 materials.py）
+    # 材料库指针（2026-08-15 PTC 移植）：大产出全文在 data/task_materials/<id>.md，
+    # 上下文只带摘要；旧存档无此字段 -> "" 全文即 result（向后兼容）。
+    material_id: str = ""
     error: str = ""
     # human 门（LangGraph 引擎）：管理员批准后置 True 才执行。
     # legacy 引擎不做人审（verify=human 在旧 _verify 里等同放行），门由
