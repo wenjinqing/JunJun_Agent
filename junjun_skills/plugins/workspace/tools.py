@@ -163,6 +163,10 @@ async def run_code(code: str, timeout: int = 30) -> str:
     （matplotlib 默认 Noto Sans CJK SC）；wordcloud 要传 font_path=
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc" 才不出豆腐块。
     区别于 ai_draw（AI 画插画）：run_code 画的是数据图表。
+    若管理员开启了沙箱工具桥：沙箱里 import jjtools 可调白名单只读工具
+    （web_search/fetch_page/get_time/query_chat_history）——多步取数尽量
+    在代码里一次编排完，中间结果留在沙箱变量/工作区文件里，只把结论
+    print 出来（省上下文）。没开桥时 import 会报模块不存在，忽略即可。
     非管理员使用需管理员事先批准（任务通道的人审步）。不用提前翻手册或请示——
     直接调用即可，门禁会自行判断：管理员直跑，无权限会返回明确指引
     （2026-08-14 trace 实锤：模型反复读手册不敢调，空转烧穿迭代上限）。"""
@@ -179,20 +183,39 @@ async def run_code(code: str, timeout: int = 30) -> str:
     headers = {}
     if os.environ.get("SANDBOX_TOKEN"):
         headers["X-Sandbox-Token"] = os.environ["SANDBOX_TOKEN"]
-    try:
+
+    async def _post_once() -> dict:
         async with make_async_client(timeout=timeout + 20) as client:  # 沙箱是本机服务，绝不走系统代理
             resp = await client.post(f"{_sandbox_url()}/run",
                                      json={"code": code, "timeout": timeout,
                                            "workdir": workdir},
                                      headers=headers)
+        if resp.status_code != 200:
+            raise RuntimeError(f"沙箱服务 HTTP {resp.status_code}: {resp.text[:120]}")
+        return resp.json()
+
+    # PTC 试点（默认关）：开启沙箱工具桥时注入 jjtools SDK 并走挂起-回放
+    # 驱动——沙箱代码可编排白名单只读工具，中间数据留沙箱不进上下文
+    # （DSH PTC 思想，--network=none 不动，文件通道协议见 bridge.py）。
+    bridge_on = False
+    try:
+        from junjun_skills.plugins.workspace import bridge
+        bridge_on = bridge.enabled() and bridge.install_sdk(_session_dir(create=True))
+    except Exception as e:
+        logger.warning(f"工具桥注入失败（忽略，本次无桥执行）: {e}")
+    try:
+        if bridge_on:
+            from junjun_core.security import current_user_id
+            data = await bridge.drive(_post_once, _session_dir(create=True),
+                                      chat_id=current_chat_id.get("") or "unknown",
+                                      user_id=current_user_id.get("") or "")
+        else:
+            data = await _post_once()
     except httpx.HTTPError as e:
         err = RuntimeError(f"沙箱服务不可达: {type(e).__name__}: {e}")
         err.tool_suggestion = ("沙箱服务没启动，重试无意义；向用户说明跑代码的功能暂时不可用，"
                                "管理员启动 sandbox 服务后才能用")
         raise err
-    if resp.status_code != 200:
-        raise RuntimeError(f"沙箱服务 HTTP {resp.status_code}: {resp.text[:120]}")
-    data = resp.json()
     parts = []
     if data.get("killed"):
         parts.append(f"执行被强制终止（超过 {timeout}s 上限）。")
@@ -205,7 +228,9 @@ async def run_code(code: str, timeout: int = 30) -> str:
     err_text = (data.get("stderr") or "").strip()
     if err_text:
         parts.append("错误输出：\n" + err_text[:1500])
-    files = data.get("files") or []
+    # 桥的协议文件不是用户产出，从文件清单里过滤
+    files = [f for f in (data.get("files") or [])
+             if f.get("path") not in ("jjtools.py", ".jj_request.json", ".jj_cache.json")]
     if files:
         parts.append("产生的文件（已存到工作区）："
                      + "、".join(f"{f['path']}（{fmt_size(int(f.get('size', 0)))}）"
@@ -258,6 +283,8 @@ async def workspace_list(subdir: str = "") -> str:
     entries = []
     for p in sorted(base.rglob("*")):
         rel = p.relative_to(root).as_posix()
+        if rel == "jjtools.py" or rel.startswith(".jj_"):
+            continue  # 沙箱工具桥协议文件，不是用户内容（bridge.py）
         if p.is_dir():
             entries.append(f"{rel}/")
         else:

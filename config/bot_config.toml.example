@@ -466,3 +466,8 @@ complexity_routing = false  # 双腿路由（P2）：纯闲聊轮走 agent_light
 # ---------- run_code 沙箱（TaskKernel Phase 2） ----------
 [sandbox]
 base_url = "http://127.0.0.1:8100"   # sandbox/server.py 的监听地址（仅本机）；服务没起时 run_code 返回不可用
+# 沙箱工具桥（PTC 试点，2026-08-15）：沙箱代码经「挂起-回放」文件协议调白名单
+# 只读工具（中间数据留沙箱不进上下文，省 token）。不开端口、不动 --network=none 隔离。
+tool_bridge = false
+#tool_bridge_tools = ["get_time", "web_search", "fetch_page", "query_chat_history"]  # 白名单（只读！副作用工具永远别进）
+#tool_bridge_max_calls = 8            # 单次 run_code 的工具调用上限（每次调用代码整体重放）
