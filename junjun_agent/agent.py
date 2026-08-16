@@ -187,6 +187,53 @@ def _intent_nudge(latest_text: str, result_messages: list, available: set,
     return None
 
 
+# 承诺-行动一致性自检（2026-08-16 生产实锤：私聊轻腿连续三轮「这就画/
+# 画好发你」承诺画图，ai_draw 明明被 TOPIC 钉在工具集里却一次没调，
+# 用户信任烧穿「我不相信你了」）。意图自检管「用户说了意图词但没调」，
+# 这里管「模型自己承诺了动作但没调」——光说不练是最浓的 AI 味。
+# 承诺语一律带「这就/马上/发你」行动锚点，防陈述句误伤（「你画得真好」
+# 「上次给你画的那张」不挂）。
+_ACTION_PROMISES = {
+    "ai_draw": ("这就画", "这就给你画", "这就去画", "就真画", "现在就画",
+                "马上给你画", "画好就发", "画好发你", "画好直接发",
+                "画好了发你", "画好马上发", "给你画一"),
+}
+
+_PROMISE_NUDGE = (
+    "（系统追问）你刚才承诺了「{phrase}」，但没有真正调用 {tool}——"
+    "光说不练最伤信任。要么现在调用 {tool} 兑现承诺；确实办不到就改口"
+    "如实说办不到，把承诺收回。注意：你上一轮的回复还没有发送出去，"
+    "对方目前什么都没看到——不要说「如上所述」之类的话。"
+)
+
+
+def _promise_nudge(result_messages: list, available: set, *,
+                   is_group: bool = False):
+    """草稿承诺了动作但对应工具没调 -> (追问文本, 是否需全绑补救)，否则 None。
+
+    工具被掩码裁掉（漏绑）时 full_bind=True：补救轮全量工具重建 agent——
+    不追问一个没绑定的工具（2026-08-01 实战教训，与 _intent_nudge 同规则）。
+    """
+    if not result_messages:
+        return None
+    text = _plain_reply_text(result_messages[-1])
+    if not text:
+        return None
+    called = _called_tool_names(result_messages)
+    for tool, phrases in _ACTION_PROMISES.items():
+        hit = next((p for p in phrases if p in text), None)
+        if hit is None or tool in called:
+            continue
+        # 群聊承诺画涩图不追问（同 _intent_nudge 的 NSFW 豁免）：
+        # 公共场合模型不兑现是政策正确，追问等于把它往违规上推
+        if is_group and tool == "ai_draw" and \
+                any(w in text.lower() for w in _NUDGE_NSFW_WORDS):
+            continue
+        return (_PROMISE_NUDGE.format(phrase=hit, tool=tool),
+                tool not in available)
+    return None
+
+
 def _record_tool_calls(session, messages: list) -> None:
     """把消息列表里的 ToolMessage 记入 HonestyGuard 台账（供发送前诚实校验）。
 
@@ -456,7 +503,8 @@ class JunJunAgent:
         tier = "full"
         try:
             from junjun_agent.router import agent_tier
-            tier = agent_tier(latest_text, has_media=has_media)
+            tier = agent_tier(latest_text, has_media=has_media,
+                              is_group=self.session.is_group)
         except Exception:
             tier = "full"
         round_model = self._model
@@ -612,6 +660,12 @@ class JunJunAgent:
                 available = {t.name for t in get_tools(self.session)}
                 nudge_info = _intent_nudge(latest_text, messages, available,
                                            is_group=self.session.is_group)
+                # 意图词没命中时再查承诺-行动一致性：模型自己说「这就画」
+                # 但没调 ai_draw（轻腿光说不练实锤，[agent] promise_retry 可控）
+                if nudge_info is None and bool(cfg.raw.get("agent", {}).get(
+                        "promise_retry", True)):
+                    nudge_info = _promise_nudge(messages, available,
+                                                is_group=self.session.is_group)
             except Exception:
                 nudge_info = None
             if nudge_info:

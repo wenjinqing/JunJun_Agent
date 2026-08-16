@@ -65,6 +65,29 @@ class TestMisjudgmentRegression:
             set_caller("", at_bot=False, is_group=True, nickname="")
 
 
+class TestPrivateDefaultsFull:
+    """私聊默认不走轻腿（2026-08-16 生产实锤：私聊轻腿连续三轮承诺画图
+    零调用，「我不相信你了」——工具明明钉在工具集里，弱模型选择先哄
+    不做事）。私聊低频高价值，省不下几个 token，质量优先。"""
+
+    def test_private_chat_always_full_by_default(self, routing_on):
+        for t in ("在吗", "摩西摩西，亲爱的", "我不相信你了", "晚安啦"):
+            assert agent_tier(t, is_group=False) == "full", t
+
+    def test_private_light_requires_explicit_opt_in(self, _fake_bot_config):
+        """显式打开 complexity_routing_private 才放行私聊轻腿。"""
+        _fake_bot_config.raw["agent"] = {"complexity_routing": True,
+                                         "complexity_routing_private": True}
+        assert agent_tier("在吗", is_group=False) == "light"
+        # 工具意图私聊照样强链（新开关只放行纯闲聊）
+        assert agent_tier("帮我画一只猫", is_group=False) == "full"
+
+    def test_group_light_unchanged(self, routing_on):
+        """群聊轻腿行为不变（新开关只管私聊；缺省 is_group=True 保持旧语义）。"""
+        assert agent_tier("在吗", is_group=True) == "light"
+        assert agent_tier("在吗") == "light"
+
+
 class TestLightModelFallback:
     def test_slot_unconfigured_falls_back(self, _fake_bot_config, monkeypatch):
         """agent_light 槽未配置/加载失败 -> None（调用方回落强链）。"""

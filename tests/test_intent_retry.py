@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 
 import pytest
 
-from junjun_agent.agent import _called_tool_names, _intent_nudge
+from junjun_agent.agent import _called_tool_names, _intent_nudge, _promise_nudge
 
 
 def _ai_with_tools(*names):
@@ -314,3 +314,125 @@ class TestCodeLabIntent:
                      "提醒我下午开会", "这个视频讲了啥"):
             nudge = _intent_nudge(text, msgs, ALL_TOOLS)
             assert not (nudge and "run_code" in nudge[0]), text
+
+
+class TestPromiseNudge:
+    """承诺-行动一致性自检（2026-08-16 生产实锤：私聊轻腿连续三轮
+    「这就画/画好发你」承诺画图，ai_draw 钉在工具集里却零调用，
+    用户信任烧穿「我不相信你了」——光说不练是最浓的 AI 味）。"""
+
+    @staticmethod
+    def _text(t):
+        return AIMessage(content=t)
+
+    def test_promise_without_call_nudged(self):
+        msgs = [self._text("哎，在呢在呢，图姐姐这就画，画好马上发你，乖~")]
+        nudge = _promise_nudge(msgs, ALL_TOOLS | {"ai_draw"})
+        assert nudge and "ai_draw" in nudge[0] and "这就画" in nudge[0]
+        assert nudge[1] is False   # 工具可用，普通补救轮
+
+    def test_promise_masked_out_full_bind(self):
+        """承诺了但工具被掩码裁掉 -> 全绑补救（不追问一个没绑定的工具）。"""
+        msgs = [self._text("我这就给你画一张！")]
+        nudge = _promise_nudge(msgs, {"save_memory"})
+        assert nudge and nudge[1] is True
+
+    def test_promise_fulfilled_no_nudge(self):
+        """真调了 ai_draw：「画好发你」是正常播报，不追问。"""
+        msgs = [_ai_with_tools("ai_draw"), self._text("在画了在画了，画好发你")]
+        assert _promise_nudge(msgs, ALL_TOOLS | {"ai_draw"}) is None
+
+    def test_real_incident_replies_all_caught(self):
+        """事故三轮原话全挂（生产 DB 逐字抄录）。"""
+        for t in ("哎，在呢在呢，别催啦。图姐姐这就画，画好马上发你，这回真不糊弄你，乖~",
+                  "这回不赖账了，我现在就真画，画好直接发你。你等着，姐姐这次说话算话。",
+                  "就实实在在给你画一张，画好直接发你。你信我这一回。"):
+            assert _promise_nudge([self._text(t)], ALL_TOOLS | {"ai_draw"}), t
+
+    def test_daily_lines_no_nudge(self):
+        """误判回归：陈述/评价/拒绝/回忆里的「画」不是行动承诺——
+        承诺语必须带「这就/马上/发你」行动锚点。"""
+        for t in ("我不会画画的啦，别为难我",
+                  "你画得真好，教我教我",
+                  "上次给你画的那张好看吗",
+                  "这游戏画风真不错",
+                  "等我画完这张再说",
+                  "计划一下明天去哪玩"):
+            assert _promise_nudge([self._text(t)],
+                                  ALL_TOOLS | {"ai_draw"}) is None, t
+
+    def test_group_nsfw_promise_not_nudged(self):
+        """群聊承诺画涩图不追问（政策豁免，同意图自检规则）；私聊照常追问。"""
+        msgs = [self._text("这就给你画张涩图，等着~")]
+        assert _promise_nudge(msgs, ALL_TOOLS | {"ai_draw"}, is_group=True) is None
+        assert _promise_nudge(msgs, ALL_TOOLS | {"ai_draw"}, is_group=False)
+
+    def test_no_text_no_nudge(self):
+        assert _promise_nudge([AIMessage(content="")], ALL_TOOLS) is None
+        assert _promise_nudge([], ALL_TOOLS) is None
+
+
+class TestPromiseRetryProcess:
+    """process 级：首轮光承诺不调用 -> 追问补救轮真调 -> 发补救轮的稿子。"""
+
+    @pytest.mark.asyncio
+    async def test_promise_triggers_retry_round(self, monkeypatch):
+        import junjun_agent.agent as agent_mod
+        from junjun_core.gateway.session_manager import ChatSession
+        from junjun_memory.short_term import ShortTermMemory
+        from langchain_core.messages import ToolMessage
+
+        rounds = [
+            # 首轮：光说不练
+            [AIMessage(content="哎，这就给你画一张，画好发你~")],
+            # 补救轮：真调 ai_draw 后如实播报
+            [AIMessage(content="", tool_calls=[
+                {"name": "ai_draw", "args": {"prompt": "猫"}, "id": "t1"}]),
+             ToolMessage(content="ai_draw 后台任务已登记", tool_call_id="t1",
+                         name="ai_draw"),
+             AIMessage(content="在画了在画了，图好了直接发你")],
+        ]
+
+        class _Scripted:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, params, config=None):
+                out = rounds[min(self.calls, len(rounds) - 1)]
+                self.calls += 1
+                return {"messages": out}
+
+        scripted = _Scripted()
+        monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
+                            lambda self, full=False, **_kw: scripted)
+        session = ChatSession("qq:2:private", "qq", user_id="2")
+        session.memory = ShortTermMemory()
+        agent = agent_mod.JunJunAgent(session, model=object())
+        out = await agent.process("甲: 摩西摩西，亲爱的", addressed=True)
+        assert scripted.calls == 2                     # 确实追问了一轮
+        assert out == "在画了在画了，图好了直接发你"
+
+    @pytest.mark.asyncio
+    async def test_no_promise_single_round(self, monkeypatch):
+        """无承诺的正常闲聊：不追问（补救轮不该成为常态开销）。"""
+        import junjun_agent.agent as agent_mod
+        from junjun_core.gateway.session_manager import ChatSession
+        from junjun_memory.short_term import ShortTermMemory
+
+        class _Scripted:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, params, config=None):
+                self.calls += 1
+                return {"messages": [AIMessage(content="今晚月亮真圆啊")]}
+
+        scripted = _Scripted()
+        monkeypatch.setattr(agent_mod.JunJunAgent, "_build_agent",
+                            lambda self, full=False, **_kw: scripted)
+        session = ChatSession("qq:2:private", "qq", user_id="2")
+        session.memory = ShortTermMemory()
+        agent = agent_mod.JunJunAgent(session, model=object())
+        out = await agent.process("甲: 看月亮", addressed=True)
+        assert out == "今晚月亮真圆啊"
+        assert scripted.calls == 1

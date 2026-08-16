@@ -174,16 +174,23 @@ _TIER_FACT_WORDS = ("什么时候", "最新", "天气", "新闻", "几点", "多
 _TIER_TOOL_WORDS = ("闹钟", "定时", "翻译一下", "帮我翻译")
 
 
-def agent_tier(text: str, *, has_media: bool = False) -> str:
+def agent_tier(text: str, *, has_media: bool = False, is_group: bool = True) -> str:
     """本轮主 Agent 用哪条腿："light"（闲聊轻腿）/ "full"（默认强链）。
 
     灰度开关：[agent] complexity_routing（默认 false = 永远 full，回到现状）。
+    私聊默认不走轻腿（complexity_routing_private 默认 false）——2026-08-16
+    生产实锤：私聊轻腿连续三轮承诺画图一次没调（工具明明钉在上下文里，
+    弱模型选择先哄不做事），用户信任烧穿「我不相信你了」。私聊低频高
+    价值，省不下几个 token，质量优先。
     """
     try:
         from junjun_core.config import get_global_config
-        if not bool(get_global_config().raw.get("agent", {})
-                    .get("complexity_routing", False)):
+        agent_cfg = get_global_config().raw.get("agent", {})
+        if not bool(agent_cfg.get("complexity_routing", False)):
             return "full"
+        if not is_group and not bool(
+                agent_cfg.get("complexity_routing_private", False)):
+            return "full"       # 私聊默认强腿（开关显式打开才放行轻腿）
     except Exception:
         return "full"
     t = (text or "").strip()
