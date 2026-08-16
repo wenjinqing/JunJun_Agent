@@ -182,6 +182,12 @@ class Gateway:
 
         session = get_session_manager().get_or_create(msg)
         logger.info(f"收到消息 [{session.chat_id}] {meta.nickname}: {text[:80]}")
+        try:
+            from junjun_core.observability import trajectory
+            trajectory.emit("inbound", session.chat_id,
+                            user=meta.nickname, text=text[:200])
+        except Exception:
+            pass
 
         try:
             reply = await self._processor(session, meta)
@@ -218,6 +224,14 @@ class Gateway:
                 outbox.enqueue(reply, msg_base.to_dict())
                 return
             logger.info(f"已发送回复 -> {reply.target_group_id or reply.target_user_id}")
+            try:
+                from junjun_core.observability import trajectory
+                trajectory.emit("outbound",
+                                target=str(reply.target_group_id
+                                           or reply.target_user_id),
+                                platform=reply.platform)
+            except Exception:
+                pass
 
 
 def _extract_text(seg: Seg) -> str:

@@ -209,6 +209,13 @@ class TaskKernel:
             fire_and_forget(self._run(plan), name=f"task-kernel-{plan.plan_id}")
         logger.info(f"[{chat_id}] 复杂任务规划完成（{len(plan.steps)} 步，"
                     f"{engine()} 引擎）: {text[:40]}")
+        try:
+            from junjun_core.observability import trajectory
+            trajectory.emit("tk_plan", chat_id, plan_id=plan.plan_id,
+                            goal=text[:120], steps=len(plan.steps),
+                            engine=engine())
+        except Exception:
+            pass
 
     # ---------- 执行循环 ----------
 
@@ -383,6 +390,15 @@ class TaskKernel:
                 _sspan.update(metadata={"status": step.status, "error": step.error[:200]})
             except Exception:
                 pass
+            try:
+                from junjun_core.observability import trajectory
+                trajectory.emit("tk_step", plan.chat_id, plan_id=plan.plan_id,
+                                step=step.id, action=step.action,
+                                status=step.status, error=step.error[:100],
+                                attempt=plan.attempts[step.id],
+                                material=step.material_id)
+            except Exception:
+                pass
 
     async def _call_tool(self, plan: TaskPlan, step: Step) -> str:
         """按名找注册表工具直接调（继承注册处的超时/熔断/错误分类包装）。"""
@@ -532,6 +548,14 @@ class TaskKernel:
             task_manager._record_outcome(plan.chat_id, "task_kernel", status,
                                          detail, said=said)
         logger.info(f"[{plan.chat_id}] 复杂任务终态 {plan.state}: {plan.goal[:40]} {plan.note}")
+        try:
+            from junjun_core.observability import trajectory
+            trajectory.emit("tk_done", plan.chat_id, plan_id=plan.plan_id,
+                            state=plan.state, note=plan.note[:100],
+                            replans=plan.replans, verify_skipped=plan.verify_skipped,
+                            steps_done=len(done), steps_total=len(plan.steps))
+        except Exception:
+            pass
 
     async def _compose_report(self, plan: TaskPlan) -> str:
         from junjun_llm import get_chat_model

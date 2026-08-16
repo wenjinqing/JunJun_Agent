@@ -440,6 +440,7 @@ class JunJunAgent:
                   媒体轮一律走强腿。
         """
         cfg = get_global_config()
+        t0 = time.time()
         max_iter = int(cfg.raw.get("memory", {}).get("max_agent_iterations", 5))
         budget_cfg = cfg.raw.get("context_budget", {})
         budget_enabled = bool(budget_cfg.get("enable", False))
@@ -803,4 +804,14 @@ class JunJunAgent:
                 logger.warning(f"空输出补救轮异常: {type(e).__name__}: {e}")
             if not text:
                 return "……抱歉，刚才那句我死活没组织出来。换个说法再问我一次？"
+        # 轨迹：决策轮结局（轨迹日志是观测件，emit 自带 try 不炸主流程）
+        try:
+            from junjun_core.observability import trajectory
+            trajectory.emit("agent_round", self.session.chat_id,
+                            trace_id=trace_id, tier=tier,
+                            tools=",".join(sorted(_called_tool_names(messages))),
+                            reply_len=len(text or ""), silent=not text,
+                            duration_s=round(time.time() - t0, 1))
+        except Exception:
+            pass
         return text or None
