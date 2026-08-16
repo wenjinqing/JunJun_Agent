@@ -88,6 +88,9 @@ keyword_rules = [
 [response_post_process]
 enable_response_post_process = true  # false 时跳过分条/错别字流水线，原文直发
 clean_markdown = true  # 去掉 LLM 吐出的 markdown 标记（**粗体**、# 标题、`代码`）
+strip_emoji = true          # 回复文本去 emoji（2026-08-17 用户拍板）：prompt 劝告压不过弱模型，结构层兜底
+strip_tone_particles = true # 去句末语气词（啦/呢/哦/呀/嘛/咯/呗/喔/啊）与句尾波浪号；
+                            # 只剥行尾/句末位置——「吗/吧/么」语义词和句中「他呢」话题标记不动
 
 # ---------- 回复分条（拟人化：长回复拆多条气泡） ----------
 [response_splitter]

@@ -1,6 +1,7 @@
 """回复后处理流水线：agent 原始文本 -> 多条待发消息。
 
-顺序：去 <think> 残留 -> 去 markdown 标记 -> 分割多条 -> 错别字 -> （引用决策在 processor 层）。
+顺序：去 <think> 残留 -> 去 markdown 标记 -> 去语气词/emoji -> 分割多条 ->
+错别字 -> （引用决策在 processor 层）。
 纯函数，配置从 bot_config [response_post_process]/[response_splitter]/[chinese_typo] 读取。
 """
 
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from junjun_core.config import get_global_config
-from junjun_agent.postprocess.cleaner import clean_markdown
+from junjun_agent.postprocess.cleaner import clean_markdown, clean_tone
 from junjun_agent.postprocess.splitter import split_response, typing_delay
 from junjun_agent.postprocess.typo import ChineseTypoGenerator
 
@@ -61,6 +62,12 @@ def process_response(text: str, *, rand: Optional[random.Random] = None,
     text = _NICKNAME_PREFIX_RE.sub("", text.strip())
     if pp.get("clean_markdown", True):
         text = clean_markdown(text)
+    # 语气词/emoji 结构层清理（2026-08-17 用户拍板）：reply_style 早写了
+    # 「不用 emoji」弱模型照吐——prompt 是劝告，这里是闸门
+    if pp.get("strip_emoji", True) or pp.get("strip_tone_particles", True):
+        text = clean_tone(text,
+                          strip_emoji=bool(pp.get("strip_emoji", True)),
+                          strip_particles=bool(pp.get("strip_tone_particles", True)))
     if not text:
         return []
 
