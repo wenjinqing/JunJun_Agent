@@ -246,6 +246,9 @@ junjun_skills/plugins/vrchat_agent/config.toml
 # docs/ 不入库（2026-08-13 用户拍板：含路线图的本地工作文档一律留本地，不入库不推送）
 docs/
 
+# Claude Code 本地技能与设置（2026-08-17 用户拍板：不入库）
+.claude/
+
 # NapCat 看门狗（含本机路径/QQ号，本地专用）
 scripts/napcat_watchdog.py
 tests/test_napcat_watchdog.py
