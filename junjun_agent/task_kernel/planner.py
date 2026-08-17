@@ -133,7 +133,7 @@ async def make_plan(goal: str, *, chat_id: str, user_id: str,
     工具名值得一次纠偏机会（2026-08-12 基线 2/10 失败死于单次 None）。"""
     if model is None:
         from junjun_llm import get_chat_model
-        model = get_chat_model("thinker")  # 规划是低频高价值：开思考的 ***REMOVED***
+        model = get_chat_model("thinker")  # 规划是低频高价值：开思考的强模型
     from langchain_core.messages import HumanMessage
     from junjun_skills.registry import get_tools
     valid = {t.name for t in get_tools()}

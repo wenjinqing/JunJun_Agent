@@ -156,8 +156,8 @@ def route_to_task(text: str, *, chat_id: str = "") -> bool:
 
 # ---- 主 Agent 双腿路由（2026-08-11 token 优化 P2）----
 # agent 槽独占约 99% token 消耗（生产实测：单次平均输入 14.5K，固定前缀
-# system+工具占一半以上）。纯闲聊轮不需要 ***REMOVED*** 的工具调用稳定性，
-# 走 ***REMOVED*** 轻腿（agent_light 槽）省输入溢价。
+# system+工具占一半以上）。纯闲聊轮不需要强模型的工具调用稳定性，
+# 走轻腿（agent_light 槽）省输入溢价。
 # 判 light 是「加宽命中面」，纪律照旧：条件【全部】命中才放行，拿不准一律
 # full（现状腿）——误判方向只亏钱（该轻的走了贵的），绝不亏人格与工具可靠性。
 # 配套误判回归测试在 tests/test_agent_tier.py。

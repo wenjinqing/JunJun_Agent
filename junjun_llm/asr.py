@@ -1,4 +1,4 @@
-"""硅基流动 ASR（OpenAI 兼容 /audio/transcriptions，SenseVoiceSmall）。
+"""ASR 客户端（OpenAI 兼容 /audio/transcriptions）。
 
 key 复用号池（sf_pool，代金券直接烧），号池空退化 SILICONFLOW_API_KEY。
 watch_video（长音频）与语音消息转写（短音频）共用本模块；任何失败返回 ""，

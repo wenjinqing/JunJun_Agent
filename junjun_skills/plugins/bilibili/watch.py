@@ -14,7 +14,7 @@
              -> （有 VLM + 视频流）关键帧描述
              -> 综述
 
-ASR 走硅基流动 OpenAI 兼容 /audio/transcriptions（SenseVoiceSmall），
+ASR 走 OpenAI 兼容 /audio/transcriptions，
 key 复用号池（sf_pool），代金券直接烧。
 """
 

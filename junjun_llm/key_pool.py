@@ -1,4 +1,4 @@
-"""硅基流动 key 号池：多 key 轮用 + 余额不足自动丢弃。
+"""多 key 号池：多 key 轮用 + 余额不足自动丢弃。
 
 用法：
 - key 放 data/sf_keys.txt（一行一个，# 开头注释；data/ 已 gitignore，不会进仓库）

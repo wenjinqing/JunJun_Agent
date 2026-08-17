@@ -242,7 +242,7 @@ max_facts = 3            # 每场景每次蒸馏事实上限
 
 # ---------- TTS 情绪语气（语音跟随君君的真实心情） ----------
 [tts]
-enable_emotion = true    # 语音自动带当前心情语气（豆包 emotion 参数，实测 vv 音色支持）
+enable_emotion = true    # 语音自动带当前心情语气（TTS 后端的 emotion 参数，实测部分音色支持）
 emotion_scale = 4        # 情绪强度 1-5，4 明显但不过火；LLM 指定「发疯/气炸」会再+1 拉满
 
 # ---------- 表情包 ----------
@@ -379,7 +379,7 @@ min_fulltext = 2      # 触发反思的「读到全文」条数阈值
 fetch_max_chars = 3000  # 单篇原文截断（防综述输入爆炸）
 report_max_chars = 1000 # 报告正文目标长度（加上来源列表后仍需 < async_task.report_max_chars）
 
-# ---------- ASR / 语音消息（硅基流动 SenseVoiceSmall，号池 key） ----------
+# ---------- ASR / 语音消息（OpenAI 兼容转写服务，号池 key） ----------
 [asr]
 model = "FunAudioLLM/SenseVoiceSmall"
 max_bytes = 20971520   # 20MB 上限（防超大音频撑爆）
@@ -404,13 +404,13 @@ enable_understand = true   # 拦截器命中后后台「看懂」+ 摘要注入�
 # ---------- 认真看视频（video_watch job：下载 -> ASR 转写 -> 关键帧 -> 观后报告） ----------
 [video_watch]
 max_duration = 1800        # 能看的视频时长上限（秒，30 分钟）
-asr_model = "FunAudioLLM/SenseVoiceSmall"  # 硅基流动 ASR（OpenAI 兼容接口，号池 key）
+asr_model = "FunAudioLLM/SenseVoiceSmall"  # OpenAI 兼容 ASR 接口（号池 key）
 asr_max_chars = 6000       # 语音转写截断
 keyframe_interval = 30     # 关键帧抽取间隔（秒）
 max_keyframes = 8          # 关键帧上限（每帧一次 VLM 调用）
 report_max_chars = 1200    # 观后报告目标长度（留量给汇报上限 1500）
 
-# ---------- 硅基流动 key 号池（多 key 轮用，余额不足自动丢弃） ----------
+# ---------- 多 key 号池（多 key 轮用，余额不足自动丢弃） ----------
 [key_pool]
 min_balance = 0.5   # 余额低于此值（元）发 1-token 探针复核（代金券余额恒 0 但可用），确认没钱才丢弃
 check_hours = 2     # 余额巡检间隔（小时；top up 的 key 下轮自动复活）

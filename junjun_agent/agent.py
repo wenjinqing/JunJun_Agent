@@ -701,7 +701,7 @@ class JunJunAgent:
                 except Exception as e:
                     logger.warning(f"意图补救轮异常（沿用首轮结果）: {type(e).__name__}: {e}")
 
-        # DeepSeek 官方规则（调研确认）：
+        # 部分厂商思考型模型的 API 规则（调研确认）：
         # - 无工具调用时：上一轮的 reasoning_content 禁止拼入后续 context（传了也被忽略）
         # - 有工具调用时：reasoning_content 必须完整回传，缺失直接 400
         # 实现：检测本轮是否有 tool_call，有则保留 reasoning 链；无则确保不发 reasoning
@@ -714,7 +714,7 @@ class JunJunAgent:
         if last_msg:
             reasoning = (getattr(last_msg, "additional_kwargs", {}) or {}).get("reasoning_content")
             if reasoning and has_tool_call:
-                # 工具调用链内：reasoning 保留（DeepSeek 要求回传，否则 400）
+                # 工具调用链内：reasoning 保留（该厂商 API 要求回传，否则 400）
                 logger.debug(f"[{self.session.chat_id}] 工具链内 reasoning_content 保留 ({len(reasoning)} 字)")
             elif reasoning:
                 # 无工具调用：reasoning 已分离，content 是最终答案
@@ -731,10 +731,10 @@ class JunJunAgent:
             logger.warning(f"[{self.session.chat_id}] 未闭合 <think> 思考链泄漏，本轮沉默")
             return None
 
-        # ***REMOVED*** 工具参数格式泄漏：模型把 do_not_reply 的 XML 参数格式当文本输出
+        # 某厂商模型的工具参数格式泄漏：模型把 do_not_reply 的 XML 参数格式当文本输出
         # （<arg_key>reason</arg_key><arg_value>...</arg_value>），不是真正调用工具
         if "<arg_key>" in text or "</arg_key>" in text:
-            logger.warning(f"[{self.session.chat_id}] ***REMOVED*** 工具参数格式泄漏，本轮沉默")
+            logger.warning(f"[{self.session.chat_id}] XML 参数格式泄漏，本轮沉默")
             return None
 
         # 推理结构检测（无 reasoning_content 字段且 text 仍含推理时的最后保险）

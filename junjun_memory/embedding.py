@@ -1,9 +1,9 @@
-"""Embedding 客户端：bge-m3 (SiliconFlow, 1024 维)。
+"""Embedding 客户端（OpenAI 兼容 embeddings 接口，1024 维）。
 
 对齐原 lpmm embedding 配置。支持两套 env 配置：
 1. EMBEDDING_BASE_URL / EMBEDDING_MODEL / EMBEDDING_API_KEY（专用 embedding 服务）
 2. 降级：VLM_BASE_URL / VLM_MODEL / VLM_API_KEY（复用多模态服务的 embedding 能力）
-3. 再降级：SILICONFLOW_API_KEY（默认 bge-m3）
+3. 再降级：SILICONFLOW_API_KEY（用内置默认模型）
 
 任一不可用则 available=False，上层自动降级关键词检索，不阻塞主循环。
 """
@@ -42,7 +42,7 @@ class EmbeddingClient:
         if self._api_key and self._base_url and self._model:
             logger.info(f"embedding 配置: {self._base_url[:40]}... / {self._model}")
             return
-        # 2. SiliconFlow bge-m3（专用 embedding 服务，支持 embeddings endpoint）
+        # 2. 专用 embedding 服务（支持 embeddings endpoint）
         sf_key = os.environ.get("SILICONFLOW_API_KEY", "")
         if sf_key:
             self._api_key = sf_key

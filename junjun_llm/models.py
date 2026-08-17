@@ -38,11 +38,12 @@ class ModelSpec:
     api_key: str
     temperature: float = 0.7
     max_tokens: int = 1024
-    # 厂商特定请求参数（如硅基 ***REMOVED*** 关思考 thinking={"type":"disabled"}——
+    # 厂商特定请求参数（如部分厂商关思考 thinking={"type":"disabled"}——
     # 2026-08-09 实测：默认开思考一句 hi 白烧 ~180 reasoning tokens（计费），
-    # 延迟 1.0s->3.8s；高频闲聊槽纯浪费。enable_thinking=false 对 GLM 无效，
-    # Qwen 系才认那个字段；思考 token 不占 max_tokens 配额（实测 max_tokens=50
-    # 仍 reasoning=213 + 正文正常），所以关思考图的是费用和延迟）
+    # 延迟 1.0s->3.8s；高频闲聊槽纯浪费。enable_thinking=false 并非所有厂商
+    # 都认（字段名各家不同，可双写，各自忽略不认的）；思考 token 不占
+    # max_tokens 配额（实测 max_tokens=50 仍 reasoning=213 + 正文正常），
+    # 所以关思考图的是费用和延迟）
     extra_body: dict = field(default_factory=dict)
     # 单跳请求超时/重试：默认 60s×4 次适合闲聊槽；思考型槽（thinker 规划）
     # 单次生成轻松超 60s——2026-08-13 生产实锤：thinker 两条腿 4×60s 全超时
@@ -102,7 +103,7 @@ def _spec_from(cfg: dict, defaults: dict) -> Optional[ModelSpec]:
     )
 
 
-# api_key_env 写这个值 = 走硅基流动号池（junjun_llm/key_pool.py）
+# api_key_env 写这个值 = 走多 key 号池（junjun_llm/key_pool.py）
 _POOL_MARKER = "SF_POOL"
 
 

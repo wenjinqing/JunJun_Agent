@@ -1,0 +1,99 @@
+# 君君任务槽模型配置（示例）
+#
+# 每个任务槽从 env 读 base_url / model / api_key（env 名按槽可配）。
+# 模型走 OpenAI 兼容协议，任意供应商/聚合平台均可接入。
+# 默认所有槽可共用一组 env；想让不同槽用不同模型，
+# 把对应槽的 *_env 指向另一组 env 即可（见 .env.example 的分组示例）。
+#
+# 每槽支持 [[task.X.models]] 多条目实现顺序 fallback（主模型故障自动切下一个）：
+#   [[task.agent.models]]
+#   base_url_env = "LLM_BASE_URL"         # 主线路
+#   model_env    = "LLM_MODEL"
+#   api_key_env  = "LLM_API_KEY"
+#   [[task.agent.models]]
+#   base_url_env = "LLM_BACKUP_BASE_URL"  # 备线路（配了 env 才生效）
+#   model_env    = "LLM_BACKUP_MODEL"
+#   api_key_env  = "LLM_BACKUP_API_KEY"
+#
+# 多 key 号池（多 key 轮用）：api_key_env 写 "SF_POOL"，
+# key 放 data/sf_keys.txt 一行一个；余额不足/失效自动换下一条腿，
+# 不同任务槽起始 key 轮转（详见 junjun_llm/key_pool.py）。
+#
+# extra_body 透传厂商特定参数（如思考模式开关）；不同厂商字段名可能不同，
+# 可以双写，各自忽略不认的字段：
+#   extra_body = { enable_thinking = false, thinking = { type = "disabled" } }
+
+[task.gate]
+# 轻量判定槽：小模型、低 max_tokens；建议关思考（否则 reasoning 烧光配额）
+temperature = 0.1
+max_tokens = 128
+[[task.gate.models]]
+base_url_env = "LLM_BASE_URL"
+model_env = "LLM_MODEL"
+api_key_env = "LLM_API_KEY"
+extra_body = { enable_thinking = false, thinking = { type = "disabled" } }
+
+[task.agent]
+# 主 Agent：必须支持 function calling。
+# temperature 0.6：人格活泼与工具调用稳定性的平衡点
+temperature = 0.6
+max_tokens = 2048
+[[task.agent.models]]
+base_url_env = "LLM_BASE_URL"
+model_env = "LLM_MODEL"
+api_key_env = "LLM_API_KEY"
+
+[task.agent_light]
+# 闲聊轻腿（router.agent_tier 判「纯闲聊」的轮次用便宜模型，省强模型输入溢价）。
+# 意图补救轮自动升级回 agent 强链；开关 [agent] complexity_routing，默认关。
+temperature = 0.6
+max_tokens = 2048
+[[task.agent_light.models]]
+base_url_env = "LLM_BASE_URL"
+model_env = "LLM_LIGHT_MODEL"
+api_key_env = "LLM_API_KEY"
+extra_body = { enable_thinking = false, thinking = { type = "disabled" } }
+
+[task.thinker]
+# 复杂任务规划/研究（TaskKernel 规划器、deep_research 规划+反思+综述）：
+# 低频高价值，开思考换规划质量。不传 extra_body = 默认开思考。
+# 思考型生成单次轻松超 60s——默认 60s×N 重试必超时烧穿（生产实锤）：
+# 放宽单跳 180s、减重试，快失败让给下一条腿。
+temperature = 0.3
+max_tokens = 4096
+timeout = 180
+max_retries = 1
+[[task.thinker.models]]
+base_url_env = "LLM_BASE_URL"
+model_env = "LLM_MODEL"
+api_key_env = "LLM_API_KEY"
+
+[task.utils]
+# 杂项小任务（频率评估/摘要/提醒文案等）
+temperature = 0.3
+max_tokens = 512
+[[task.utils.models]]
+base_url_env = "LLM_BASE_URL"
+model_env = "LLM_MODEL"
+api_key_env = "LLM_API_KEY"
+extra_body = { enable_thinking = false, thinking = { type = "disabled" } }
+
+[task.utils_small]
+# 更轻量的杂项（情绪重评等高频低难度任务）
+temperature = 0.3
+max_tokens = 256
+[[task.utils_small.models]]
+base_url_env = "LLM_BASE_URL"
+model_env = "LLM_MODEL"
+api_key_env = "LLM_API_KEY"
+extra_body = { enable_thinking = false, thinking = { type = "disabled" } }
+
+[task.vlm]
+# 多模态识图（图片描述/表情包注册）。未配置对应 env 时识图链路自动降级为 [图片] 占位
+temperature = 0.3
+max_tokens = 512
+[[task.vlm.models]]
+base_url_env = "VLM_BASE_URL"
+model_env = "VLM_MODEL"
+api_key_env = "VLM_API_KEY"
+extra_body = { enable_thinking = false }

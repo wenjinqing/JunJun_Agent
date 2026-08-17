@@ -80,7 +80,7 @@ command = "uvx"
 args = ["wikipedia-mcp", "--language", "zh"]
 env = { PYTHONIOENCODING = "utf-8" }
 
-# ---------- 抖音链接 -> 无水印视频 + 语音转文案（硅基流动 SenseVoice，key 复用 .env） ----------
+# ---------- 抖音链接 -> 无水印视频 + 语音转文案（ASR 服务，key 复用 .env） ----------
 [servers.douyin_extract]
 enable = true
 command = "uvx"

@@ -60,7 +60,7 @@ def _effective_weight(it: "MemoryItem") -> float:
 def _recall_min_score() -> float:
     """向量召回相似度下限（[memory] recall_min_score，默认 0.55）。
 
-    曾用 0.3——bge-m3 对不相关中文文本的余弦相似度也有 0.4~0.6，
+    曾用 0.3——所用 embedding 模型对不相关中文文本的余弦相似度也有 0.4~0.6，
     0.3 形同虚设，「你忽然想起」注的都是弱相关噪声（严厉审查 P2-10）。
     """
     try:

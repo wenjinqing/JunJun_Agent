@@ -1,11 +1,11 @@
-"""AI Ping 四条新腿连通性冒烟（2026-08-12）。
+"""LLM 聚合线路连通性冒烟（2026-08-12）。
 
 直连 httpx 原始 POST（不过 LangChain），看最原始的返回结构：
-1. ***REMOVED*** 文本（utils/utils_small 主力、gate/agent_light 备腿）
-2. ***REMOVED*** 带双关思考字段（agent 备2）——验证两个 extra_body 字段都被网关接受，
+1. 轻量模型纯文本
+2. 强模型带双关思考字段——验证两个 extra_body 字段都被网关接受，
    并检查是否真的没烧 reasoning tokens
-3. ***REMOVED*** 纯文本（vlm 主力）
-4. ***REMOVED*** 带 data-url 图片——验证视觉消息格式在该网关可用
+3. 视觉模型纯文本
+4. 视觉模型带 data-url 图片——验证视觉消息格式在该网关可用
 结果写 JSON 文件，避免控制台 GBK 中文乱码。
 """
 
@@ -27,7 +27,7 @@ cfg = dotenv_values(ROOT / ".env")
 BASE = cfg["AIPING_BASE_URL"].rstrip("/")
 KEY = cfg["AIPING_API_KEY"]
 HEADERS = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
-OUT = Path(os.environ.get("AIPING_SMOKE_OUT", ROOT / "data" / "aiping_smoke.json"))
+OUT = Path(os.environ.get("LLM_SMOKE_OUT", ROOT / "data" / "llm_route_smoke.json"))
 
 
 def _png_b64(rgb: tuple) -> str:
@@ -73,7 +73,7 @@ def main() -> int:
         "max_tokens": 32, "temperature": 0.1,
     })
 
-    results["glm52_agent_leg"] = post({
+    results["strong_agent_leg"] = post({
         "model": cfg["AIPING_GLM_MODEL"],
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 32, "temperature": 0.1,

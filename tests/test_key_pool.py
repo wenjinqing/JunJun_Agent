@@ -230,10 +230,10 @@ model_env = "DS_MODEL"
 api_key_env = "DEEPSEEK_API_KEY"
 """, encoding="utf-8")
         monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
-        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.siliconflow.cn/v1")
-        monkeypatch.setenv("SF_LLM_MODEL", "Qwen/Qwen3.5-397B-A17B")
-        monkeypatch.setenv("DS_BASE_URL", "https://api.***REMOVED***.com")
-        monkeypatch.setenv("DS_MODEL", "***REMOVED***")
+        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.provider-a.example/v1")
+        monkeypatch.setenv("SF_LLM_MODEL", "example-org/MODEL-P")
+        monkeypatch.setenv("DS_BASE_URL", "https://api.provider-b.example")
+        monkeypatch.setenv("DS_MODEL", "demo-model")
         monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
         # 池里 4 个健康 key，max_legs=3（上面的 fixture config）
         monkeypatch.setattr("junjun_llm.key_pool.sf_pool.healthy_keys",
@@ -260,10 +260,10 @@ model_env = "DS_MODEL"
 api_key_env = "DEEPSEEK_API_KEY"
 """, encoding="utf-8")
         monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
-        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.siliconflow.cn/v1")
-        monkeypatch.setenv("SF_LLM_MODEL", "Qwen/x")
-        monkeypatch.setenv("DS_BASE_URL", "https://api.***REMOVED***.com")
-        monkeypatch.setenv("DS_MODEL", "***REMOVED***")
+        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.provider-a.example/v1")
+        monkeypatch.setenv("SF_LLM_MODEL", "example-org/x")
+        monkeypatch.setenv("DS_BASE_URL", "https://api.provider-b.example")
+        monkeypatch.setenv("DS_MODEL", "demo-model")
         monkeypatch.setenv("DEEPSEEK_API_KEY", "ds-key")
         monkeypatch.setattr("junjun_llm.key_pool.sf_pool.healthy_keys", lambda: [])
         models.reset_slots()
@@ -285,8 +285,8 @@ model_env = "SF_LLM_MODEL"
 api_key_env = "SF_POOL"
 """, encoding="utf-8")
         monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
-        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.siliconflow.cn/v1")
-        monkeypatch.setenv("SF_LLM_MODEL", "Qwen/x")
+        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.provider-a.example/v1")
+        monkeypatch.setenv("SF_LLM_MODEL", "example-org/x")
         # tick 打桩：不碰真实 data/sf_keys.txt、不触发真实巡检
         monkeypatch.setattr(sf_pool, "tick", lambda: None)
         alive = ["k1", "k2"]
@@ -315,8 +315,8 @@ model_env = "SF_LLM_MODEL"
 api_key_env = "SF_POOL"
 """, encoding="utf-8")
         monkeypatch.setattr(models, "MODEL_CONFIG_PATH", toml)
-        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.siliconflow.cn/v1")
-        monkeypatch.setenv("SF_LLM_MODEL", "Qwen/x")
+        monkeypatch.setenv("SF_LLM_BASE_URL", "https://api.provider-a.example/v1")
+        monkeypatch.setenv("SF_LLM_MODEL", "example-org/x")
         monkeypatch.setattr(sf_pool, "tick", lambda: None)
         monkeypatch.setattr(sf_pool, "healthy_keys", lambda: ["k1"])
         monkeypatch.setattr(sf_pool, "generation", 5)
