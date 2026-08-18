@@ -211,11 +211,13 @@ class TestCatcafeMounting20260818:
 
     def test_intent_mounts_catcafe_group(self):
         for text in ("帮我在咖啡厅发个公告", "小涩猫官网最近咋样",
-                     "站点 slogan 换一下", "更新网站上说一声"):
+                     "站点 slogan 换一下", "更新网站上说一声",
+                     "看看网站留言板有没有新留言", "回复一下网站留言"):
             names = registry._intent_mounted(text)
             for n in ("catcafe_get_content", "catcafe_get_stats",
                       "catcafe_post_notice", "catcafe_set_slogan",
-                      "catcafe_set_status"):
+                      "catcafe_set_status", "catcafe_list_messages",
+                      "catcafe_reply_message", "catcafe_delete_message"):
                 assert n in names, (text, n)
 
     def test_intent_no_nudge_primary(self):
@@ -225,9 +227,10 @@ class TestCatcafeMounting20260818:
                 assert primary is None
 
     def test_intent_no_misfire_daily(self):
-        """误判回归：裸「网站」「群公告」「咖啡店」类日常句不挂 catcafe 组。"""
+        """误判回归：裸「网站」「群公告」「咖啡店」「留言」类日常句不挂 catcafe 组。"""
         for text in ("这个网站打不开了", "群公告在哪看", "今晚吃啥",
-                     "帮我搜一下附近的咖啡店", "提醒我开会"):
+                     "帮我搜一下附近的咖啡店", "提醒我开会",
+                     "他给我留言说晚安", "记得看 QQ 留言"):
             names = registry._intent_mounted(text)
             assert not any(n.startswith("catcafe_") for n in names), text
 

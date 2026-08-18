@@ -1,13 +1,17 @@
 """小涩猫咖啡厅站点管理插件（2026-08-18 站主接入）。
 
 通过站主开放的管理接口（X-API-Key 认证）让君君兼任网站管理员：
-读站点内容、看运营数据、发公告、改 slogan / 作者状态。
+读站点内容、看运营数据、发公告、改 slogan / 作者状态，
+并以「猪咪君君」身份照看留言板（列表 / 回复 / 删除不当留言）。
 
 安全边界：
 - key 只放 .env（CATCAFE_API_KEY），永不入库、永不打印（日志只给错误类别）
 - 写操作工具体内硬校验管理员特权——公开发布动作不靠 prompt 自觉
 - 更新接口是全量替换：一律先 GET 再改再 PUT（read-modify-write），
   PUT 前校验 tag 白名单与 1MB 上限，返回非 saved 如实说明
+- 留言 reply/delete 无 id 字段，靠 nick+time+content 精确三元组定位：
+  工具只收列表编号，内部重新拉列表取原文再 POST，不让模型转抄长文本；
+  空回复 = 清除已有回复（探测事故实锤），回复文本硬校验非空
 """
 
 import json
@@ -49,7 +53,13 @@ async def _request(method: str, path: str, raw_body: bytes | None = None):
     if resp.status_code == 401:
         return None, "站点接口说 key 无效（401），得让管理员去核对 key。"
     if resp.status_code != 200:
-        return None, f"站点接口返回 HTTP {resp.status_code}，稍后再试。"
+        hint = ""
+        try:
+            hint = str(resp.json().get("error", "")).strip()
+        except Exception:
+            pass
+        tail = "，稍后再试。" if resp.status_code >= 500 else "。"
+        return None, f"站点接口返回 HTTP {resp.status_code}{f'（{hint}）' if hint else ''}{tail}"
     try:
         return resp.json(), None
     except Exception:
@@ -222,5 +232,139 @@ async def catcafe_set_status(text: str) -> str:
     return await _mutate_content(_set, "改作者状态")
 
 
+# ---------------- 留言板（猪咪君君看店职责） ----------------
+# 接口无 id 字段：reply/delete 靠 nick+time+content 精确三元组定位留言。
+# 因此工具只收「列表编号」，内部重新 GET 列表取回原文再 POST——
+# 不让模型转手长文本（转抄错一个字符就是 404，截断更是直接没救）。
+# 已实测的接口语义：reply 字段缺省/为空 = 清除该条已有回复（2026-08-18 探测事故），
+# 所以回复文本在工具内硬校验非空，空串一律拒。
+
+async def _fetch_messages():
+    """拉留言列表（最新在前）。返回 (list|None, 错误文本|None)。"""
+    data, err = await _request("GET", "/api/messages")
+    if err:
+        return None, err
+    if not isinstance(data, list):
+        return None, "留言列表格式和预期不一样，稍后再试。"
+    return data, None
+
+
+def _pick_message(msgs: list, index: int, expect_nick: str = ""):
+    """按编号取留言，可选复核昵称。返回 (msg|None, 错误文本|None)。"""
+    if not msgs:
+        return None, "留言板是空的，没有什么可操作的。"
+    if index < 0 or index >= len(msgs):
+        return (None, f"编号 #{index} 不存在（当前共 {len(msgs)} 条，编号 0~{len(msgs) - 1}）。"
+                      f"先用 catcafe_list_messages 看最新列表再操作。")
+    msg = msgs[index]
+    if expect_nick and msg.get("nick") != expect_nick:
+        return (None, f"编号 #{index} 现在的留言者是「{msg.get('nick')}」，"
+                      f"和预期的「{expect_nick}」对不上——列表可能变了，没动手。"
+                      f"先重新 list 再操作。")
+    return msg, None
+
+
+def _msg_ref(msg: dict) -> dict:
+    """接口定位三元组。"""
+    return {"nick": msg.get("nick", ""), "time": msg.get("time", ""),
+            "content": msg.get("content", "")}
+
+
+@tool
+async def catcafe_list_messages() -> str:
+    """查看「小涩猫咖啡厅」网站的访客留言板。对方问网站上有没有新留言、
+    留言板近况、谁留了什么话、有没有要处理的留言时使用。
+    返回带编号的列表（#0 为最新）；之后用 catcafe_reply_message 回复、
+    catcafe_delete_message 删除，都按这里的编号来。"""
+    msgs, err = await _fetch_messages()
+    if err:
+        return err
+    if not msgs:
+        return "留言板暂时是空的。"
+    lines = [f"留言板共 {len(msgs)} 条（#0 最新）："]
+    for i, m in enumerate(msgs):
+        content = str(m.get("content", "")).replace("\n", " ")
+        preview = content[:80] + ("…" if len(content) > 80 else "")
+        line = f"#{i} [{m.get('time', '?')}] {m.get('nick', '?')}：{preview}"
+        if m.get("reply"):
+            r = str(m["reply"]).replace("\n", " ")
+            line += f"\n   ↳ 已回复（{m.get('replyBy', '?')}）：{r[:60]}{'…' if len(r) > 60 else ''}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@tool
+async def catcafe_reply_message(index: int, text: str) -> str:
+    """以「猪咪君君」的身份回复「小涩猫咖啡厅」网站上的一条留言，回复公开显示在留言下方。
+    站主让你回复留言、照看留言板时使用；index 是 catcafe_list_messages
+    给的编号（#0 最新）。回复语气可爱温和，自称「猪咪君君」；若有留言问店长的
+    更新计划、私生活，那条就回「店长在赶稿，帮你转达~」，不要代答。
+
+    Args:
+        index: 留言编号（来自 catcafe_list_messages，#0 为最新一条）
+        text: 回复内容（不能为空——接口上空内容等于清掉该条已有回复）
+    """
+    refusal = _admin_refusal()
+    if refusal:
+        return refusal
+    text = (text or "").strip()
+    if not text:
+        return "回复内容不能为空（接口语义上空内容 = 清除已有回复），重写一条再来。"
+    msgs, err = await _fetch_messages()
+    if err:
+        return err
+    msg, err = _pick_message(msgs, index)
+    if err:
+        return err
+    payload = _msg_ref(msg)
+    payload["reply"] = text
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    result, err = await _request("POST", "/api/agent/messages/reply", body)
+    if err:
+        return err
+    if isinstance(result, dict) and result.get("status") == "ok":
+        return (f"已回复 #{index}（{msg.get('nick')}）的留言，访客刷新即见。"
+                f"回复内容：{text[:80]}")
+    return (f"回复接口的返回和预期不一样（{json.dumps(result, ensure_ascii=False)[:120]}），"
+            f"建议重新读一遍留言板确认状态。")
+
+
+@tool
+async def catcafe_delete_message(index: int, expect_nick: str = "", reason: str = "") -> str:
+    """删除「小涩猫咖啡厅」留言板上的一条不当留言（广告、骚扰等），删除动作站点会记日志。
+    站主让你清理留言板、删广告时使用；index 来自 catcafe_list_messages。
+    删错不可恢复：建议带上 expect_nick 复核，昵称对不上会中止不动手。
+    拿不准该不该删的（只是不顺眼、不算违规），先问站主，别自作主张。
+
+    Args:
+        index: 留言编号（来自 catcafe_list_messages，#0 为最新一条）
+        expect_nick: 可选，期望的留言者昵称；和实际对不上就中止（防列表变动删错人）
+        reason: 可选，删除原因（随请求提交）
+    """
+    refusal = _admin_refusal()
+    if refusal:
+        return refusal
+    msgs, err = await _fetch_messages()
+    if err:
+        return err
+    msg, err = _pick_message(msgs, index, expect_nick.strip())
+    if err:
+        return err
+    payload = _msg_ref(msg)
+    if reason.strip():
+        payload["reason"] = reason.strip()
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    result, err = await _request("POST", "/api/agent/messages/delete", body)
+    if err:
+        return err
+    if isinstance(result, dict) and result.get("status") == "ok":
+        preview = str(msg.get("content", "")).replace("\n", " ")[:60]
+        return (f"已删除 #{index}（{msg.get('nick')}）的留言：「{preview}」。"
+                f"删除动作站点会记日志。")
+    return (f"删除接口的返回和预期不一样（{json.dumps(result, ensure_ascii=False)[:120]}），"
+            f"建议重新读一遍留言板确认状态。")
+
+
 TOOLS = [catcafe_get_content, catcafe_get_stats, catcafe_post_notice,
-         catcafe_set_slogan, catcafe_set_status]
+         catcafe_set_slogan, catcafe_set_status,
+         catcafe_list_messages, catcafe_reply_message, catcafe_delete_message]

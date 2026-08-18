@@ -394,11 +394,12 @@ _INTENT_GROUPS = [
      ("introduce_self", "get_capabilities"), None),
     # 小涩猫咖啡厅站点管理（2026-08-18 站主接入）：primary=None 只挂载不追问——
     # 「咖啡厅/官网」是日常高频词（别家网站、群公告），追问会逼 bot 抢管闲事；
-    # 词表不带裸「网站」「公告」，那两个词的日常误伤面太大。
+    # 词表不带裸「网站」「公告」「留言」，那几个词的日常误伤面太大。
     (("小涩猫", "咖啡厅", "官网", "站点", "站务", "网站公告", "发到网站",
-      "更新网站", "网站上发"),
+      "更新网站", "网站上发", "网站留言", "留言板"),
      ("catcafe_get_content", "catcafe_get_stats", "catcafe_post_notice",
-      "catcafe_set_slogan", "catcafe_set_status"), None),
+      "catcafe_set_slogan", "catcafe_set_status", "catcafe_list_messages",
+      "catcafe_reply_message", "catcafe_delete_message"), None),
     (("帮我画", "画一张", "画个", "画一", "画张", "生成图", "画幅", "涩图", "色图"),
      ("ai_draw",), "ai_draw"),
 ]
