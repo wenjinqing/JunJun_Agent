@@ -248,6 +248,7 @@ docs/
 
 # Claude Code 本地技能与设置（2026-08-17 用户拍板：不入库）
 .claude/
+README.md
 
 # NapCat 看门狗（含本机路径/QQ号，本地专用）
 scripts/napcat_watchdog.py
