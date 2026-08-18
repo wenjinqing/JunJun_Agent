@@ -205,6 +205,33 @@ class TestCodeLabPinning20260814:
             assert "run_code" not in names, text
 
 
+class TestCatcafeMounting20260818:
+    """2026-08-18：小涩猫咖啡厅站点管理接入——站点词整组挂载 catcafe 五件；
+    primary=None 只挂载不追问（「咖啡厅/官网」日常高频，追问会抢管闲事）。"""
+
+    def test_intent_mounts_catcafe_group(self):
+        for text in ("帮我在咖啡厅发个公告", "小涩猫官网最近咋样",
+                     "站点 slogan 换一下", "更新网站上说一声"):
+            names = registry._intent_mounted(text)
+            for n in ("catcafe_get_content", "catcafe_get_stats",
+                      "catcafe_post_notice", "catcafe_set_slogan",
+                      "catcafe_set_status"):
+                assert n in names, (text, n)
+
+    def test_intent_no_nudge_primary(self):
+        """catcafe 组 primary 必须是 None：日常词命中也不产生意图自检追问。"""
+        for _keywords, group, primary in registry.intent_groups():
+            if any(n.startswith("catcafe_") for n in group):
+                assert primary is None
+
+    def test_intent_no_misfire_daily(self):
+        """误判回归：裸「网站」「群公告」「咖啡店」类日常句不挂 catcafe 组。"""
+        for text in ("这个网站打不开了", "群公告在哪看", "今晚吃啥",
+                     "帮我搜一下附近的咖啡店", "提醒我开会"):
+            names = registry._intent_mounted(text)
+            assert not any(n.startswith("catcafe_") for n in names), text
+
+
 class TestPeriodicPushIntent20260815:
     """2026-08-15（eval daily-tech-news 实锤）：「以后每天早上给我推科技新闻」
     式周期推送零命中——不含「提醒」二字，set_reminder 被掩码裁掉，模型空口

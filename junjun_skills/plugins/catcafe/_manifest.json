@@ -1,0 +1,7 @@
+{
+  "name": "catcafe",
+  "version": "1.0.0",
+  "module": "junjun_skills.plugins.catcafe.tools",
+  "tools_attr": "TOOLS",
+  "available_for": []
+}
