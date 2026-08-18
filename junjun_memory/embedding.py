@@ -8,6 +8,7 @@
 任一不可用则 available=False，上层自动降级关键词检索，不阻塞主循环。
 """
 
+import asyncio
 import os
 import socket
 from collections import OrderedDict
@@ -86,15 +87,25 @@ class EmbeddingClient:
         return self._client
 
     async def embed(self, texts: List[str]) -> Optional[List[List[float]]]:
-        """批量向量化。不可用/失败返回 None（上层降级）。"""
+        """批量向量化。不可用/失败返回 None（上层降级）。
+
+        429 频率限制短退避重试（2026-08-18：AI Ping 启动消息风暴整批 429，
+        单发即降级太脆）；402/404/超时等重试无意义的错误一次即降级。
+        """
         if not self.available or not texts:
             return None
-        try:
-            resp = await self._get_client().embeddings.create(model=self._model, input=texts)
-            return [d.embedding for d in resp.data]
-        except Exception as e:
-            logger.warning(f"embedding 调用失败（降级关键词检索）: {e}")
-            return None
+        delay = 1.0
+        for attempt in range(3):
+            try:
+                resp = await self._get_client().embeddings.create(model=self._model, input=texts)
+                return [d.embedding for d in resp.data]
+            except Exception as e:
+                if "429" not in str(e) or attempt == 2:
+                    logger.warning(f"embedding 调用失败（降级关键词检索）: {e}")
+                    return None
+                await asyncio.sleep(delay)
+                delay *= 3
+        return None
 
     async def embed_one(self, text: str) -> Optional[List[float]]:
         """单条向量化，带 LRU 查询缓存：群聊高频重复查询（记忆召回每条消息一次）

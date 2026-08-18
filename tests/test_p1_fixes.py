@@ -77,6 +77,62 @@ class TestEmbeddingQueryCache:
         assert await client.embed_one("x") is None
         assert len(calls) == 2  # 失败不缓存，下次还试
 
+
+class TestEmbeddingRateLimitRetry:
+    """429 频率限制短退避重试（2026-08-18 AI Ping 启动风暴整批 429 事故）；
+    402/404 等重试无意义的错误一次即降级。"""
+
+    def _client(self, monkeypatch, behavior):
+        from types import SimpleNamespace
+        from junjun_memory.embedding import EmbeddingClient
+        client = EmbeddingClient.__new__(EmbeddingClient)
+        client._api_key, client._base_url, client._model = "k", "u", "m"
+        client._client = None
+        calls = []
+
+        class _Emb:
+            async def create(self, model, input):
+                calls.append(1)
+                r = behavior(len(calls))
+                if r is not None:
+                    return SimpleNamespace(
+                        data=[SimpleNamespace(embedding=r) for _ in input])
+                raise Exception("unreachable")
+
+        monkeypatch.setattr(client, "_get_client",
+                            lambda: SimpleNamespace(embeddings=_Emb()))
+
+        async def _no_sleep(_d):
+            pass
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+        return client, calls
+
+    @pytest.mark.asyncio
+    async def test_429_retries_then_succeeds(self, monkeypatch):
+        def _b(n):
+            if n < 3:
+                raise Exception("Error code: 429 - 模型调用频率超限")
+            return [0.1] * 4
+        client, calls = self._client(monkeypatch, _b)
+        assert await client.embed(["x"]) == [[0.1] * 4]
+        assert len(calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_429_exhausted_returns_none(self, monkeypatch):
+        def _b(n):
+            raise Exception("Error code: 429 - 模型调用频率超限")
+        client, calls = self._client(monkeypatch, _b)
+        assert await client.embed(["x"]) is None
+        assert len(calls) == 3  # 重试两轮后放弃
+
+    @pytest.mark.asyncio
+    async def test_402_no_retry(self, monkeypatch):
+        def _b(n):
+            raise Exception("Error code: 402 - 余额不足")
+        client, calls = self._client(monkeypatch, _b)
+        assert await client.embed(["x"]) is None
+        assert len(calls) == 1  # 非 429 不重试
+
     @pytest.mark.asyncio
     async def test_cache_lru_eviction(self, monkeypatch):
         from collections import OrderedDict
