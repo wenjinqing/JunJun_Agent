@@ -101,10 +101,33 @@ def _negated(t: str) -> bool:
 
 _Q_RE = re.compile(r"[吗呢啊？?]$")
 
+# 引用块剥离（2026-08-18 生产实锤）：适配器把被回复的消息展开成
+# 「[回复「昵称」: 内容]」（内容截断 200 字，自带 [图片] 等内层括号）拼在用户
+# 新文本前面。引用内容里的信号词把闲聊误派成任务——「别天天蹲群里」的「天天」
+# 命中时程承诺，「教我谈恋爱」被拆成三步任务，子 agent 合成稿直接发进群。
+# 路由只认用户自己新写的话。
+_QUOTE_HEAD_RE = re.compile(
+    r"^\s*\[回复(?:「[^」]*」(?:: |的消息)|某条消息)")
+
+
+def _strip_reply_quote(t: str) -> str:
+    """剥掉开头的引用块；找不到闭括号返回空串（宁漏勿错，回对话通道）。"""
+    m = _QUOTE_HEAD_RE.match(t)
+    if not m:
+        return t
+    rest = t[m.end():]
+    if rest.startswith("]"):        # [回复某条消息] / [回复「昵称」的消息]
+        return rest[1:].lstrip()
+    window = rest[:230]             # 内容 ≤200 字 + 省略号 + 闭括号
+    idx = window.rfind("]")         # 贪心取窗口内最后一个：内容自带 [图片] 内层括号
+    if idx == -1:
+        idx = rest.find("]")
+    return rest[idx + 1:].lstrip() if idx != -1 else ""
+
 
 def route_to_task(text: str, *, chat_id: str = "") -> bool:
     """强信号命中 -> True（任务通道）。拿不准一律 False（对话通道）。"""
-    t = (text or "").strip()
+    t = _strip_reply_quote((text or "").strip())
     if not t or len(t) < 6:
         return False
     # 纯疑问句不派单（「调研报告怎么写」是请教不是委托）

@@ -162,3 +162,61 @@ class TestNegationScope20260814:
         """防过纠正：全文没有任务信号时，格式约束本身不构成派单。"""
         assert route_to_task("不要发文件链接哦") is False
         assert route_to_task("别太长就行") is False
+
+
+# 2026-08-18 生产原文：用户引用 bot 上一条消息（内容含「别天天蹲群里」）追问，
+# 引用块里的「天天」命中时程承诺，闲聊被误派成复杂任务。
+_PROD_QUOTE = (
+    "[回复「君君」: 找老婆这事儿，比撩妹子难多了，姐姐得先问你一句："
+    "你是真想找个一起过日子的人，还是单纯馋人家身子？\n"
+    "要是前者，思路就一句话——把自己收拾成\"值得托付\"的样子。好好上班，"
+    "说话算话，答应的事做到，别天天蹲群里跟人要黑丝腿照。人家姑娘又不瞎，"
+    "谁踏实谁花心，处两天就摸清了。\n"
+    "要是后者，那别找老婆了，先找个恋爱练练手，别一上来就奔着结婚去嚯嚯人家姑娘。\n"
+    "你老实交代，是家里催了，还是看见谁家媳妇眼馋了。]")
+
+
+class TestReplyQuote20260818:
+    """引用块剥离（2026-08-18 生产实锤）：路由只认用户自己新写的话，
+    引用内容里的信号词不得派单，用户自己的任务信号照常派单。"""
+
+    def test_production_cases_stay_chat(self):
+        """生产原文两条：引用里的「天天」不得命中时程承诺。"""
+        assert route_to_task(_PROD_QUOTE + "@你  教我谈恋爱") is False
+        assert route_to_task(_PROD_QUOTE + "@你  怎么让人觉得自己踏实可靠") is False
+
+    def test_quote_signals_never_route(self):
+        """引用里的时程/动作对/重产出信号一律不算数。"""
+        assert route_to_task("[回复「甲」: 记得每天早上背单词]@你 在干嘛呢") is False
+        assert route_to_task("[回复「甲」: 帮我调研一下AI新闻写份报告]@你 吃了吗") is False
+        assert route_to_task("[回复「甲」: 写一份研究笔记交给我]@你 哈哈哈哈") is False
+
+    def test_user_own_task_after_quote_still_routes(self):
+        """用户自己新文本里的任务信号照常派单（剥离不许误伤真委托）。"""
+        assert route_to_task(
+            "[回复「君君」: 在吗]@你 帮我调研一下最近的AI新闻然后写份报告") is True
+        assert route_to_task(
+            "[回复「甲」: 好主意]@你 以后每天早上给我推AI新闻") is True
+
+    def test_quote_inner_brackets(self):
+        """引用内容自带 [图片] 等内层括号：闭括号要贪心取到最后一个。"""
+        assert route_to_task("[回复「鹤」: 别天天熬夜了[图片]]@你 教我打游戏") is False
+
+    def test_placeholder_forms(self):
+        """降级占位形态也剥：无内容的引用块。"""
+        assert route_to_task("[回复某条消息]随便聊聊呗") is False
+        assert route_to_task("[回复「甲」的消息]天天给我发早报") is True
+
+    def test_truncated_long_quote(self):
+        """200 字截断 + 省略号的长引用（信号词在尾部）照常剥净。"""
+        content = "啰" * 190 + "别天天蹲群里"
+        assert route_to_task(f"[回复「甲」: {content}…]@你 在干嘛") is False
+
+    def test_quote_negation_does_not_veto(self):
+        """引用里的否定词不得否决用户自己的真委托。"""
+        assert route_to_task("[回复「甲」: 别写报告了]@你 帮我写一份研究笔记") is True
+
+    def test_no_quote_unchanged(self):
+        """无引用文本行为不变（冒烟）。"""
+        assert route_to_task("天天给我发早报") is True
+        assert route_to_task("今天天气怎么样") is False

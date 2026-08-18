@@ -578,7 +578,11 @@ class TaskKernel:
         prompt = (f"你是「{nickname}」——{persona_brief()}\n\n"
                   f"你之前接了一个任务：{plan.goal}\n\n步骤情况：\n" + "\n".join(lines)
                   + f"\n\n产出：\n{results or '（无）'}\n\n{ask}\n"
-                    f"用你平时的口气说，别太长。")
+                    f"用你平时的口气说，别太长。\n"
+                    f"汇报纪律：说给下单的人听——别对你自己（{nickname}）说话；"
+                    f"任务描述里 [回复「昵称」: …] 是用户引用的上下文，不许当成果复述；"
+                    f"内部机制（步骤、工具名、审批、管理员、报错）一律不许出现，"
+                    f"用人话说结果。")
         model = get_chat_model("utils")
         resp = await model.ainvoke([HumanMessage(content=prompt)])
         return str(resp.content).strip()
