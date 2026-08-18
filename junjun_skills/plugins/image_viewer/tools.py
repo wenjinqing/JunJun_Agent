@@ -1,15 +1,15 @@
 """image_viewer 插件：随机美图（迁移自 image_viewer_plugin，新架构重写）。
 
-命令（raw 关键词）：看看腿/康康腿/看腿、看看JK、看看白丝、看看黑丝
-  也支持 /kankan [tui|jk|baisi|heisi]
+命令（raw 关键词）：看看腿/康康腿/看腿、看看胖次、看看JK、看看白丝、看看黑丝
+  也支持 /kankan [tui|pangci|jk|baisi|heisi]
 API：
-  腿   www.onexiaolaji.cn/RandomPicture/api/?class=1|2 （直接 302 到图）
-  JK   v2.xxapi.cn/api/jk     -> JSON data = 图直链
-  白丝 v2.xxapi.cn/api/baisi  -> 同上
-  黑丝 v2.xxapi.cn/api/heisi  -> 同上
+  腿/胖次 api.lolicon.app/setu/v2?tag=腿|胖次&r18=0
+          （Pixiv 聚合涩图 API，JSON data[0].urls.original = 图直链；
+          2026-08-18 替换死掉的 www.onexiaolaji.cn——连接超时确认报废）
+  JK     v2.xxapi.cn/api/jk     -> JSON data = 图直链
+  白丝   v2.xxapi.cn/api/baisi  -> 同上
+  黑丝   v2.xxapi.cn/api/heisi  -> 同上
 """
-
-import random
 
 from junjun_agent.commands import register_command
 from junjun_core.contracts import ReplySegment
@@ -18,22 +18,25 @@ from junjun_core.observability import get_logger
 logger = get_logger("plugin.image_viewer")
 
 _TIMEOUT = 15.0
-_TUI_API = "https://www.onexiaolaji.cn/RandomPicture/api/"
+_LOLICON_API = "https://api.lolicon.app/setu/v2"
 _XXAPI = {"jk": "https://v2.xxapi.cn/api/jk",
           "baisi": "https://v2.xxapi.cn/api/baisi",
           "heisi": "https://v2.xxapi.cn/api/heisi"}
 
 
-async def _fetch_tui_url() -> str | None:
-    """腿图：API 直接返回图片流，取最终 URL 作为 image 段（NapCat 会自己下载）。"""
+async def _fetch_lolicon(tag: str) -> str | None:
+    """腿/胖次：Lolicon setu v2 按 tag 抽图，r18=0 只出全年龄（群聊安全）。"""
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
-            resp = await client.get(_TUI_API, params={"class": random.choice(["1", "2"])})
-            if resp.status_code == 200:
-                return str(resp.url)
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(_LOLICON_API,
+                                    params={"tag": tag, "r18": "0", "num": "1"})
+            data = resp.json().get("data") or []
+        if data:
+            url = data[0].get("urls", {}).get("original")
+            return url if isinstance(url, str) and url.startswith("http") else None
     except Exception as e:
-        logger.warning(f"腿图请求失败: {type(e).__name__}: {e}")
+        logger.warning(f"lolicon[{tag}] 图请求失败: {type(e).__name__}: {e}")
     return None
 
 
@@ -62,7 +65,13 @@ async def _send_pic(ctx, url: str | None) -> str | None:
 @register_command("看看腿", aliases=["康康腿", "看腿"], raw=True, plugin="image_viewer",
                   description="随机腿图")
 async def tui_cmd(ctx):
-    return await _send_pic(ctx, await _fetch_tui_url())
+    return await _send_pic(ctx, await _fetch_lolicon("腿"))
+
+
+@register_command("看看胖次", aliases=["康康胖次", "看胖次"], raw=True, plugin="image_viewer",
+                  description="随机胖次图")
+async def pantsu_cmd(ctx):
+    return await _send_pic(ctx, await _fetch_lolicon("胖次"))
 
 
 @register_command("看看JK", aliases=["看看jk"], raw=True, plugin="image_viewer",
@@ -82,14 +91,16 @@ async def heisi_cmd(ctx):
 
 
 @register_command("kankan", plugin="image_viewer",
-                  description="/kankan [tui|jk|baisi|heisi] 随机美图")
+                  description="/kankan [tui|pangci|jk|baisi|heisi] 随机美图")
 async def kankan_cmd(ctx):
     kind = (ctx.args or "tui").strip().lower() or "tui"
     if kind == "tui":
-        return await _send_pic(ctx, await _fetch_tui_url())
+        return await _send_pic(ctx, await _fetch_lolicon("腿"))
+    if kind == "pangci":
+        return await _send_pic(ctx, await _fetch_lolicon("胖次"))
     if kind in _XXAPI:
         return await _send_pic(ctx, await _fetch_xxapi(kind))
-    return "用法：/kankan [tui|jk|baisi|heisi]"
+    return "用法：/kankan [tui|pangci|jk|baisi|heisi]"
 
 
 TOOLS = []

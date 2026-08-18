@@ -250,13 +250,39 @@ class TestImageViewer:
     async def test_tui_sends_image(self, _fake_gateway, monkeypatch):
         import junjun_skills.plugins.image_viewer.tools as iv
 
-        async def _url():
-            return "http://x/tui.jpg"
+        async def _url(tag):
+            return f"http://x/{tag}.jpg"
 
-        monkeypatch.setattr(iv, "_fetch_tui_url", _url)
+        monkeypatch.setattr(iv, "_fetch_lolicon", _url)
         await iv.tui_cmd(_ctx("看看腿"))
         segs = _fake_gateway[0].segments
-        assert segs[1].type == "image" and segs[1].data == "http://x/tui.jpg"
+        assert segs[1].type == "image" and segs[1].data == "http://x/腿.jpg"
+
+    @pytest.mark.asyncio
+    async def test_pantsu_sends_image(self, _fake_gateway, monkeypatch):
+        import junjun_skills.plugins.image_viewer.tools as iv
+
+        async def _url(tag):
+            return f"http://x/{tag}.jpg"
+
+        monkeypatch.setattr(iv, "_fetch_lolicon", _url)
+        await iv.pantsu_cmd(_ctx("看看胖次"))
+        segs = _fake_gateway[0].segments
+        assert segs[1].type == "image" and segs[1].data == "http://x/胖次.jpg"
+
+    def test_pantsu_raw_match_no_false_positive(self):
+        """误判回归（2026-08-18 新增 raw 关键词）：「看看胖次」整句/句首+空格
+        才命中；日常句里含「胖次」「看看」不许误中。"""
+        import importlib
+        import junjun_skills.plugins.image_viewer.tools as iv
+        importlib.reload(iv)   # _clean_buses 清过注册表，重载触发重新注册
+        hit = commands._match("看看胖次")
+        assert hit is not None and hit[0].name == "看看胖次"
+        assert commands._match("康康胖次") is not None      # 别名命中
+        assert commands._match("看看胖次搭配什么衣服") is None   # 前缀粘连无空格
+        assert commands._match("我看看胖次了") is None          # 关键词不在句首
+        assert commands._match("这条胖次多少钱") is None        # 日常购物句
+        assert commands._match("看看就走") is None              # 「看看」单独不命中
 
     @pytest.mark.asyncio
     async def test_xxapi_failure(self, monkeypatch):
@@ -275,10 +301,16 @@ class TestImageViewer:
         async def _url(kind):
             return f"http://x/{kind}.jpg"
 
+        async def _ltag(tag):
+            return f"http://x/lolicon-{tag}.jpg"
+
         monkeypatch.setattr(iv, "_fetch_xxapi", _url)
+        monkeypatch.setattr(iv, "_fetch_lolicon", _ltag)
         ctx = _ctx("/kankan jk")
         await iv.kankan_cmd(ctx)
         assert _fake_gateway[0].segments[1].data == "http://x/jk.jpg"
+        await iv.kankan_cmd(_ctx("/kankan pangci"))
+        assert _fake_gateway[1].segments[1].data == "http://x/lolicon-胖次.jpg"
         assert "用法" in await iv.kankan_cmd(_ctx("/kankan 啥"))
 
 

@@ -1,6 +1,6 @@
 {
   "name": "image_viewer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "module": "junjun_skills.plugins.image_viewer.tools",
   "tools_attr": "TOOLS",
   "available_for": []
