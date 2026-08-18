@@ -270,6 +270,69 @@ class TestImageViewer:
         segs = _fake_gateway[0].segments
         assert segs[1].type == "image" and segs[1].data == "http://x/胖次.jpg"
 
+    def _stub_httpx(self, monkeypatch, draws, heads):
+        """draws: 连续 API get 返回的 url（None=空 data）；heads: {url: 状态码或异常}。"""
+        calls = {"get": 0}
+
+        class _Resp:
+            def __init__(self, status=200, payload=None):
+                self.status_code = status
+                self._p = payload or {}
+
+            def json(self):
+                return self._p
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, params=None):
+                u = draws[min(calls["get"], len(draws) - 1)]
+                calls["get"] += 1
+                return _Resp(200, {"data": [{"urls": {"original": u}}]} if u
+                             else {"data": []})
+
+            async def head(self, url):
+                r = heads.get(url, 200)
+                if isinstance(r, Exception):
+                    raise r
+                return _Resp(r)
+
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _Client())
+        return calls
+
+    @pytest.mark.asyncio
+    async def test_lolicon_skips_deleted_work(self, monkeypatch):
+        """已删作品 404 重抽（2026-08-18 生产事故：NapCat 下载 404 整消息炸掉）。"""
+        import junjun_skills.plugins.image_viewer.tools as iv
+        calls = self._stub_httpx(monkeypatch,
+                                 draws=["http://x/dead.jpg", "http://x/live.jpg"],
+                                 heads={"http://x/dead.jpg": 404})
+        assert await iv._fetch_lolicon("腿") == "http://x/live.jpg"
+        assert calls["get"] == 2
+
+    @pytest.mark.asyncio
+    async def test_lolicon_all_deleted_returns_none(self, monkeypatch):
+        import junjun_skills.plugins.image_viewer.tools as iv
+        calls = self._stub_httpx(monkeypatch,
+                                 draws=["http://x/d1.jpg", "http://x/d2.jpg",
+                                        "http://x/d3.jpg"],
+                                 heads={"http://x/d1.jpg": 404, "http://x/d2.jpg": 404,
+                                        "http://x/d3.jpg": 404})
+        assert await iv._fetch_lolicon("腿") is None
+        assert calls["get"] == 3   # 至多 3 次不无限重抽
+
+    @pytest.mark.asyncio
+    async def test_lolicon_head_error_passes_through(self, monkeypatch):
+        """验活请求本身失败（网络抖动）放行不误杀。"""
+        import junjun_skills.plugins.image_viewer.tools as iv
+        self._stub_httpx(monkeypatch, draws=["http://x/maybe.jpg"],
+                         heads={"http://x/maybe.jpg": TimeoutError()})
+        assert await iv._fetch_lolicon("腿") == "http://x/maybe.jpg"
+
     def test_pantsu_raw_match_no_false_positive(self):
         """误判回归（2026-08-18 新增 raw 关键词）：「看看胖次」整句/句首+空格
         才命中；日常句里含「胖次」「看看」不许误中。"""

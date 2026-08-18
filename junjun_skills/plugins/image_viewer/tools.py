@@ -25,16 +25,31 @@ _XXAPI = {"jk": "https://v2.xxapi.cn/api/jk",
 
 
 async def _fetch_lolicon(tag: str) -> str | None:
-    """腿/胖次：Lolicon setu v2 按 tag 抽图，r18=0 只出全年龄（群聊安全）。"""
+    """腿/胖次：Lolicon setu v2 按 tag 抽图，r18=0 只出全年龄（群聊安全）。
+
+    抽中先 HEAD 验活再返回：索引里约 1/5 是已删作品（2026-08-18 实测 6 抽
+    2 张 404），NapCat 按 URL 下载会「下载文件失败: Not Found」整消息炸掉，
+    404 重抽至多 3 次。
+    """
     try:
         import httpx
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(_LOLICON_API,
-                                    params={"tag": tag, "r18": "0", "num": "1"})
-            data = resp.json().get("data") or []
-        if data:
-            url = data[0].get("urls", {}).get("original")
-            return url if isinstance(url, str) and url.startswith("http") else None
+            for attempt in range(3):
+                resp = await client.get(_LOLICON_API,
+                                        params={"tag": tag, "r18": "0", "num": "1"})
+                data = resp.json().get("data") or []
+                if not data:
+                    return None
+                url = data[0].get("urls", {}).get("original")
+                if not (isinstance(url, str) and url.startswith("http")):
+                    return None
+                try:
+                    head = await client.head(url)
+                    if head.status_code == 200:
+                        return url
+                    logger.info(f"lolicon[{tag}] 抽中已删作品（{head.status_code}），重抽 {attempt + 1}/3")
+                except Exception:
+                    return url   # 验活请求本身失败（网络抖动）时宁可放行，不误杀
     except Exception as e:
         logger.warning(f"lolicon[{tag}] 图请求失败: {type(e).__name__}: {e}")
     return None
