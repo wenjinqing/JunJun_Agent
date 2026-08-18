@@ -379,9 +379,11 @@ min_fulltext = 2      # 触发反思的「读到全文」条数阈值
 fetch_max_chars = 3000  # 单篇原文截断（防综述输入爆炸）
 report_max_chars = 1000 # 报告正文目标长度（加上来源列表后仍需 < async_task.report_max_chars）
 
-# ---------- ASR / 语音消息（OpenAI 兼容转写服务，号池 key） ----------
+# ---------- ASR / 语音消息（本地 sherpa-onnx SenseVoiceSmall int8） ----------
+# 模型文件：data/models/sense-voice/{model.int8.onnx,tokens.txt}（缺失则转写静默降级）
 [asr]
-model = "FunAudioLLM/SenseVoiceSmall"
+# model_dir = "data/models/sense-voice"   # 默认值，自定义路径才取消注释
+# num_threads = 2                          # CPU 推理线程数
 max_bytes = 20971520   # 20MB 上限（防超大音频撑爆）
 
 [voice]
@@ -404,7 +406,7 @@ enable_understand = true   # 拦截器命中后后台「看懂」+ 摘要注入�
 # ---------- 认真看视频（video_watch job：下载 -> ASR 转写 -> 关键帧 -> 观后报告） ----------
 [video_watch]
 max_duration = 1800        # 能看的视频时长上限（秒，30 分钟）
-asr_model = "FunAudioLLM/SenseVoiceSmall"  # OpenAI 兼容 ASR 接口（号池 key）
+# asr_model 已废弃（2026-08-18 本地化 sherpa-onnx，模型固定 sense-voice int8）
 asr_max_chars = 6000       # 语音转写截断
 keyframe_interval = 30     # 关键帧抽取间隔（秒）
 max_keyframes = 8          # 关键帧上限（每帧一次 VLM 调用）

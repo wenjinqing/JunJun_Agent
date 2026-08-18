@@ -2,8 +2,9 @@
 
 对齐原 lpmm embedding 配置。支持两套 env 配置：
 1. EMBEDDING_BASE_URL / EMBEDDING_MODEL / EMBEDDING_API_KEY（专用 embedding 服务）
-2. 降级：VLM_BASE_URL / VLM_MODEL / VLM_API_KEY（复用多模态服务的 embedding 能力）
-3. 再降级：SILICONFLOW_API_KEY（用内置默认模型）
+2. 降级：AIPING_API_KEY（AI Ping Qwen3-Embedding-0.6B；2026-08-18 硅基欠费后
+   原 SILICONFLOW_API_KEY 兜底已迁此）
+3. 再降级：VLM_BASE_URL / VLM_MODEL / VLM_API_KEY（复用多模态服务的 embedding 能力）
 
 任一不可用则 available=False，上层自动降级关键词检索，不阻塞主循环。
 """
@@ -43,13 +44,14 @@ class EmbeddingClient:
         if self._api_key and self._base_url and self._model:
             logger.info(f"embedding 配置: {self._base_url[:40]}... / {self._model}")
             return
-        # 2. 专用 embedding 服务（支持 embeddings endpoint）
-        sf_key = os.environ.get("SILICONFLOW_API_KEY", "")
-        if sf_key:
-            self._api_key = sf_key
-            self._base_url = "https://api.siliconflow.cn/v1"
-            self._model = "BAAI/bge-m3"
-            logger.info("embedding 配置: siliconflow / BAAI/bge-m3")
+        # 2. AI Ping 兜底（原硅基兜底，2026-08-18 欠费 402 迁移；索引已重 embedding）
+        ap_key = os.environ.get("AIPING_API_KEY", "")
+        if ap_key:
+            self._api_key = ap_key
+            self._base_url = os.environ.get(
+                "AIPING_BASE_URL", "https://www.aiping.cn/api/v1")
+            self._model = "Qwen3-Embedding-0.6B"
+            logger.info("embedding 配置: aiping / Qwen3-Embedding-0.6B（兜底）")
             return
         # 3. VLM 复用（仅当无专用 embedding 服务时；多数 VLM 服务不支持 embeddings endpoint）
         self._api_key = os.environ.get("VLM_API_KEY", "")
@@ -58,7 +60,7 @@ class EmbeddingClient:
         if self._api_key and self._base_url and self._model:
             logger.info(f"embedding 复用 VLM 配置: {self._base_url[:40]}... / {self._model}")
             return
-        logger.warning("embedding 未配置（EMBEDDING_*/SILICONFLOW_API_KEY/VLM_* 均无），向量检索禁用")
+        logger.warning("embedding 未配置（EMBEDDING_*/AIPING_API_KEY/VLM_* 均无），向量检索禁用")
 
     @property
     def available(self) -> bool:
